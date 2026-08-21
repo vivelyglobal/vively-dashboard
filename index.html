@@ -676,6 +676,7 @@ tr.preferred-row td:first-child { box-shadow: inset 3px 0 0 var(--good); }
         <input type="search" id="globalSearch" placeholder="Search creators, campaigns…" autocomplete="off" />
       </div>
       <span class="save-badge no-print" id="saveBadge" title="Where your data is stored"></span>
+      <button class="btn primary sm no-print" id="btnSaveNow" title="Save this workspace to the server now">Save</button>
       <button class="theme-btn no-print" id="themeToggle" title="Switch between light and dark (T)" aria-label="Switch theme">☾</button>
       <div class="auth-actions no-print">
         <button class="btn sm" id="btnLogin">Login</button>
@@ -863,24 +864,132 @@ function storageAvailable() {
 }
 
 function persist(now) {
-  if (!persistState.on) return;
   clearTimeout(persistTimer);
   const write = () => {
-    try {
-      const json = JSON.stringify({ savedAt: new Date().toISOString(), db: DB, settings: SETTINGS });
-      localStorage.setItem(STORE_KEY, json);
-      persistState.at = new Date();
-      persistState.bytes = json.length;
-      persistState.error = null;
-      if (typeof scheduleSheetPush === 'function') scheduleSheetPush(JSON.stringify(DB));
-    } catch (e) {
-      persistState.error = /quota/i.test(e.name + e.message)
-        ? 'Browser storage is full — export the workspace and clear old campaigns.'
-        : e.message;
+    if (persistState.on) {
+      try {
+        const json = JSON.stringify({ savedAt: new Date().toISOString(), db: DB, settings: SETTINGS });
+        localStorage.setItem(STORE_KEY, json);
+        persistState.at = new Date();
+        persistState.bytes = json.length;
+        persistState.error = null;
+      } catch (e) {
+        persistState.error = /quota/i.test(e.name + e.message)
+          ? 'Browser storage is full — export the workspace and clear old campaigns.'
+          : e.message;
+      }
     }
+    /* these two run even if this browser blocks local storage — the server
+       save in particular does not depend on it at all */
+    if (typeof scheduleSheetPush === 'function') scheduleSheetPush(JSON.stringify(DB));
+    if (typeof scheduleServerSave === 'function') scheduleServerSave();
     updateSaveBadge();
   };
   if (now) write(); else persistTimer = setTimeout(write, 600);
+}
+
+/* ------------------------------------------------------------------
+   Server save. This is the real cross-browser, cross-device copy —
+   it lives in the database behind /api/workspace, not in this
+   browser. Auto-saves a couple seconds after every change (like the
+   Sheet sync below), plus there's a visible Save button in the
+   topbar for "save this right now and tell me it worked".
+
+   Revision is a simple optimistic lock: if another browser saved
+   since this one last loaded, the server refuses (409) unless we
+   pass force — same conflict shape as the Google Sheet sync.
+   ------------------------------------------------------------------ */
+const SERVER = { status: 'idle', at: null, revision: 0, error: null, busy: false, configured: null };
+let lastServerJson = '';
+let serverSaveTimer = null;
+
+function workspacePayload() {
+  return { creators: DB.creators, campaigns: DB.campaigns, participants: DB.participants };
+}
+
+async function serverLoad() {
+  try {
+    const res = await fetch('/api/workspace');
+    if (res.status === 503) { SERVER.configured = false; return 'error'; }
+    if (!res.ok) throw new Error('Server responded ' + res.status);
+    const json = await res.json();
+    SERVER.configured = true;
+    if (!json.data || !json.data.db || !Array.isArray(json.data.db.campaigns)) return 'empty';
+    const { db, settings, savedAt, revision } = json.data;
+    Object.keys(byCreator).forEach((k) => delete byCreator[k]);
+    Object.keys(byCampaign).forEach((k) => delete byCampaign[k]);
+    DB.creators = db.creators || [];
+    DB.campaigns = db.campaigns || [];
+    DB.participants = db.participants || [];
+    DB.creators.forEach((c) => (byCreator[c.id] = c));
+    DB.campaigns.forEach((c) => (byCampaign[c.id] = c));
+    if (settings && typeof settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = settings.hideBlocked;
+    SERVER.revision = revision || 0;
+    SERVER.at = savedAt ? new Date(savedAt) : null;
+    SERVER.status = 'idle'; SERVER.error = null;
+    lastServerJson = JSON.stringify(workspacePayload());
+    return 'loaded';
+  } catch (err) {
+    SERVER.error = err.message; SERVER.status = 'error';
+    return 'error';
+  }
+}
+
+async function serverSave(opts) {
+  opts = opts || {};
+  if (SERVER.busy) return;
+  if (SERVER.configured === false && !opts.force) return;
+  const json = JSON.stringify(workspacePayload());
+  if (!opts.force && json === lastServerJson) return;
+
+  SERVER.busy = true; SERVER.status = 'syncing'; updateSaveBadge();
+  try {
+    const res = await fetch('/api/workspace', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ db: workspacePayload(), settings: SETTINGS, revision: SERVER.revision, force: !!opts.force })
+    });
+    if (res.status === 503) {
+      SERVER.configured = false; SERVER.status = 'off';
+      return;
+    }
+    const out = await res.json().catch(() => ({}));
+    if (res.status === 409) {
+      SERVER.status = 'conflict';
+      SERVER.error = `Saved from another browser at ${out.savedAt ? new Date(out.savedAt).toLocaleString() : 'a later time'}. Click Save again to overwrite it, or reload this page to get their version.`;
+      SERVER.revision = out.revision != null ? out.revision : SERVER.revision;
+      if (!opts.silent) toast('Someone else saved more recently — click Save again to overwrite');
+      return;
+    }
+    if (!res.ok) throw new Error(out.error || ('Server responded ' + res.status));
+    SERVER.configured = true;
+    SERVER.revision = out.revision;
+    SERVER.at = new Date(out.savedAt);
+    SERVER.status = 'idle'; SERVER.error = null;
+    lastServerJson = json;
+    if (!opts.silent) toast('Saved');
+  } catch (err) {
+    SERVER.status = 'error'; SERVER.error = err.message;
+    if (!opts.silent) toast('Save failed — ' + err.message);
+  } finally {
+    SERVER.busy = false; updateSaveBadge();
+  }
+}
+
+function scheduleServerSave() {
+  if (SERVER.configured === false) return;
+  clearTimeout(serverSaveTimer);
+  serverSaveTimer = setTimeout(() => serverSave({ silent: true }), 2000);
+}
+
+/* last-ditch save when the tab is actually closing — fetch() can get
+   cancelled mid-flight on unload, sendBeacon is built for exactly this */
+function flushServerSaveBeacon() {
+  try {
+    if (!navigator.sendBeacon) return;
+    const body = JSON.stringify({ db: workspacePayload(), settings: SETTINGS, revision: SERVER.revision, force: true });
+    navigator.sendBeacon('/api/workspace', new Blob([body], { type: 'application/json' }));
+  } catch (e) { /* best effort only */ }
 }
 
 function loadPersisted() {
@@ -1926,6 +2035,8 @@ function openNewCampaign() {
     DB.campaigns.push(cp); byCampaign[id] = cp;
     closeDrawer(); location.hash = '#/campaigns/' + id + '/brief';
     toast('Campaign created');
+    serverSave({ force: true, silent: true }).then(() =>
+      toast(SERVER.status === 'idle' ? 'Campaign created — saved' : 'Campaign created — click Save to store it on the server'));
   });
 }
 
@@ -4302,8 +4413,11 @@ function commitImport() {
   const dedupe = mergeDuplicateCreators();
   closeDrawer();
   location.hash = '#/campaigns/' + id + '/roster';
-  toast(`Imported ${created + matched} creators — ${created} new, ${matched} matched${skipped ? ', ' + skipped + ' skipped' : ''}` +
-    (dedupe.mergedCreators ? `, ${dedupe.mergedCreators} duplicate${dedupe.mergedCreators === 1 ? '' : 's'} merged` : ''));
+  const summary = `Imported ${created + matched} creators — ${created} new, ${matched} matched${skipped ? ', ' + skipped + ' skipped' : ''}` +
+    (dedupe.mergedCreators ? `, ${dedupe.mergedCreators} duplicate${dedupe.mergedCreators === 1 ? '' : 's'} merged` : '');
+  toast(summary);
+  serverSave({ force: true, silent: true }).then(() =>
+    toast(SERVER.status === 'idle' ? summary + ' — saved' : summary + ' — click Save to store it on the server'));
 }
 
 /* ---------------------------- blank templates ---------------------------- */
@@ -5994,32 +6108,46 @@ function renderTabs(section, item, tab, tabs) {
 function updateSaveBadge() {
   const el = $('#saveBadge');
   if (!el) return;
-  if (!persistState.on) {
-    el.className = 'save-badge no-print off';
-    el.innerHTML = '<i class="sdot"></i>Not saved — export before closing';
-    el.title = 'This browser blocks local storage, so the workspace only lives in this tab.';
+
+  if (SERVER.configured === false) {
+    el.className = 'save-badge no-print warn';
+    el.innerHTML = '<i class="sdot"></i>Not connected to server';
+    el.title = 'MONGODB_URI is not set on the server yet, so Save only writes to this browser for now.';
     return;
   }
-  if (persistState.error) {
+  if (SERVER.status === 'conflict') {
+    el.className = 'save-badge no-print warn';
+    el.innerHTML = '<i class="sdot"></i>Needs attention';
+    el.title = SERVER.error || 'Another browser saved more recently.';
+    return;
+  }
+  if (SERVER.status === 'error') {
     el.className = 'save-badge no-print warn';
     el.innerHTML = '<i class="sdot"></i>Save failed';
-    el.title = persistState.error;
+    el.title = SERVER.error || 'Could not reach the server. Click Save to retry.';
     return;
   }
-  const t = persistState.at ? persistState.at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
   if (SYNC.url && (SYNC.status === 'conflict' || SYNC.status === 'error')) {
     el.className = 'save-badge no-print warn';
     el.innerHTML = '<i class="sdot"></i>Sheet needs attention';
     el.title = SYNC.error || 'Open Setup → Google Sheet.';
     return;
   }
+  if (SERVER.status === 'syncing') {
+    el.className = 'save-badge no-print';
+    el.innerHTML = '<i class="sdot"></i>Saving…';
+    el.title = 'Saving to the server…';
+    return;
+  }
+
+  const st = SERVER.at ? SERVER.at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
   el.className = 'save-badge no-print';
-  el.innerHTML = SYNC.url
-    ? `<i class="sdot"></i>${SYNC.status === 'syncing' ? 'Syncing…' : 'Sheet · saved ' + t}`
-    : `<i class="sdot"></i>Saved ${t}`;
-  el.title = SYNC.url
-    ? `Saved in this browser and pushed to the shared Google Sheet${SYNC.at ? ' (last sync ' + SYNC.at.toLocaleString() + ')' : ''}.`
-    : `Stored in this browser only (${Math.round(persistState.bytes / 1024)} KB). Export a JSON backup from Setup → Data sources.`;
+  el.innerHTML = st ? `<i class="sdot"></i>Saved ${st}` : '<i class="sdot"></i>Not saved yet — click Save';
+  el.title = st
+    ? `Saved to the server at ${SERVER.at.toLocaleString()} — available on any browser.${SYNC.url ? ' Also pushed to the shared Google Sheet.' : ''}`
+    : (persistState.on
+        ? `Kept in this browser only (${Math.round(persistState.bytes / 1024)} KB) until you click Save.`
+        : 'This browser blocks local storage — click Save to store this on the server.');
 }
 
 function render() {
@@ -6134,6 +6262,11 @@ $('#btnExportAll').addEventListener('click', () => {
   });
   downloadFile(toCsv(['brand','campaign','type','status','start','end','target','contacted','confirmed','delivered','views','reach','engagements','er','spend_krw','cpm','cpv','cpe','viral_posts'], rows),
     'vively-all-campaigns.csv', 'text/csv;charset=utf-8');
+});
+$('#btnSaveNow').addEventListener('click', () => {
+  if (SERVER.status === 'conflict' &&
+      !confirm('This workspace was saved from another browser more recently. Overwrite it with what you see here?')) return;
+  serverSave({ force: SERVER.status === 'conflict' });
 });
 
 /* ------------------------------ auth ------------------------------ */
@@ -6303,7 +6436,7 @@ authState.user = loadAuthUser();
 refreshAuthButtons();
 
 window.addEventListener('hashchange', render);
-window.addEventListener('beforeunload', () => persist(true));
+window.addEventListener('beforeunload', () => { persist(true); flushServerSaveBeacon(); });
 persistState.on = storageAvailable();
 loadPersisted();
 loadSyncConfig();
@@ -6313,6 +6446,19 @@ wireSearch();
 if (window.innerWidth <= 1080) togglePanel(false);
 if (authState.user) setAuthLocked(false);
 else setAuthLocked(true);
+
+/* pull the server copy in after the first paint — if it has a saved
+   workspace, that's the cross-browser truth and it wins; if the server
+   has nothing yet but this browser does, push this one up to seed it.
+   Runs regardless of the auth lock above, so data is ready the moment
+   someone logs in. */
+serverLoad().then((result) => {
+  if (result === 'loaded') { render(); toast('Loaded the latest saved workspace'); }
+  else if (result === 'empty' && (DB.campaigns.length || DB.creators.length)) {
+    serverSave({ silent: true, force: true });
+  }
+  updateSaveBadge();
+});
 </script>
 </body>
 </html>
