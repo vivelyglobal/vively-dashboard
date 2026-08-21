@@ -282,6 +282,33 @@ body.panel-closed .panel { border-right: 0; }
 .btn.xs { padding: 3px 9px; font-size: 11.5px; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 
+.auth-actions { display: inline-flex; gap: 8px; align-items: center; }
+
+.auth-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.56);
+  display: none; align-items: center; justify-content: center;
+  z-index: 80; padding: 20px;
+}
+.auth-overlay.open { display: flex; }
+
+.auth-modal {
+  width: min(480px, 100%); background: var(--surface); border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg); box-shadow: var(--shadow); padding: 20px;
+}
+.auth-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.auth-head h3 { margin: 0; font-size: 17px; font-weight: 500; }
+.auth-sub { margin: 0 0 14px; color: var(--text-3); font-size: 12.5px; }
+.auth-close { margin-left: auto; }
+.auth-form { display: none; }
+.auth-form.active { display: block; }
+.auth-row { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0,1fr)); }
+.auth-note { color: var(--text-3); font-size: 11.5px; margin-top: 8px; }
+
+@media (max-width: 640px) {
+  .auth-row { grid-template-columns: 1fr; }
+  .auth-actions { display: none; }
+}
+
 .card {
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
   padding: 20px;
@@ -617,6 +644,10 @@ tr.preferred-row td:first-child { box-shadow: inset 3px 0 0 var(--good); }
       </div>
       <span class="save-badge no-print" id="saveBadge" title="Where your data is stored"></span>
       <button class="theme-btn no-print" id="themeToggle" title="Switch between light and dark (T)" aria-label="Switch theme">☾</button>
+      <div class="auth-actions no-print">
+        <button class="btn sm" id="btnLogin">Login</button>
+        <button class="btn sm primary" id="btnSignup">Signup</button>
+      </div>
       <button class="btn sm no-print" id="btnExportAll">Export</button>
     </header>
 
@@ -636,6 +667,58 @@ tr.preferred-row td:first-child { box-shadow: inset 3px 0 0 var(--good); }
 </aside>
 
 <div class="toast" id="toast"></div>
+
+<div class="auth-overlay" id="authOverlay" aria-hidden="true">
+  <section class="auth-modal" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+    <div class="auth-head">
+      <h3 id="authTitle">Welcome to VIVELY</h3>
+      <button class="icon-btn auth-close" id="authClose" aria-label="Close auth dialog">&times;</button>
+    </div>
+    <p class="auth-sub">Create an account to start, or login if you already have one.</p>
+    <div class="seg" id="authMode">
+      <button data-mode="login" class="active" type="button">Login</button>
+      <button data-mode="signup" type="button">Signup</button>
+    </div>
+
+    <form class="auth-form active" id="loginForm">
+      <div class="field">
+        <label for="loginEmail">Email</label>
+        <input id="loginEmail" name="email" type="text" placeholder="you@company.com" autocomplete="email" required>
+      </div>
+      <div class="field">
+        <label for="loginPassword">Password</label>
+        <input id="loginPassword" name="password" type="password" placeholder="Enter your password" autocomplete="current-password" required>
+      </div>
+      <button class="btn primary" type="submit" id="loginSubmit">Login</button>
+      <p class="auth-note">Login endpoint: <code>POST /api/login</code></p>
+    </form>
+
+    <form class="auth-form" id="signupForm">
+      <div class="auth-row">
+        <div class="field">
+          <label for="signupName">Full name</label>
+          <input id="signupName" name="name" type="text" placeholder="Your full name" autocomplete="name" required>
+        </div>
+        <div class="field">
+          <label for="signupEmail">Email</label>
+          <input id="signupEmail" name="email" type="text" placeholder="you@company.com" autocomplete="email" required>
+        </div>
+      </div>
+      <div class="auth-row">
+        <div class="field">
+          <label for="signupPassword">Password</label>
+          <input id="signupPassword" name="password" type="password" placeholder="Min 8 characters" autocomplete="new-password" required>
+        </div>
+        <div class="field">
+          <label for="signupConfirm">Confirm password</label>
+          <input id="signupConfirm" name="confirmPassword" type="password" placeholder="Repeat password" autocomplete="new-password" required>
+        </div>
+      </div>
+      <button class="btn primary" type="submit" id="signupSubmit">Create account</button>
+      <p class="auth-note">Signup endpoint: <code>POST /api/signup</code></p>
+    </form>
+  </section>
+</div>
 
 <script>
 "use strict";
@@ -4829,6 +4912,134 @@ $('#btnExportAll').addEventListener('click', () => {
   downloadFile(toCsv(['brand','campaign','type','status','start','end','target','contacted','confirmed','delivered','views','reach','engagements','er','spend_krw','cpm','cpv','cpe','viral_posts'], rows),
     'vively-all-campaigns.csv', 'text/csv;charset=utf-8');
 });
+
+/* ------------------------------ auth ------------------------------ */
+const authState = { mode: 'login', user: null };
+
+function setAuthMode(mode) {
+  authState.mode = mode === 'signup' ? 'signup' : 'login';
+  $$('#authMode button').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.mode === authState.mode);
+  });
+  $('#loginForm').classList.toggle('active', authState.mode === 'login');
+  $('#signupForm').classList.toggle('active', authState.mode === 'signup');
+}
+
+function openAuth(mode) {
+  setAuthMode(mode || authState.mode);
+  const ov = $('#authOverlay');
+  ov.classList.add('open');
+  ov.setAttribute('aria-hidden', 'false');
+  (authState.mode === 'login' ? $('#loginEmail') : $('#signupName')).focus();
+}
+
+function closeAuth() {
+  const ov = $('#authOverlay');
+  ov.classList.remove('open');
+  ov.setAttribute('aria-hidden', 'true');
+}
+
+async function sendAuth(path, payload) {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Request failed');
+  return body;
+}
+
+function setAuthButtons() {
+  const loginBtn = $('#btnLogin');
+  const signupBtn = $('#btnSignup');
+  if (!loginBtn || !signupBtn) return;
+  if (authState.user) {
+    loginBtn.textContent = 'Logout';
+    signupBtn.textContent = authState.user.name || authState.user.email;
+    signupBtn.disabled = true;
+  } else {
+    loginBtn.textContent = 'Login';
+    signupBtn.textContent = 'Signup';
+    signupBtn.disabled = false;
+  }
+}
+
+$('#btnLogin').addEventListener('click', () => {
+  if (authState.user) {
+    authState.user = null;
+    setAuthButtons();
+    toast('Logged out');
+    return;
+  }
+  openAuth('login');
+});
+
+$('#btnSignup').addEventListener('click', () => {
+  if (authState.user) return;
+  openAuth('signup');
+});
+
+$('#authClose').addEventListener('click', closeAuth);
+$('#authOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'authOverlay') closeAuth();
+});
+
+$$('#authMode button').forEach((btn) => btn.addEventListener('click', () => setAuthMode(btn.dataset.mode)));
+
+$('#signupForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const name = $('#signupName').value.trim();
+  const email = $('#signupEmail').value.trim().toLowerCase();
+  const password = $('#signupPassword').value;
+  const confirm = $('#signupConfirm').value;
+
+  if (password.length < 8) return toast('Password minimal 8 karakter');
+  if (password !== confirm) return toast('Konfirmasi password tidak sama');
+
+  const btn = $('#signupSubmit');
+  const old = btn.textContent;
+  btn.textContent = 'Creating...';
+  btn.disabled = true;
+  try {
+    const data = await sendAuth('/api/signup', { name, email, password });
+    authState.user = data.user;
+    setAuthButtons();
+    closeAuth();
+    $('#signupForm').reset();
+    toast('Signup berhasil. Welcome ' + authState.user.name);
+  } catch (err) {
+    toast(err.message || 'Signup gagal');
+  } finally {
+    btn.textContent = old;
+    btn.disabled = false;
+  }
+});
+
+$('#loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const email = $('#loginEmail').value.trim().toLowerCase();
+  const password = $('#loginPassword').value;
+  const btn = $('#loginSubmit');
+  const old = btn.textContent;
+  btn.textContent = 'Logging in...';
+  btn.disabled = true;
+  try {
+    const data = await sendAuth('/api/login', { email, password });
+    authState.user = data.user;
+    setAuthButtons();
+    closeAuth();
+    $('#loginForm').reset();
+    toast('Login sukses. Hi ' + authState.user.name);
+  } catch (err) {
+    toast(err.message || 'Login gagal');
+  } finally {
+    btn.textContent = old;
+    btn.disabled = false;
+  }
+});
+
+setAuthButtons();
 
 window.addEventListener('hashchange', render);
 window.addEventListener('beforeunload', () => persist(true));
