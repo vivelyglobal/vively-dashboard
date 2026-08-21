@@ -127,6 +127,27 @@
 
 .tip { box-shadow: var(--shadow); }
 
+/* document preview */
+.doc-scroll { max-height: calc(100vh - 210px); overflow-y: auto; padding: 0 18px 18px; }
+.doc-page {
+  background: #ffffff; color: #1a1a1a; border: 1px solid var(--line); border-radius: 6px;
+  padding: 34px 38px; font-family: Calibri, "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
+  font-size: 12.5px; line-height: 1.65;
+}
+.doc-page.wide { max-width: 900px; margin: 0 auto; padding: 52px 62px; }
+.doc-page .doc-h1 { font-size: 17px; font-weight: 700; text-align: center; margin: 0 0 6px; letter-spacing: .01em; }
+.doc-page .doc-sub { font-size: 12px; color: #555; text-align: center; margin: 0 0 18px; }
+.doc-page .doc-h2 { font-size: 13px; font-weight: 700; margin: 18px 0 6px; }
+.doc-page .doc-h3 { font-size: 12.5px; font-weight: 700; margin: 12px 0 4px; }
+.doc-page .doc-p { margin: 0 0 8px; }
+.doc-page .doc-p.b { font-weight: 700; }
+.doc-page .doc-break { border-top: 1px dashed #bbb; margin: 26px 0; }
+.doc-page .doc-table { width: 100%; border-collapse: collapse; margin: 8px 0 12px; font-size: 11.5px; }
+.doc-page .doc-table td, .doc-page .doc-table th {
+  border: 1px solid #c9c9c9; padding: 7px 9px; vertical-align: top; text-align: left; color: #1a1a1a;
+}
+.doc-page .doc-table th { background: #f2f2f2; font-weight: 700; }
+
 /* save indicator */
 .save-badge {
   font-size: 11.5px; color: var(--text-3); white-space: nowrap; display: inline-flex;
@@ -281,33 +302,6 @@ body.panel-closed .panel { border-right: 0; }
 .btn.sm { padding: 5px 12px; font-size: 12px; }
 .btn.xs { padding: 3px 9px; font-size: 11.5px; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
-
-.auth-actions { display: inline-flex; gap: 8px; align-items: center; }
-
-.auth-overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,.56);
-  display: none; align-items: center; justify-content: center;
-  z-index: 80; padding: 20px;
-}
-.auth-overlay.open { display: flex; }
-
-.auth-modal {
-  width: min(480px, 100%); background: var(--surface); border: 1px solid var(--line-strong);
-  border-radius: var(--r-lg); box-shadow: var(--shadow); padding: 20px;
-}
-.auth-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
-.auth-head h3 { margin: 0; font-size: 17px; font-weight: 500; }
-.auth-sub { margin: 0 0 14px; color: var(--text-3); font-size: 12.5px; }
-.auth-close { margin-left: auto; }
-.auth-form { display: none; }
-.auth-form.active { display: block; }
-.auth-row { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0,1fr)); }
-.auth-note { color: var(--text-3); font-size: 11.5px; margin-top: 8px; }
-
-@media (max-width: 640px) {
-  .auth-row { grid-template-columns: 1fr; }
-  .auth-actions { display: none; }
-}
 
 .card {
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
@@ -605,6 +599,13 @@ tr.preferred-row td:first-child { box-shadow: inset 3px 0 0 var(--good); }
 @media print {
   .rail, .panel, .topbar, .tabbar, .no-print { display: none !important; }
   body { background: #fff; color: #111; }
+  .app { display: block; }
+  .content { padding: 0; }
+  .card { border: 0; background: #fff; padding: 0; }
+  .doc-scroll { max-height: none; overflow: visible; padding: 0; }
+  .doc-page { border: 0; border-radius: 0; padding: 0; font-size: 11pt; }
+  .doc-page .doc-h2, .doc-page .doc-h3 { page-break-after: avoid; }
+  .doc-page .doc-table { page-break-inside: avoid; }
 }
 </style>
 </head>
@@ -644,10 +645,6 @@ tr.preferred-row td:first-child { box-shadow: inset 3px 0 0 var(--good); }
       </div>
       <span class="save-badge no-print" id="saveBadge" title="Where your data is stored"></span>
       <button class="theme-btn no-print" id="themeToggle" title="Switch between light and dark (T)" aria-label="Switch theme">☾</button>
-      <div class="auth-actions no-print">
-        <button class="btn sm" id="btnLogin">Login</button>
-        <button class="btn sm primary" id="btnSignup">Signup</button>
-      </div>
       <button class="btn sm no-print" id="btnExportAll">Export</button>
     </header>
 
@@ -667,58 +664,6 @@ tr.preferred-row td:first-child { box-shadow: inset 3px 0 0 var(--good); }
 </aside>
 
 <div class="toast" id="toast"></div>
-
-<div class="auth-overlay" id="authOverlay" aria-hidden="true">
-  <section class="auth-modal" role="dialog" aria-modal="true" aria-labelledby="authTitle">
-    <div class="auth-head">
-      <h3 id="authTitle">Welcome to VIVELY</h3>
-      <button class="icon-btn auth-close" id="authClose" aria-label="Close auth dialog">&times;</button>
-    </div>
-    <p class="auth-sub">Create an account to start, or login if you already have one.</p>
-    <div class="seg" id="authMode">
-      <button data-mode="login" class="active" type="button">Login</button>
-      <button data-mode="signup" type="button">Signup</button>
-    </div>
-
-    <form class="auth-form active" id="loginForm">
-      <div class="field">
-        <label for="loginEmail">Email</label>
-        <input id="loginEmail" name="email" type="text" placeholder="you@company.com" autocomplete="email" required>
-      </div>
-      <div class="field">
-        <label for="loginPassword">Password</label>
-        <input id="loginPassword" name="password" type="password" placeholder="Enter your password" autocomplete="current-password" required>
-      </div>
-      <button class="btn primary" type="submit" id="loginSubmit">Login</button>
-      <p class="auth-note">Login endpoint: <code>POST /api/login</code></p>
-    </form>
-
-    <form class="auth-form" id="signupForm">
-      <div class="auth-row">
-        <div class="field">
-          <label for="signupName">Full name</label>
-          <input id="signupName" name="name" type="text" placeholder="Your full name" autocomplete="name" required>
-        </div>
-        <div class="field">
-          <label for="signupEmail">Email</label>
-          <input id="signupEmail" name="email" type="text" placeholder="you@company.com" autocomplete="email" required>
-        </div>
-      </div>
-      <div class="auth-row">
-        <div class="field">
-          <label for="signupPassword">Password</label>
-          <input id="signupPassword" name="password" type="password" placeholder="Min 8 characters" autocomplete="new-password" required>
-        </div>
-        <div class="field">
-          <label for="signupConfirm">Confirm password</label>
-          <input id="signupConfirm" name="confirmPassword" type="password" placeholder="Repeat password" autocomplete="new-password" required>
-        </div>
-      </div>
-      <button class="btn primary" type="submit" id="signupSubmit">Create account</button>
-      <p class="auth-note">Signup endpoint: <code>POST /api/signup</code></p>
-    </form>
-  </section>
-</div>
 
 <script>
 "use strict";
@@ -877,6 +822,104 @@ function clearPersisted() {
   Object.keys(byCreator).forEach((k) => delete byCreator[k]);
   Object.keys(byCampaign).forEach((k) => delete byCampaign[k]);
   persistState.at = null; persistState.bytes = 0; persistState.error = null;
+}
+
+/* ------------------------------------------------------------------
+   One creator, one row. Handles arrive from spreadsheets in every
+   shape — trailing dots, query strings, mixed case — so matching is
+   done on a normalised form. Campaigns may of course repeat the same
+   creator; the database may not.
+   ------------------------------------------------------------------ */
+/* One creator, one row. Handles arrive in every shape a person can type them \u2014
+   @name, NAME, name/, instagram.com/name/?hl=ko, a full https URL pasted out of
+   the browser bar \u2014 and all of those are the same creator. */
+function normHandle(h) {
+  let s = String(h || '').trim().toLowerCase()
+    .replace(/[\s\u200b]/g, '')
+    .replace(/[?#].*$/, '');
+  /* pull the handle out of a profile URL, whatever platform */
+  const m = s.match(/^(?:https?:)?\/\/?(?:www\.)?(?:instagram|tiktok|youtube)\.com\/(?:@)?([^/]+)/);
+  if (m) s = m[1];
+  return s.replace(/^@+/, '').replace(/\/+$/, '').replace(/\.+$/, '');
+}
+function findCreatorByHandle(handle) {
+  const k = normHandle(handle);
+  return k ? DB.creators.find((c) => normHandle(c.handle) === k) : null;
+}
+
+/* group the database by normalised handle and report anything doubled up */
+function duplicateCreatorGroups() {
+  const groups = {};
+  DB.creators.forEach((c) => {
+    const k = normHandle(c.handle);
+    if (!k) return;
+    (groups[k] = groups[k] || []).push(c);
+  });
+  return Object.entries(groups).filter(([, list]) => list.length > 1)
+    .map(([key, list]) => ({ key, list }));
+}
+
+const richness = (c) => (c.campaignIds || []).length * 100 + (c.followers ? 10 : 0) +
+  (c.email ? 2 : 0) + (c.contact ? 2 : 0) + (c.address ? 2 : 0) + (c.flag ? 5 : 0) + (c.notes ? 1 : 0);
+
+function mergeDuplicateCreators() {
+  const groups = duplicateCreatorGroups();
+  let mergedCreators = 0, mergedParticipants = 0;
+
+  groups.forEach(({ list }) => {
+    const ordered = list.slice().sort((a, b) => richness(b) - richness(a));
+    const keep = ordered[0];
+    const drop = ordered.slice(1);
+
+    drop.forEach((d) => {
+      /* fill anything blank on the survivor from the duplicate */
+      ['name', 'platform', 'country', 'nationality', 'email', 'contact', 'address', 'source', 'lastWorked'].forEach((k) => {
+        if (!keep[k] && d[k]) keep[k] = d[k];
+      });
+      ['followers', 'er', 'avgViews', 'rate', 'reliability', 'avgTurnaroundDays'].forEach((k) => {
+        if (!keep[k] && d[k]) keep[k] = d[k];
+      });
+      keep.categories = [...new Set([...(keep.categories || []), ...(d.categories || [])])];
+      keep.languages = [...new Set([...(keep.languages || []), ...(d.languages || [])])];
+      keep.tags = [...new Set([...(keep.tags || []), ...(d.tags || [])])];
+      if (d.notes && !String(keep.notes || '').includes(d.notes)) keep.notes = [keep.notes, d.notes].filter(Boolean).join('\n');
+      /* a blacklist flag always wins over no flag */
+      const rank = { blocked: 3, caution: 2, preferred: 1 };
+      if (d.flag && (rank[d.flag] || 0) > (rank[keep.flag] || 0)) {
+        keep.flag = d.flag; keep.flagReason = d.flagReason; keep.flagAt = d.flagAt;
+      }
+      keep.tier = tierOf(keep.followers || 0).id;
+
+      /* move every campaign row across to the survivor */
+      DB.participants.forEach((p) => { if (p.creatorId === d.id) p.creatorId = keep.id; });
+      delete byCreator[d.id];
+      mergedCreators++;
+    });
+  });
+
+  /* one row per creator per campaign — keep whichever got furthest */
+  const seen = {};
+  const keptRows = [];
+  DB.participants.forEach((p) => {
+    const k = p.campaignId + '::' + p.creatorId;
+    const prev = seen[k];
+    if (!prev) { seen[k] = p; keptRows.push(p); return; }
+    const better = (STAGE_IDX[p.stage] > STAGE_IDX[prev.stage]) || (p.content && !prev.content);
+    if (better) {
+      Object.keys(prev).forEach((key) => { if (!prev[key] && p[key]) prev[key] = p[key]; });
+      Object.assign(prev, p);
+    } else {
+      Object.keys(p).forEach((key) => { if (!prev[key] && p[key]) prev[key] = p[key]; });
+    }
+    mergedParticipants++;
+  });
+  DB.participants = keptRows;
+  DB.participants.forEach((p) => { p.id = p.campaignId + '-' + p.creatorId; });
+
+  const keepIds = new Set(Object.keys(byCreator));
+  DB.creators = DB.creators.filter((c) => keepIds.has(c.id));
+  recomputeCreatorStats();
+  return { mergedCreators, mergedParticipants, groups: groups.length };
 }
 
 /* derived creator stats — recomputed whenever the roster changes */
@@ -1308,6 +1351,10 @@ function openDrawer(title, html, wide) {
   $('#drawer').classList.toggle('wide', !!wide);
   $('#drawer').classList.add('open');
   $('#scrim').classList.add('open');
+  /* always open at the top — otherwise a long form inherits the last panel's scroll
+     position and the first fields sit above the fold */
+  $('#drawerBody').scrollTop = 0;
+  requestAnimationFrame(() => { $('#drawerBody').scrollTop = 0; });
 }
 function closeDrawer() {
   $('#drawer').classList.remove('open');
@@ -1808,6 +1855,8 @@ function renderCampaign(view, id, tab) {
       <div class="sp"></div>
       ${s.viralCount ? `<span class="pill green">${s.viralCount} viral</span>` : ''}
       <select id="cpStatus" style="width:145px">${Object.entries(CAMPAIGN_STATUS).map(([k, v]) => `<option value="${k}" ${cp.status === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select>
+      <button class="btn sm no-print" id="cpEdit">Edit</button>
+      <button class="icon-btn no-print" id="cpDelete" title="Delete this campaign">&#128465;</button>
     </div>
 
     <div class="grid g6" style="margin-bottom:16px;">
@@ -1822,10 +1871,126 @@ function renderCampaign(view, id, tab) {
     <div id="cpTab"></div>`;
 
   $('#cpStatus').addEventListener('change', (e) => { cp.status = e.target.value; toast('Status updated'); render(); });
+  $('#cpEdit').addEventListener('click', () => openEditCampaign(cp));
+  $('#cpDelete').addEventListener('click', () => confirmDeleteCampaign(cp));
 
   const mount = $('#cpTab');
   ({ roster: rosterTab, content: contentTab, performance: campaignPerformanceTab, creators: campaignCreatorsTab,
      messages: messagesTab, brief: briefTab, report: reportTab }[tab] || rosterTab)(mount, cp);
+}
+
+/* ------------------------------ edit & delete ------------------------------ */
+function campaignFormHtml(cp) {
+  return `
+    <div class="grid g2" style="gap:10px">
+      <div class="field"><label>Brand / client</label><input type="text" id="ecBrand" value="${esc(cp.brand)}"/></div>
+      <div class="field"><label>Project name</label><input type="text" id="ecName" value="${esc(cp.name)}"/></div>
+      <div class="field"><label>Type</label><select id="ecKind">${
+        ['Seeding','Store visit','Paid collab','Product launch','Market validation']
+          .map((k) => `<option ${cp.kind === k ? 'selected' : ''}>${k}</option>`).join('')}</select></div>
+      <div class="field"><label>Category</label><select id="ecCat">${
+        CATEGORIES.map((k) => `<option ${cp.category === k ? 'selected' : ''}>${k}</option>`).join('')}</select></div>
+      <div class="field"><label>Market</label><select id="ecMarket">${
+        [...new Set([cp.market, ...COUNTRIES])].filter(Boolean).map((k) => `<option ${cp.market === k ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select></div>
+      <div class="field"><label>Status</label><select id="ecStatus">${
+        Object.entries(CAMPAIGN_STATUS).map(([k, v]) => `<option value="${k}" ${cp.status === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
+      <div class="field"><label>Start</label><input type="date" id="ecStart" value="${esc(cp.start)}"/></div>
+      <div class="field"><label>End</label><input type="date" id="ecEnd" value="${esc(cp.end)}"/></div>
+      <div class="field"><label>Target creators</label><input type="number" id="ecTarget" value="${cp.targetCreators}"/></div>
+      <div class="field"><label>Min followers</label><input type="number" id="ecMin" value="${cp.minFollowers || 0}"/></div>
+      <div class="field"><label>Product / visit cost each (₩)</label><input type="number" id="ecCost" value="${cp.productCostPer || 0}"/></div>
+      <div class="field"><label>Ad spend (₩)</label><input type="number" id="ecAd" value="${cp.adSpend || 0}"/></div>
+      <div class="field"><label>Budget (₩)</label><input type="number" id="ecBudget" value="${cp.budget || 0}"/></div>
+      <div class="field"><label>Owner</label><input type="text" id="ecOwner" value="${esc(cp.owner || '')}"/></div>
+    </div>
+    <div class="field"><label>Deliverables</label><input type="text" id="ecDeliv" value="${esc(cp.deliverables || '')}"/></div>
+    <div class="field"><label>Platforms (comma separated)</label><input type="text" id="ecPlatforms" value="${esc((cp.platforms || []).join(', '))}"/></div>
+    <div class="field"><label>Hashtags (comma separated)</label><input type="text" id="ecHashtags" value="${esc((cp.hashtags || []).join(', '))}"/></div>
+    <div class="field"><label>Campaign note — the message generator writes from this</label>
+      <textarea id="ecNote" style="min-height:170px">${esc(cp.note || '')}</textarea></div>`;
+}
+
+function readCampaignForm(cp) {
+  const list = (v) => v.split(',').map((x) => x.trim()).filter(Boolean);
+  cp.brand = $('#ecBrand').value.trim() || cp.brand;
+  cp.name = $('#ecName').value.trim() || cp.name;
+  cp.kind = $('#ecKind').value;
+  cp.category = $('#ecCat').value;
+  cp.market = $('#ecMarket').value;
+  cp.status = $('#ecStatus').value;
+  cp.start = $('#ecStart').value;
+  cp.end = $('#ecEnd').value;
+  cp.targetCreators = +$('#ecTarget').value || 0;
+  cp.minFollowers = +$('#ecMin').value || 0;
+  cp.productCostPer = +$('#ecCost').value || 0;
+  cp.adSpend = +$('#ecAd').value || 0;
+  cp.budget = +$('#ecBudget').value || 0;
+  cp.owner = $('#ecOwner').value.trim();
+  cp.deliverables = $('#ecDeliv').value.trim();
+  cp.platforms = list($('#ecPlatforms').value);
+  cp.hashtags = list($('#ecHashtags').value);
+  cp.note = $('#ecNote').value;
+}
+
+function openEditCampaign(cp) {
+  openDrawer(`Edit — ${esc(cp.brand)}`, campaignFormHtml(cp) + `
+    <div style="display:flex;gap:8px;margin-top:6px">
+      <button class="btn primary" id="ecSave">Save changes</button>
+      <button class="btn" onclick="closeDrawer()">Cancel</button>
+      <div style="flex:1"></div>
+      <button class="btn" id="ecDelete" style="color:#f08a8a;border-color:rgba(208,59,59,.4)">Delete campaign</button>
+    </div>`, true);
+  $('#ecSave').addEventListener('click', () => {
+    readCampaignForm(cp);
+    closeDrawer(); render(); toast('Campaign updated');
+  });
+  $('#ecDelete').addEventListener('click', () => { closeDrawer(); confirmDeleteCampaign(cp); });
+}
+
+function confirmDeleteCampaign(cp) {
+  const rows = partsOf(cp.id);
+  const creatorIds = new Set(rows.map((r) => r.creatorId));
+  const orphaned = [...creatorIds].filter((id) =>
+    !DB.participants.some((p) => p.creatorId === id && p.campaignId !== cp.id)).length;
+
+  openDrawer('Delete campaign', `
+    <div class="note warn" style="margin-bottom:16px">
+      <strong>${esc(cp.brand)} — ${esc(cp.name)}</strong> and its ${rows.length} roster row${rows.length === 1 ? '' : 's'}
+      will be removed. This cannot be undone.
+    </div>
+    <dl class="kv" style="margin-bottom:18px">
+      <dt>Roster rows removed</dt><dd>${rows.length}</dd>
+      <dt>Creators involved</dt><dd>${creatorIds.size}</dd>
+      <dt>Creators kept in the database</dt><dd style="color:#6fce6f">all ${creatorIds.size} — including the ${orphaned} who appear on no other campaign</dd>
+      <dt>Content records removed</dt><dd>${rows.filter((r) => r.content).length}</dd>
+    </dl>
+    <p class="card-sub">The creator database is never touched by a campaign deletion. Handles, follower counts, contact
+    details, blacklist flags and notes all stay exactly as they are — only this campaign's participation rows go.</p>
+    <div style="display:flex;gap:8px;margin-top:16px">
+      <button class="btn" id="dcBackup">Download backup first</button>
+      <div style="flex:1"></div>
+      <button class="btn" onclick="closeDrawer()">Cancel</button>
+      <button class="btn primary" id="dcGo" style="background:var(--critical);border-color:var(--critical);color:#fff">Delete campaign</button>
+    </div>`);
+  $('#dcBackup').addEventListener('click', () => downloadFile(
+    JSON.stringify({ savedAt: new Date().toISOString(), db: DB, settings: SETTINGS }, null, 2),
+    `vively-workspace-${iso(new Date())}.json`, 'application/json'));
+  $('#dcGo').addEventListener('click', () => {
+    deleteCampaign(cp.id);
+    closeDrawer();
+    location.hash = '#/campaigns/all/active';
+    toast(`Deleted ${cp.brand} — ${creatorIds.size} creators kept`);
+    render();
+  });
+}
+
+/* removes the campaign and its roster rows. Creators are deliberately left alone. */
+function deleteCampaign(id) {
+  DB.participants = DB.participants.filter((p) => p.campaignId !== id);
+  DB.campaigns = DB.campaigns.filter((c) => c.id !== id);
+  delete byCampaign[id];
+  recomputeCreatorStats();
+  persist(true);
 }
 
 /* --------------------------- roster / pipeline --------------------------- */
@@ -2016,6 +2181,7 @@ function openAddCreators(cp) {
   $('#acAdd').addEventListener('click', () => {
     if (!picked.size) { toast('Pick at least one creator'); return; }
     picked.forEach((c) => {
+      if (DB.participants.some((p) => p.campaignId === cp.id && p.creatorId === c.id)) return;
       DB.participants.push({
         id: cp.id + '-' + c.id, campaignId: cp.id, creatorId: c.id, stage: 'sourced',
         source: c.source, fee: 0, contactedAt: null, repliedAt: null, confirmedAt: null,
@@ -3261,6 +3427,7 @@ function showCreator(id) {
       <button class="btn primary" id="atGo">Add as Sourced</button>`);
     $('#atGo').addEventListener('click', () => {
       const cpId = $('#atCp').value;
+      if (DB.participants.some((p) => p.campaignId === cpId && p.creatorId === c.id)) { toast('Already on that campaign'); return; }
       DB.participants.push({ id: cpId + '-' + c.id, campaignId: cpId, creatorId: c.id, stage: 'sourced', source: c.source,
         fee: 0, contactedAt: null, repliedAt: null, confirmedAt: null, shippedAt: null, dropReason: null, revisions: 0, content: null, note: '' });
       closeDrawer(); toast('Added'); render();
@@ -3985,8 +4152,7 @@ function commitImport() {
   let created = 0, matched = 0, skipped = 0;
   st.parsed.forEach((r) => {
     if (!r.handle) { skipped++; return; }
-    const key = r.handle.toLowerCase();
-    let cr = merge ? DB.creators.find((c) => c.handle.toLowerCase() === key) : null;
+    let cr = merge ? findCreatorByHandle(r.handle) : null;
 
     if (cr && skipBlocked && cr.flag === 'blocked') { skipped++; return; }
 
@@ -4043,9 +4209,13 @@ function commitImport() {
 
   byCampaign[id] = cp;
   DB.campaigns.push(cp);
+
+  /* never leave the database with two rows for the same person */
+  const dedupe = mergeDuplicateCreators();
   closeDrawer();
   location.hash = '#/campaigns/' + id + '/roster';
-  toast(`Imported ${created + matched} creators — ${created} new, ${matched} matched${skipped ? ', ' + skipped + ' skipped' : ''}`);
+  toast(`Imported ${created + matched} creators — ${created} new, ${matched} matched${skipped ? ', ' + skipped + ' skipped' : ''}` +
+    (dedupe.mergedCreators ? `, ${dedupe.mergedCreators} duplicate${dedupe.mergedCreators === 1 ? '' : 's'} merged` : ''));
 }
 
 /* ---------------------------- blank templates ---------------------------- */
@@ -4397,6 +4567,941 @@ function settingsSheets(view) {
   $('#syncAuto').addEventListener('change', () => { SYNC.auto = $('#syncAuto').checked; saveSyncConfig(); });
 }
 /* ============================================================
+   DOCX writer — same trick as the XLSX one. A .docx is a ZIP of
+   XML, and makeZip() already writes ZIPs, so Word documents come
+   out of the browser with no library and no CDN.
+
+   Blocks: {t:'h1'|'h2'|'h3'|'p'|'table'|'break'|'space', ...}
+   ============================================================ */
+
+const DOC_FONT_LATIN = 'Calibri';
+const DOC_FONT_EAST  = 'Malgun Gothic';   /* so Korean renders on Windows and Mac */
+
+function wRun(text, opt) {
+  opt = opt || {};
+  const props = [];
+  if (opt.bold) props.push('<w:b/><w:bCs/>');
+  if (opt.italic) props.push('<w:i/>');
+  if (opt.size) props.push(`<w:sz w:val="${opt.size * 2}"/><w:szCs w:val="${opt.size * 2}"/>`);
+  if (opt.color) props.push(`<w:color w:val="${opt.color}"/>`);
+  const rPr = props.length ? `<w:rPr>${props.join('')}</w:rPr>` : '';
+  /* keep manual line breaks */
+  const parts = String(text == null ? '' : text).split('\n');
+  const body = parts.map((s, i) => (i ? '<w:br/>' : '') + `<w:t xml:space="preserve">${xmlEsc(s)}</w:t>`).join('');
+  return `<w:r>${rPr}${body}</w:r>`;
+}
+
+function wPara(runs, opt) {
+  opt = opt || {};
+  const p = [];
+  if (opt.align) p.push(`<w:jc w:val="${opt.align}"/>`);
+  const before = opt.before == null ? 0 : opt.before;
+  const after = opt.after == null ? 120 : opt.after;
+  p.push(`<w:spacing w:before="${before}" w:after="${after}" w:line="264" w:lineRule="auto"/>`);
+  if (opt.indent) p.push(`<w:ind w:left="${opt.indent}"/>`);
+  if (opt.keepNext) p.push('<w:keepNext/>');
+  if (opt.border) p.push('<w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="BFBFBF"/></w:pBdr>');
+  const pPr = `<w:pPr>${p.join('')}</w:pPr>`;
+  return `<w:p>${pPr}${Array.isArray(runs) ? runs.join('') : runs}</w:p>`;
+}
+
+function wCell(text, opt) {
+  opt = opt || {};
+  const shade = opt.shade ? `<w:shd w:val="clear" w:color="auto" w:fill="${opt.shade}"/>` : '';
+  return `<w:tc><w:tcPr><w:tcW w:w="${opt.width || 0}" w:type="${opt.width ? 'dxa' : 'auto'}"/>${shade}
+    <w:tcMar><w:top w:w="80" w:type="dxa"/><w:bottom w:w="80" w:type="dxa"/><w:left w:w="120" w:type="dxa"/><w:right w:w="120" w:type="dxa"/></w:tcMar>
+    </w:tcPr>${wPara(wRun(text, { bold: opt.bold, size: opt.size || 10 }), { after: 0 })}</w:tc>`;
+}
+
+function wTable(rows, opt) {
+  opt = opt || {};
+  const widths = opt.widths || [];
+  const borders = `<w:tblBorders>
+    ${['top','left','bottom','right','insideH','insideV'].map((s) =>
+      `<w:${s} w:val="single" w:sz="4" w:space="0" w:color="BFBFBF"/>`).join('')}
+  </w:tblBorders>`;
+  const body = rows.map((row, ri) => `<w:tr>${row.map((cell, ci) =>
+    wCell(cell, { width: widths[ci], bold: opt.headerRow && ri === 0, shade: opt.headerRow && ri === 0 ? 'F2F2F2' : null, size: opt.size })
+  ).join('')}</w:tr>`).join('');
+  return `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/>${borders}<w:tblLayout w:type="fixed"/></w:tblPr>${body}</w:tbl>`;
+}
+
+function blocksToXml(blocks) {
+  return blocks.map((b) => {
+    if (!b) return '';
+    if (b.t === 'break') return `<w:p><w:r><w:br w:type="page"/></w:r></w:p>`;
+    if (b.t === 'space') return wPara(wRun(''), { after: b.after || 120 });
+    if (b.t === 'table') return wTable(b.rows, { widths: b.widths, headerRow: b.headerRow, size: b.size });
+    if (b.t === 'h1') return wPara(wRun(b.text, { bold: true, size: 18 }), { align: 'center', before: 120, after: 240 });
+    if (b.t === 'h2') return wPara(wRun(b.text, { bold: true, size: 12 }), { before: 240, after: 100, keepNext: true });
+    if (b.t === 'h3') return wPara(wRun(b.text, { bold: true, size: 10.5 }), { before: 160, after: 80, keepNext: true });
+    if (b.t === 'sub') return wPara(wRun(b.text, { size: 10.5, color: '595959' }), { align: 'center', after: 200 });
+    return wPara(wRun(b.text, { size: 10.5, bold: b.bold }), { after: b.after == null ? 120 : b.after, indent: b.indent });
+  }).join('');
+}
+
+function buildDocx(blocks, title) {
+  const sectPr = `<w:sectPr>
+    <w:pgSz w:w="11906" w:h="16838"/>
+    <w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="709" w:footer="709" w:gutter="0"/>
+  </w:sectPr>`;
+
+  const files = [
+    { name: '[Content_Types].xml', text:
+`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>` },
+    { name: '_rels/.rels', text:
+`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>` },
+    { name: 'docProps/core.xml', text:
+`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>${xmlEsc(title || 'Agreement')}</dc:title><dc:creator>VIVELY Dashboard</dc:creator></cp:coreProperties>` },
+    { name: 'word/_rels/document.xml.rels', text:
+`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>` },
+    { name: 'word/styles.xml', text:
+`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${DOC_FONT_LATIN}" w:hAnsi="${DOC_FONT_LATIN}" w:eastAsia="${DOC_FONT_EAST}" w:cs="${DOC_FONT_LATIN}"/><w:sz w:val="21"/><w:szCs w:val="21"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="120" w:line="264" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style></w:styles>` },
+    { name: 'word/document.xml', text:
+`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${blocksToXml(blocks)}${sectPr}</w:body></w:document>` }
+  ];
+  return makeZip(files);
+}
+
+function downloadDocx(blocks, filename, title) {
+  const blob = buildDocx(blocks, title);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 400);
+  toast('Downloaded ' + filename);
+}
+
+/* the same blocks rendered for the on-screen preview */
+function blocksToHtml(blocks) {
+  return blocks.map((b) => {
+    if (!b) return '';
+    if (b.t === 'break') return '<div class="doc-break"></div>';
+    if (b.t === 'space') return '<div style="height:10px"></div>';
+    if (b.t === 'table') return `<table class="doc-table"><tbody>${b.rows.map((r, ri) =>
+      `<tr>${r.map((c) => `<${b.headerRow && ri === 0 ? 'th' : 'td'}>${esc(c).replace(/\n/g, '<br>')}</${b.headerRow && ri === 0 ? 'th' : 'td'}>`).join('')}</tr>`).join('')}</tbody></table>`;
+    if (b.t === 'h1') return `<h1 class="doc-h1">${esc(b.text)}</h1>`;
+    if (b.t === 'sub') return `<p class="doc-sub">${esc(b.text)}</p>`;
+    if (b.t === 'h2') return `<h2 class="doc-h2">${esc(b.text)}</h2>`;
+    if (b.t === 'h3') return `<h3 class="doc-h3">${esc(b.text)}</h3>`;
+    return `<p class="doc-p${b.bold ? ' b' : ''}"${b.indent ? ' style="margin-left:16px"' : ''}>${esc(b.text).replace(/\n/g, '<br>')}</p>`;
+  }).join('');
+}
+
+function blocksToText(blocks) {
+  return blocks.map((b) => {
+    if (!b) return '';
+    if (b.t === 'break') return '\n\n———\n';
+    if (b.t === 'space') return '';
+    if (b.t === 'table') return b.rows.map((r) => r.join('\t')).join('\n');
+    return b.text || '';
+  }).filter(Boolean).join('\n\n');
+}
+/* ============================================================
+   CONTRACTS
+   Three documents built from the ScoutLab / Vively templates:
+     msa   — Master Service Agreement (long form)
+     sow   — Statement of Work (sits under an MSA)
+     short — Short-form single-project agreement (약식)
+
+   Only the client company name is required. Everything else has
+   a default lifted from the signed template and can be changed —
+   fee, billing cycle, payment days, interest, notice periods.
+   Each document renders in English or Korean from the same fields.
+   ============================================================ */
+
+const CONTRACT_DEFAULTS_KEY = 'vively-contract-defaults-v1';
+
+const BILLING_PRESETS = {
+  '50_50':      { en: '50% upon execution of this agreement; the remaining 50% upon campaign completion and delivery of the results report.',
+                  ko: '총 용역비의 50%는 계약 체결 시, 나머지 50%는 캠페인 종료 및 결과 보고서 제출 후 지급한다.' },
+  'advance':    { en: '100% of the Service Fee is payable in advance, before the campaign start date.',
+                  ko: '총 용역비 전액을 캠페인 개시일 전에 선지급한다.' },
+  'completion': { en: '100% of the Service Fee is payable upon campaign completion and delivery of the results report.',
+                  ko: '총 용역비 전액을 캠페인 종료 및 결과 보고서 제출 후 지급한다.' },
+  '30_40_30':   { en: '30% upon execution, 40% at the midpoint of the campaign period, and the remaining 30% upon completion.',
+                  ko: '계약 체결 시 30%, 캠페인 기간의 중간 시점에 40%, 종료 시 나머지 30%를 지급한다.' },
+  'monthly':    { en: 'Billed monthly in arrears. The Agency issues a tax invoice at the end of each calendar month for the Services performed in that month.',
+                  ko: '매월 후불로 청구한다. 에이전시는 매월 말일에 해당 월에 수행한 용역에 대하여 세금계산서를 발행한다.' },
+  'milestone':  { en: 'Billed by milestone as set out in the schedule above. A tax invoice is issued upon completion of each milestone.',
+                  ko: '위 일정에 기재된 마일스톤 단위로 청구하며, 각 마일스톤 완료 시 세금계산서를 발행한다.' },
+  'custom':     { en: '', ko: '' }
+};
+const BILLING_LABELS = {
+  '50_50': '50% on signing / 50% on completion',
+  'advance': '100% in advance',
+  'completion': '100% on completion',
+  '30_40_30': '30% / 40% / 30%',
+  'monthly': 'Monthly retainer (in arrears)',
+  'milestone': 'By milestone',
+  'custom': 'Custom wording…'
+};
+
+function contractDefaults() {
+  return {
+    lang: 'en',
+    clientName: '', clientReg: '', clientAddress: '', clientRep: '', clientContact: '', clientPhone: '',
+    agencyName: 'ScoutLab', agencyReg: '', agencyAddress: '', agencyRep: '', agencyContact: '', agencyPhone: '',
+    effectiveDate: iso(TODAY),
+    masterDate: '',
+    campaignName: '', campaignPurpose: '', platforms: '', periodStart: '', periodEnd: '', milestones: '',
+    currency: 'KRW', fee: '',
+    billing: '50_50', billingCustom: '',
+    netDays: 30, lateInterest: 6,
+    cancelFee: 50, cancelWindowDays: 7,
+    reviewDays: 3, revisionRounds: 1,
+    nonCircMonths: 12, nonCircPenalty: 20,
+    confidentialityYears: 3, termYears: 1, cureDays: 14, forceMajeureDays: 30,
+    governingLaw: 'Republic of Korea', jurisdiction: 'Seoul Central District Court',
+    masterLanguage: 'en',
+    notes: '',
+    deliverables: [{ service: '', platform: '', qty: '', deadline: '' }],
+    clauses: {
+      portfolio: true, language: true, cancellationFee: true, reviewProcess: true,
+      indemnity: true, nonCircumvention: true, forceMajeure: true, terminationEffect: true, esign: true
+    }
+  };
+}
+
+let CONTRACT = contractDefaults();
+
+function loadContractDefaults() {
+  try {
+    const raw = localStorage.getItem(CONTRACT_DEFAULTS_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    ['agencyName','agencyReg','agencyAddress','agencyRep','agencyContact','agencyPhone',
+     'governingLaw','jurisdiction','currency','netDays','lateInterest','masterLanguage','lang']
+      .forEach((k) => { if (saved[k] != null && saved[k] !== '') CONTRACT[k] = saved[k]; });
+  } catch (e) { /* first run */ }
+}
+function saveContractDefaults() {
+  try {
+    localStorage.setItem(CONTRACT_DEFAULTS_KEY, JSON.stringify({
+      agencyName: CONTRACT.agencyName, agencyReg: CONTRACT.agencyReg, agencyAddress: CONTRACT.agencyAddress,
+      agencyRep: CONTRACT.agencyRep, agencyContact: CONTRACT.agencyContact, agencyPhone: CONTRACT.agencyPhone,
+      governingLaw: CONTRACT.governingLaw, jurisdiction: CONTRACT.jurisdiction, currency: CONTRACT.currency,
+      netDays: CONTRACT.netDays, lateInterest: CONTRACT.lateInterest, masterLanguage: CONTRACT.masterLanguage,
+      lang: CONTRACT.lang
+    }));
+  } catch (e) { /* storage blocked */ }
+}
+
+/* ------------------------------ helpers ------------------------------ */
+const blank = (n) => '_'.repeat(n || 20);
+const fv = (v, n) => (v == null || String(v).trim() === '' ? blank(n) : String(v).trim());
+
+function contractDate(isoStr, L) {
+  if (!isoStr) return L === 'ko' ? '____년 __월 __일' : '____ Year __ Month __ Day';
+  const d = new Date(isoStr + 'T00:00:00Z');
+  if (isNaN(d)) return isoStr;
+  if (L === 'ko') return `${d.getUTCFullYear()}년 ${d.getUTCMonth() + 1}월 ${d.getUTCDate()}일`;
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
+function contractMoney(f, L) {
+  const sym = f.currency === 'USD' ? '$' : '₩';
+  if (!f.fee || isNaN(Number(String(f.fee).replace(/,/g, '')))) return `${sym} ${blank(16)}`;
+  return `${sym} ${nf.format(Math.round(Number(String(f.fee).replace(/,/g, ''))))}`;
+}
+function billingText(f, L) {
+  if (f.billing === 'custom') return f.billingCustom || (L === 'ko' ? '(별도 협의)' : '(to be agreed separately)');
+  return BILLING_PRESETS[f.billing][L] || BILLING_PRESETS['50_50'][L];
+}
+const P = (text, opt) => Object.assign({ t: 'p', text }, opt || {});
+const H2 = (text) => ({ t: 'h2', text });
+
+/* ------------------------------ party blocks ------------------------------ */
+function partyTable(f, L) {
+  const client = L === 'ko'
+    ? `상호: ${fv(f.clientName, 18)}    사업자등록번호: ${fv(f.clientReg, 14)}\n주소: ${fv(f.clientAddress, 34)}\n대표자: ${fv(f.clientRep, 12)}    담당자/연락처: ${fv(f.clientContact, 12)}${f.clientPhone ? ' / ' + f.clientPhone : ''}`
+    : `Company Name: ${fv(f.clientName, 18)}    Business Reg. No.: ${fv(f.clientReg, 14)}\nAddress: ${fv(f.clientAddress, 34)}\nRepresentative: ${fv(f.clientRep, 12)}    Contact: ${fv(f.clientContact, 12)}${f.clientPhone ? ' / ' + f.clientPhone : ''}`;
+  const agency = L === 'ko'
+    ? `상호: ${fv(f.agencyName, 18)}    사업자등록번호: ${fv(f.agencyReg, 14)}\n주소: ${fv(f.agencyAddress, 34)}\n대표자: ${fv(f.agencyRep, 12)}    담당자/연락처: ${fv(f.agencyContact, 12)}${f.agencyPhone ? ' / ' + f.agencyPhone : ''}`
+    : `Company Name: ${fv(f.agencyName, 18)}    Business Reg. No.: ${fv(f.agencyReg, 14)}\nAddress: ${fv(f.agencyAddress, 34)}\nRepresentative: ${fv(f.agencyRep, 12)}    Contact: ${fv(f.agencyContact, 12)}${f.agencyPhone ? ' / ' + f.agencyPhone : ''}`;
+  return {
+    t: 'table', widths: [1900, 7400],
+    rows: [
+      [L === 'ko' ? '고객사 ("고객사")' : 'Client ("Client")', client],
+      [L === 'ko' ? '에이전시 ("에이전시")' : 'Agency ("Agency")', agency]
+    ]
+  };
+}
+
+function signatureTable(f, L) {
+  const c = L === 'ko'
+    ? `고객사\n회사명: ${fv(f.clientName, 20)}\n대표자: ${fv(f.clientRep, 12)} (인)\n날짜: ${contractDate('', 'ko')}`
+    : `Client\nCompany Name: ${fv(f.clientName, 20)}\nRepresentative: ${fv(f.clientRep, 12)} (Seal)\nDate: ${contractDate('', 'en')}`;
+  const a = L === 'ko'
+    ? `에이전시 (${fv(f.agencyName, 8)})\n회사명: ${fv(f.agencyName, 20)}\n대표자: ${fv(f.agencyRep, 12)} (인)\n날짜: ${contractDate('', 'ko')}`
+    : `Agency (${fv(f.agencyName, 8)})\nCompany Name: ${fv(f.agencyName, 20)}\nRepresentative: ${fv(f.agencyRep, 12)} (Seal)\nDate: ${contractDate('', 'en')}`;
+  return { t: 'table', widths: [4650, 4650], rows: [[c, a]] };
+}
+
+/* ============================ 1. MASTER SERVICE AGREEMENT ============================ */
+function buildMSA(f, L) {
+  const client = fv(f.clientName, 16);
+  const agency = fv(f.agencyName, 10);
+  const b = [];
+  const ko = L === 'ko';
+
+  b.push({ t: 'h1', text: ko ? '기본 용역 계약서 (MASTER SERVICE AGREEMENT)' : 'MASTER SERVICE AGREEMENT' });
+  b.push(P(ko
+    ? `본 기본 용역 계약서(이하 "본 계약")는 ${contractDate(f.effectiveDate, L)}("계약효력발생일")에 아래에 기재된 "고객사"와 "에이전시"(이하 개별적으로 "당사자", 총칭하여 "양 당사자") 간에 체결된다.`
+    : `This Master Service Agreement (this "Agreement") is entered into as of ${contractDate(f.effectiveDate, L)} (the "Effective Date") by and between the "Client" and "Agency" identified below (each a "Party," and collectively, the "Parties").`));
+  b.push(partyTable(f, L));
+  b.push({ t: 'space' });
+  b.push(P(ko
+    ? `에이전시는 인플루언서 섭외, 캠페인 기획 및 운영, 콘텐츠 제작 지원 등 인플루언서 마케팅 대행 서비스를 제공하는 회사이며, 고객사는 이러한 서비스를 제공받고자 한다. 이에 양 당사자는 다음과 같이 합의한다.`
+    : `The Agency is an agency that provides influencer marketing agency services, including influencer sourcing, campaign planning and management, and content production support, and the Client wishes to receive such services. Accordingly, the Parties agree as follows.`));
+
+  b.push(H2(ko ? '제1조 (목적)' : 'Article 1 (Purpose)'));
+  b.push(P(ko
+    ? `본 계약은 에이전시가 고객사에게 인플루언서 마케팅 및 관련 서비스를 제공함에 있어 양 당사자 간의 권리·의무 및 기타 필요한 사항을 정함을 목적으로 한다. 본 계약은 양 당사자가 수시로 체결하는 개별 과업지시서("SOW")에 공통적으로 적용되는 기본 거래조건을 구성하며, 각 SOW는 본 계약의 일부를 이룬다.`
+    : `This Agreement sets forth the rights, obligations, and other necessary matters between the Parties in connection with the Agency's provision of influencer marketing and related services to the Client. This Agreement constitutes the basic transaction terms commonly applicable to individual Statements of Work ("SOW") to be entered into by the Parties from time to time, and each SOW forms part of this Agreement.`));
+
+  b.push(H2(ko ? '제2조 (정의)' : 'Article 2 (Definitions)'));
+  b.push(P(ko
+    ? `1. "서비스"란 SOW에 정한 바에 따라 에이전시가 제공하는 인플루언서 섭외·협상, 캠페인 기획, 실행 및 운영, 콘텐츠 제작 지원, 성과 분석 기타 업무를 말한다.`
+    : `1. "Services" means the influencer sourcing/negotiation, campaign planning, execution and management, content production support, performance analysis, and other tasks provided by the Agency as set forth in an SOW.`));
+  b.push(P(ko
+    ? `2. "결과물"이란 에이전시가 서비스를 수행한 결과로 고객사에게 제공하는 보고서, 콘텐츠, 캠페인 산출물 기타 작업 성과물을 말한다.`
+    : `2. "Deliverables" means the reports, content, campaign outputs, and other work product provided by the Agency to the Client as a result of performing the Services.`));
+  b.push(P(ko
+    ? `3. "SOW"란 본 계약에 따라 개별 프로젝트별로 양 당사자가 서명하는 하위 문서로서, 서비스의 범위, 일정, 대가 및 지급조건을 정한 것을 말한다. 본 계약과 SOW의 내용이 상충하는 경우, 해당 프로젝트에 관하여는 SOW의 규정이 우선한다.`
+    : `3. "SOW" means a subordinate document signed by the Parties for each individual project pursuant to this Agreement, setting forth the scope, schedule, fees, and payment terms of the Services. In the event of any conflict between this Agreement and a SOW, the provisions of the SOW shall prevail for that specific project.`));
+
+  b.push(H2(ko ? '제3조 (서비스의 제공)' : 'Article 3 (Provision of Services)'));
+  b.push(P(ko ? `1. 에이전시는 SOW에 정한 범위 내에서 성실히 서비스를 제공한다.`
+              : `1. The Agency shall faithfully provide the Services within the scope set forth in the SOW.`));
+  b.push(P(ko
+    ? `2. 고객사는 필요한 정보, 자료, 승인 및 협조를 적시에 제공하여야 하며, 고객사의 자료 제공 지연으로 인한 일정 지연에 대하여 에이전시는 책임을 지지 아니한다.`
+    : `2. The Client shall provide necessary information, materials, approvals, and cooperation in a timely manner, and the Agency shall not be liable for any schedule delay caused by the Client's delay in providing materials.`));
+  b.push(P(ko
+    ? `3. 에이전시가 협업하는 인플루언서 또는 크리에이터의 가용성, 일정 및 단가는 사전 통지 없이 변경될 수 있으며, 이 경우 양 당사자는 협의하여 SOW를 조정한다.`
+    : `3. The availability, schedule, and rates of influencers or creators with whom the Agency collaborates may change without prior notice, in which case the Parties shall consult and adjust the SOW accordingly.`));
+  b.push(P(ko
+    ? `4. 고객사는 에이전시가 제출한 초안 또는 운영 계획에 대하여 제출일로부터 영업일 기준 ${f.reviewDays}일 이내에 검토 후 피드백을 제공하여야 한다. 위 기간 내 피드백이 없는 경우 해당 초안 또는 운영 계획은 고객사가 승인한 것으로 본다.`
+    : `4. The Client must review and provide feedback on drafts or operational plans submitted by the Agency within ${f.reviewDays} business days of submission. If no feedback is provided within this period, the relevant draft or operational plan shall be deemed approved by the Client.`));
+
+  b.push(H2(ko ? '제4조 (대가 및 지급)' : 'Article 4 (Fees and Payment)'));
+  b.push(P(ko
+    ? `1. 고객사는 SOW에 명시된 용역비(이하 "용역비")를 본 조에 정한 조건에 따라 에이전시에게 지급한다.`
+    : `1. The Client shall pay the Agency the service fee specified in the SOW (the "Service Fee") in accordance with the terms set forth in this Article.`));
+  b.push(P(ko
+    ? `2. 에이전시는 서비스 완료 시(또는 SOW에 정한 마일스톤 완료 시) 세금계산서를 발행하며, 고객사는 세금계산서 발행일로부터 ${f.netDays}일 이내에 용역비 전액을 현금으로 지급한다. 다만 SOW에 별도의 지급 일정(선급금, 중도금 등)이 정하여진 경우에는 해당 일정이 우선한다.`
+    : `2. The Agency shall issue a tax invoice upon completion of the Services (or completion of a milestone specified in the SOW), and the Client shall pay the full Service Fee in cash within ${f.netDays} days of the tax invoice issuance date; provided, that if the SOW specifies a separate payment schedule (e.g., advance or interim payments), such schedule shall take precedence.`));
+  b.push(P(ko
+    ? `3. 고객사가 지급기한까지 용역비를 지급하지 아니하는 경우, 에이전시는 미지급액에 대하여 지급기한 다음 날부터 실제 지급일까지 연 ${f.lateInterest}%의 지연손해금을 청구할 수 있으며, 서비스 제공을 중단할 수 있다.`
+    : `3. If the Client fails to pay the Service Fee by the due date, the Agency may charge late payment interest of ${f.lateInterest}% per annum on the unpaid amount, calculated from the day following the due date until the date of actual payment, and may suspend provision of the Services.`));
+  b.push(P(ko
+    ? `4. 용역비에는 부가가치세가 포함되지 아니한다. 관련 법령에 따라 원천징수가 적용되는 경우 해당 금액을 공제하며, 고객사는 에이전시에게 원천징수영수증을 지체 없이 교부한다.`
+    : `4. The Service Fee is exclusive of value-added tax. Where withholding tax applies under applicable law, the corresponding amount shall be deducted, and the Client shall promptly provide the Agency with the relevant withholding tax receipt.`));
+  b.push(P(ko
+    ? `5. 에이전시가 인플루언서 또는 기타 제3자에게 비용을 선지급하여야 하는 경우, 고객사는 SOW에 정한 바에 따라 해당 비용을 선지급하거나 별도의 일정에 따라 지급한다.`
+    : `5. If the Agency is required to make advance payments to influencers or other third parties, the Client shall advance such costs, or pay them on a separate schedule, as specified in the SOW.`));
+
+  b.push(H2(ko ? '제5조 (지식재산권)' : 'Article 5 (Intellectual Property)'));
+  b.push(P(ko
+    ? `1. 결과물에 관한 지식재산권은 용역비 전액이 지급된 때에 고객사에게 이전된다. 전액 지급 전까지 결과물에 관한 권리는 에이전시에게 유보된다.`
+    : `1. Ownership of the intellectual property rights in the Deliverables shall transfer to the Client upon full payment of the Service Fee. Prior to full payment, rights in the Deliverables shall remain with the Agency.`));
+  b.push(P(ko
+    ? `2. SOW에 달리 정하지 아니하는 한, 인플루언서가 직접 제작한 콘텐츠(이하 "인플루언서 콘텐츠")의 저작권은 해당 인플루언서에게 귀속되며, 고객사는 SOW에 명시된 기간 및 매체·플랫폼 범위 내에서 인플루언서 콘텐츠를 사용할 수 있는 제한적 사용권을 부여받는다. SOW에 정한 범위를 초과하는 사용에는 별도의 협의 및 대가 지급을 요한다.`
+    : `2. Unless otherwise specified in the SOW, copyright in content directly created by an influencer (the "Influencer Content") shall remain vested in the relevant influencer, and the Client shall be granted a limited license to use the Influencer Content within the period and media/platform scope specified in the SOW. Any additional use beyond what is specified in the SOW shall require separate consultation and payment.`));
+  b.push(P(ko
+    ? `3. 에이전시가 서비스 수행 이전부터 보유한 방법론, 노하우, 도구, 인플루언서 데이터베이스 및 일반적 업무 관행에 관한 권리는 에이전시에게 유보되며 본 계약에 의하여 고객사에게 이전되지 아니한다.`
+    : `3. Rights in methodologies, know-how, tools, influencer databases, and general business practices held by the Agency prior to performing the Services shall remain vested in the Agency and shall not be transferred to the Client under this Agreement.`));
+  if (f.clauses.portfolio) b.push(P(ko
+    ? `4. 에이전시는 고객사의 사전 서면 동의를 얻어 결과물 또는 캠페인 수행 사실을 에이전시의 포트폴리오 및 레퍼런스 목적으로 활용할 수 있다. 본 권리는 고객사의 기밀정보 또는 영업비밀이 노출되지 아니하는 범위에서 행사되는 것을 조건으로 본 계약의 해지 또는 종료 이후에도 존속한다.`
+    : `4. With the Client's prior written consent, the Agency may use the Deliverables or the fact of having performed the campaign for the Agency's portfolio and reference purposes. This right shall survive the termination or expiration of this Agreement, provided that it is exercised within a scope that does not expose the Client's confidential information or trade secrets.`));
+
+  b.push(H2(ko ? '제6조 (기밀유지)' : 'Article 6 (Confidentiality)'));
+  b.push(P(ko
+    ? `1. "기밀정보"란 인플루언서 연락처, 제안 단가 및 협상 내용, 캠페인 기획, 마케팅 전략 및 예산 기타 본 계약 또는 SOW와 관련하여 일방 당사자가 상대방에게 공개한 비공개 정보를 말한다. 다만 공지된 정보, 독자적으로 개발한 정보 또는 제3자로부터 정당하게 취득한 정보는 제외한다.`
+    : `1. "Confidential Information" means influencer contact information, proposed rates and negotiation details, campaign plans, marketing strategy and budget, and other non-public information disclosed by one Party to the other in connection with this Agreement or an SOW; provided, that information that is publicly known, independently developed, or rightfully obtained from a third party is excluded.`));
+  b.push(P(ko
+    ? `2. 각 당사자는 상대방의 기밀정보를 본 계약 목적 외의 용도로 사용하지 아니하며, 상대방의 사전 서면 동의 없이 제3자에게 공개하지 아니한다. 본 의무는 본 계약 종료 후 ${f.confidentialityYears}년간 존속한다.`
+    : `2. Each Party shall not use the other Party's Confidential Information for any purpose other than this Agreement and shall not disclose it to any third party without the other Party's prior written consent. This obligation shall survive for ${f.confidentialityYears} years following termination of this Agreement.`));
+
+  b.push(H2(ko ? '제7조 (독립계약자 관계)' : 'Article 7 (Independent Contractor Relationship)'));
+  b.push(P(ko
+    ? `에이전시와 고객사는 상호 독립된 사업자이며, 본 계약은 양 당사자 간에 고용, 조합, 대리 또는 합작 관계를 형성하지 아니한다. 에이전시 및 그 인력은 고객사의 근로자가 아니며 고객사를 대리하여 계약을 체결할 권한이 없다.`
+    : `The Agency and the Client are independent businesses, and this Agreement does not create an employment, partnership, agency, or joint venture relationship between the Parties. The Agency and its personnel are not employees of the Client and have no authority to enter into any agreement on the Client's behalf.`));
+
+  b.push(H2(ko ? '제8조 (보증 및 책임)' : 'Article 8 (Warranty and Liability)'));
+  b.push(P(ko
+    ? `1. 에이전시는 통상적인 업계 관행에 따라 전문적으로 서비스를 제공할 것을 보증한다. 다만 도달, 매출, 전환 등 캠페인의 구체적 성과는 인플루언서의 행위, 제3자 플랫폼 정책 등 에이전시가 통제할 수 없는 요인에 따라 달라질 수 있으므로 이를 보증하지 아니한다.`
+    : `1. The Agency warrants that it will provide the Services professionally in accordance with ordinary industry practice. However, the Agency does not warrant specific campaign results (e.g., reach, sales, conversions), as these may vary due to factors beyond the Agency's control, including influencer conduct and third-party platform policies.`));
+  b.push(P(ko ? `2. 콘텐츠 및 캠페인 실행에 관한 최종 승인과 의사결정의 책임은 고객사에게 있다.`
+              : `2. Final approval and decision-making responsibility for content and campaign execution rests with the Client.`));
+  b.push(P(ko
+    ? `3. 에이전시는 협업 인플루언서에게 관련 법령상 광고·협찬 표시 등 준수사항을 안내한다. 다만 최종 표시 문구의 승인 책임은 고객사에게 있으며, 사전 승인되지 아니한 인플루언서 또는 기타 독립적 제3자 크리에이터의 일방적 행위에 대하여는 에이전시와 고객사 모두 책임을 부담하지 아니한다.`
+    : `3. The Agency guides the influencers it works with on compliance matters such as advertisement/sponsorship disclosure requirements under applicable law; however, responsibility for approving the final disclosure wording rests with the Client. Neither the Agency nor the Client shall be liable for any unilateral act taken by an influencer or other independent third-party creator that was not pre-approved.`));
+
+  b.push(H2(ko ? '제9조 (책임의 제한)' : 'Article 9 (Limitation of Liability)'));
+  b.push(P(ko
+    ? `1. 본 계약 또는 SOW와 관련하여 발생하는 에이전시의 총 책임은 해당 책임을 발생시킨 SOW에 따라 고객사가 에이전시에게 실제로 지급한 용역비 총액을 초과하지 아니한다.`
+    : `1. The Agency's total liability arising in connection with this Agreement or an SOW shall not exceed the total Service Fee actually paid by the Client to the Agency under the SOW giving rise to such liability.`));
+  b.push(P(ko ? `2. 어느 당사자도 상대방에 대하여 간접손해, 특별손해, 부수적 손해 또는 징벌적 손해나 영업상의 손실 또는 일실이익에 대하여 책임을 지지 아니한다.`
+              : `2. Neither Party shall be liable to the other for any indirect, special, incidental, or punitive damages, or for loss of business or profits.`));
+  b.push(P(ko ? `3. 제1항 및 제2항은 고의 또는 중과실로 인한 손해에는 적용되지 아니한다.`
+              : `3. Paragraphs 1 and 2 shall not apply to damages caused by willful misconduct or gross negligence.`));
+
+  b.push(H2(ko ? '제10조 (계약기간 및 해지)' : 'Article 10 (Term and Termination)'));
+  b.push(P(ko
+    ? `1. 본 계약은 계약효력발생일에 효력이 발생하며, 조기 해지되지 아니하는 한 ${f.termYears}년간 유효하다. 어느 당사자도 기간 만료 전에 서면으로 이의를 제기하지 아니하는 경우 동일한 조건으로 ${f.termYears}년씩 자동 갱신된다.`
+    : `1. This Agreement shall take effect on the Effective Date and remain in effect for ${f.termYears === 1 ? 'one year' : f.termYears + ' years'}, unless terminated earlier, and shall automatically renew for successive ${f.termYears === 1 ? 'one-year' : f.termYears + '-year'} terms on the same conditions unless either Party objects in writing prior to expiration.`));
+  b.push(P(ko ? `2. 각 SOW의 기간은 해당 SOW에 정한 바에 따른다.` : `2. The term of each SOW shall be as set forth in the relevant SOW.`));
+  b.push(P(ko
+    ? `3. 어느 당사자가 본 계약 또는 SOW를 중대하게 위반하고 상대방으로부터 서면 통지를 받은 날로부터 ${f.cureDays}일 이내에 이를 시정하지 아니하는 경우, 위반하지 아니한 당사자는 본 계약 또는 해당 SOW를 즉시 해지할 수 있다.`
+    : `3. If either Party materially breaches this Agreement or an SOW and fails to cure such breach within ${f.cureDays} days after receiving written notice thereof from the other Party, the non-breaching Party may immediately terminate this Agreement or the relevant SOW.`));
+  b.push(P(ko
+    ? `4. 해지일까지 제공된 서비스에 대한 용역비의 지급의무는 존속하며, 고객사는 제4조에 따라 해지일까지 발생한 용역비를 지급한다.`
+    : `4. The Service Fee for Services rendered up to the date of termination remains payable, and the Client shall pay any Service Fee accrued through the termination date in accordance with Article 4.`));
+
+  b.push(H2(ko ? '제11조 (불가항력)' : 'Article 11 (Force Majeure)'));
+  b.push(P(ko
+    ? `천재지변, 전쟁, 정부의 명령, 감염병 등 당사자의 합리적 통제를 벗어난 사유로 인한 의무의 지연 또는 불이행에 대하여는 그 사유가 존속하는 기간 동안 책임을 지지 아니한다. 불가항력 사유가 ${f.forceMajeureDays}일 이상 계속되는 경우 어느 당사자든 서면 통지로써 본 계약 또는 해당 SOW를 해지할 수 있다.`
+    : `Neither Party shall be liable for any delay or failure to perform its obligations caused by circumstances beyond its reasonable control, including natural disaster, war, government order, or epidemic, for so long as such circumstances continue. If a force majeure event continues for ${f.forceMajeureDays} days or more, either Party may terminate this Agreement or the relevant SOW upon written notice.`));
+
+  b.push(H2(ko ? '제12조 (통지 및 양도)' : 'Article 12 (Notices and Assignment)'));
+  b.push(P(ko
+    ? `1. 본 계약에 따른 통지는 서면(이메일 포함)으로 하며, 본 계약 전문에 기재된 주소 또는 당사자가 서면으로 지정한 다른 주소로 발송한다.`
+    : `1. Any notice under this Agreement shall be made in writing (including email) and sent to the address set forth in the preamble of this Agreement or to such other address as a Party may designate in a written notice.`));
+  b.push(P(ko ? `2. 어느 당사자도 상대방의 사전 서면 동의 없이 본 계약상의 권리 또는 의무를 제3자에게 양도할 수 없다.`
+              : `2. Neither Party may assign its rights or obligations under this Agreement to any third party without the other Party's prior written consent.`));
+
+  b.push(H2(ko ? '제13조 (일반조항)' : 'Article 13 (General Provisions)'));
+  b.push(P(ko ? `1. 본 계약 및 SOW는 그 대상에 관한 양 당사자 간의 완전한 합의를 구성하며, 이전의 구두 또는 서면 합의를 대체한다.`
+              : `1. This Agreement and the SOW constitute the entire agreement between the Parties with respect to the subject matter hereof and supersede all prior oral or written agreements.`));
+  b.push(P(ko ? `2. 본 계약의 변경은 양 당사자가 서명한 서면에 의하여만 효력이 있다.`
+              : `2. Any amendment to this Agreement shall be effective only if made in writing and signed by both Parties.`));
+  b.push(P(ko ? `3. 본 계약의 일부 조항이 무효 또는 집행 불가능하다고 판단되더라도 나머지 조항은 계속하여 완전한 효력을 가진다.`
+              : `3. If any provision of this Agreement is held invalid or unenforceable, the remaining provisions shall remain in full force and effect.`));
+  if (f.clauses.esign) b.push(P(ko
+    ? `4. 본 계약은 전자서명 또는 서명본의 교환 방식으로 체결될 수 있으며, 이는 원본과 동일한 효력을 가진다.`
+    : `4. This Agreement may be executed by electronic signature or by exchange of signed counterparts, each of which shall have the same effect as the original.`));
+
+  b.push(H2(ko ? '제14조 (준거법 및 관할)' : 'Article 14 (Governing Law and Jurisdiction)'));
+  b.push(P(ko
+    ? `본 계약은 ${f.governingLaw === 'Republic of Korea' ? '대한민국' : f.governingLaw} 법률에 따라 규율되고 해석되며, 본 계약과 관련하여 발생하는 분쟁의 제1심 관할법원은 ${f.jurisdiction === 'Seoul Central District Court' ? '서울중앙지방법원' : f.jurisdiction}으로 한다.`
+    : `This Agreement shall be governed by and construed in accordance with the laws of the ${f.governingLaw}, and the ${f.jurisdiction} shall have exclusive jurisdiction over any first-instance dispute arising in connection with this Agreement.`));
+
+  if (f.clauses.language) {
+    const master = f.masterLanguage === 'ko' ? (ko ? '국문본' : 'Korean version') : (ko ? '영문본' : 'English version');
+    b.push(H2(ko ? '제15조 (언어)' : 'Article 15 (Language)'));
+    b.push(P(ko
+      ? `본 계약 및 SOW는 영문본과 국문본으로 작성될 수 있다. 두 언어본 간에 불일치 또는 해석상의 차이가 있는 경우 ${master}이 우선하며, ${master}을 본 계약과 관련한 모든 법적 절차(소송, 중재 등) 및 해석의 기준이 되는 정본(Master Version)으로 한다.`
+      : `This Agreement and the SOW may be prepared in both an English version and a Korean version. In the event of any discrepancy or difference in interpretation between the two language versions, the ${master} shall prevail, and the ${master} shall serve as the Master Version for all legal proceedings (litigation, arbitration, or otherwise) and for purposes of interpretation in connection with this Agreement.`));
+  }
+
+  b.push({ t: 'space' });
+  b.push(P(ko
+    ? `양 당사자는 본 계약의 내용을 충분히 읽고 이해하였으며 이에 동의하고, 이를 증명하기 위하여 아래에 서명 또는 날인한다.`
+    : `Each Party acknowledges that it has fully read and understood the contents of this Agreement and agrees thereto, and in witness whereof, the Parties have caused this Agreement to be signed or sealed below.`));
+  b.push({ t: 'space' });
+  b.push(signatureTable(f, L));
+  return b;
+}
+
+/* ============================ 2. STATEMENT OF WORK ============================ */
+function buildSOW(f, L) {
+  const ko = L === 'ko';
+  const b = [];
+  const client = fv(f.clientName, 16);
+  const agency = fv(f.agencyName, 10);
+
+  b.push({ t: 'h1', text: ko ? '과업지시서 (STATEMENT OF WORK)' : 'STATEMENT OF WORK' });
+  b.push(P(ko
+    ? `본 과업지시서(이하 "본 SOW")는 ${contractDate(f.effectiveDate, L)}에 ${agency}("에이전시")와 ${client}("고객사") 간에 ${contractDate(f.masterDate, L)}자로 체결된 기본 용역 계약서(이하 "기본계약")에 따라 체결되며, 기본계약의 일부를 이룬다.`
+    : `This Statement of Work (this "SOW") is entered into as of ${contractDate(f.effectiveDate, L)} by and between ${agency} ("Agency") and ${client} ("Client") pursuant to the Master Service Agreement dated ${contractDate(f.masterDate, L)} (the "Master Agreement"), and forms part of the Master Agreement.`));
+  b.push(P(ko ? `기본계약과 본 SOW의 내용이 상충하는 경우 본 SOW가 우선한다.`
+              : `In the event of any conflict between the Master Agreement and this SOW, this SOW shall prevail.`));
+
+  b.push(H2(ko ? '1. 프로젝트 개요' : '1. Project Overview'));
+  b.push(P((ko ? 'SOW 번호 / 캠페인명: ' : 'SOW No. / Campaign Name: ') + fv(f.campaignName, 32)));
+  b.push(P((ko ? '캠페인 목적 및 개요: ' : 'Campaign Purpose and Overview: ') + fv(f.campaignPurpose, 32)));
+  if (f.platforms) b.push(P((ko ? '플랫폼: ' : 'Platform: ') + f.platforms));
+
+  b.push(H2(ko ? '2. 서비스 범위 및 결과물' : '2. Scope of Services and Deliverables'));
+  const rows = [[ko ? '서비스 / 결과물' : 'Service / Deliverable', ko ? '플랫폼' : 'Platform', ko ? '수량' : 'Quantity', ko ? '기한' : 'Deadline']];
+  const filled = (f.deliverables || []).filter((d) => d.service || d.platform || d.qty || d.deadline);
+  (filled.length ? filled : [{}, {}, {}]).forEach((d) => rows.push([d.service || '', d.platform || '', d.qty || '', d.deadline || '']));
+  b.push({ t: 'table', rows, widths: [3800, 2000, 1500, 2000], headerRow: true });
+
+  b.push(H2(ko ? '3. 일정' : '3. Schedule'));
+  b.push(P((ko ? '캠페인 기간: ' : 'Campaign Period: ') + contractDate(f.periodStart, L) + '  ~  ' + contractDate(f.periodEnd, L)));
+  b.push(P((ko ? '주요 마일스톤: ' : 'Key Milestones: ') + fv(f.milestones, 32)));
+
+  b.push(H2(ko ? '4. 용역비 및 지급조건' : '4. Service Fee and Payment Terms'));
+  b.push(P((ko ? '총 용역비 (VAT 별도): ' : 'Total Service Fee (VAT excluded): ') + contractMoney(f, L)));
+  b.push(P((ko ? '지급 조건: ' : 'Payment Schedule: ') + billingText(f, L) + ' ' + (ko
+    ? `각 지급금은 해당 세금계산서 발행일로부터 ${f.netDays}일 이내에 현금으로 지급한다(기본계약 제4조).`
+    : `Each payment due in cash within ${f.netDays} days of the corresponding tax invoice issuance date (per Article 4 of the Master Agreement).`)));
+
+  b.push(H2(ko ? '5. 담당자' : '5. Contact Persons'));
+  b.push(P((ko ? '고객사 담당자 / 연락처: ' : 'Client Contact / Phone: ') + fv(f.clientContact, 20) + (f.clientPhone ? ' / ' + f.clientPhone : '')));
+  b.push(P((ko ? '에이전시 담당자 / 연락처: ' : 'Agency Contact / Phone: ') + fv(f.agencyContact, 20) + (f.agencyPhone ? ' / ' + f.agencyPhone : '')));
+
+  b.push(H2(ko ? '6. 특기사항 / 전제조건' : '6. Special Notes / Assumptions'));
+  b.push(P(fv(f.notes, 32)));
+
+  b.push({ t: 'space' });
+  b.push(P(ko ? `본 SOW는 기본계약과 함께 효력을 가지며, 양 당사자는 아래에 서명함으로써 본 SOW의 내용에 동의한다.`
+              : `This SOW shall be effective together with the Master Agreement, and the Parties agree to the contents of this SOW by signing below.`));
+  b.push({ t: 'space' });
+  b.push(signatureTable(f, L));
+  return b;
+}
+
+/* ============================ 3. SHORT-FORM AGREEMENT ============================ */
+function buildShort(f, L) {
+  const ko = L === 'ko';
+  const b = [];
+
+  b.push({ t: 'h1', text: ko ? '약식 서비스 계약서' : 'SHORT-FORM SERVICE AGREEMENT' });
+  b.push({ t: 'sub', text: ko ? '(SHORT-FORM SERVICE AGREEMENT)' : '(약식 서비스 계약서)' });
+  b.push(P(ko
+    ? `본 계약서(이하 "본 계약")는 아래의 "고객사"와 "에이전시"(이하 개별적으로 "당사자", 총칭하여 "양 당사자") 간에 ${contractDate(f.effectiveDate, L)}("계약일")에 체결되며, 아래 명시된 단일 프로젝트에 한하여 적용되는 약식 계약이다.`
+    : `This Agreement (this "Agreement") is entered into as of ${contractDate(f.effectiveDate, L)} (the "Effective Date") between the "Client" and the "Agency" identified below (each a "Party," and collectively, the "Parties"), and is a short-form agreement applying solely to the single project set out below.`));
+  b.push(partyTable(f, L));
+  b.push({ t: 'space' });
+
+  b.push(H2(ko ? '1. 프로젝트 개요' : '1. Project Overview'));
+  b.push(P((ko ? '캠페인/프로젝트명: ' : 'Campaign / Project Name: ') + fv(f.campaignName, 32)));
+  b.push(P((ko ? '서비스 범위 및 결과물: ' : 'Scope of Services and Deliverables: ') + fv(f.campaignPurpose, 32)));
+  b.push(P((ko ? '플랫폼: ' : 'Platform: ') + fv(f.platforms, 32)));
+  b.push(P((ko ? '캠페인 기간: ' : 'Campaign Period: ') + contractDate(f.periodStart, L) + ' ~ ' + contractDate(f.periodEnd, L)));
+
+  b.push(H2(ko ? '2. 대가 및 지급' : '2. Fees and Payment'));
+  b.push(P((ko ? '총 용역비 (VAT 별도): ' : 'Total Service Fee (VAT excluded): ') + contractMoney(f, L)));
+  b.push(P((ko ? '지급 조건: ' : 'Payment Terms: ') + billingText(f, L) + ' ' + (ko
+    ? `각 지급금은 해당 세금계산서 발행일로부터 ${f.netDays}일 이내에 지급한다.`
+    : `Each payment is due within ${f.netDays} days of the corresponding tax invoice issuance date.`)));
+  if (f.clauses.cancellationFee) {
+    b.push({ t: 'h3', text: ko ? '2-1. 지연손해금 및 취소 수수료' : '2-1. Late Payment Interest and Cancellation Fee' });
+    b.push(P(ko
+      ? `고객사가 지급기한을 경과하여 대금을 지급하지 아니하는 경우, 에이전시는 미지급액에 대하여 연 ${f.lateInterest}%의 지연손해금을 청구할 수 있다. 고객사가 캠페인 개시일 전 ${f.cancelWindowDays}일 이내에 캠페인을 취소하거나 무기한 연기하는 경우, 고객사는 이미 확정된 인플루언서 섭외 및 준비 비용을 고려하여 총 용역비의 ${f.cancelFee}%를 취소 수수료로 에이전시에 지급하여야 한다.`
+      : `If the Client fails to pay by the due date, the Agency may charge late payment interest of ${f.lateInterest}% per annum on the unpaid amount. If the Client cancels or indefinitely postpones the campaign within ${f.cancelWindowDays} days before the campaign start date, the Client shall pay the Agency a cancellation fee of ${f.cancelFee}% of the total Service Fee, in consideration of influencer bookings and preparation costs already committed.`));
+  }
+
+  b.push(H2(ko ? '3. 지식재산권 및 콘텐츠 사용권' : '3. Intellectual Property and Content Licence'));
+  b.push(P(ko
+    ? `별도의 서면 합의가 없는 한 인플루언서가 직접 제작한 사진, 영상, 게시글 등 콘텐츠(이하 "인플루언서 콘텐츠")의 저작권 및 지식재산권은 해당 인플루언서에게 귀속되며, 고객사는 용역비 전액 지급 후 합의된 캠페인 범위(플랫폼, 기간 및 목적 등) 내에서 이를 사용할 수 있는 제한적 사용권을 부여받는다. 합의된 범위를 초과하는 유료 광고, 2차 활용, 수정·편집 등을 위해서는 해당 권리자의 사전 서면 승인을 받아야 한다. 에이전시가 별도로 제작한 결과물은 용역비 전액 지급 시 고객사에게 귀속된다.${f.clauses.portfolio ? ` 에이전시는 고객사의 기밀정보를 제외하고 고객사에게 사전 통지 후, 고객사가 통지일로부터 5영업일 이내에 서면으로 이의를 제기하지 않는 한 캠페인 이력을 포트폴리오 및 레퍼런스로 활용할 수 있다.` : ''}`
+    : `Unless otherwise agreed in writing, copyright and intellectual property rights in photographs, videos, posts and other content created directly by an influencer (the "Influencer Content") remain vested in that influencer. Upon payment of the Service Fee in full, the Client is granted a limited licence to use such content within the agreed campaign scope (platform, period and purpose). Paid advertising, secondary use, or modification beyond the agreed scope requires the prior written approval of the rights holder. Work product created separately by the Agency vests in the Client upon payment of the Service Fee in full.${f.clauses.portfolio ? ` Excluding the Client's confidential information, the Agency may use the campaign in its portfolio and as a reference after giving the Client prior notice, unless the Client objects in writing within 5 business days of that notice.` : ''}`));
+  if (f.clauses.reviewProcess) {
+    b.push({ t: 'h3', text: ko ? '3-1. 콘텐츠 검수 절차' : '3-1. Content Review Process' });
+    b.push(P(ko
+      ? `고객사는 인플루언서 콘텐츠 초안을 수령한 날로부터 영업일 기준 ${f.reviewDays}일 이내에 수정 요청 또는 승인 여부를 서면(이메일 포함)으로 통지하여야 하며, 위 기간 내 회신이 없는 경우 해당 콘텐츠는 승인된 것으로 간주한다. 수정 요청은 콘텐츠별 최대 ${f.revisionRounds}회로 제한하며, 이를 초과하는 수정 요청에는 별도 협의 및 추가 비용이 발생할 수 있다.`
+      : `The Client shall notify the Agency in writing (including email) of any revision request or approval within ${f.reviewDays} business days of receiving a draft of the Influencer Content. If no reply is given within that period, the content is deemed approved. Revision requests are limited to ${f.revisionRounds} round${f.revisionRounds === 1 ? '' : 's'} per piece of content; requests beyond that are subject to separate agreement and may incur additional cost.`));
+  }
+
+  b.push(H2(ko ? '4. 보증 및 인플루언서 관계' : '4. Warranty and Influencer Relationship'));
+  b.push(P(ko
+    ? `에이전시는 업계 관행에 따라 전문적으로 서비스를 제공하나 캠페인의 구체적 성과(조회수, 매출, 전환 등)를 보증하지 아니한다. 고객사는 캠페인에 참여하는 인플루언서가 에이전시의 직원 또는 대리인이 아닌 독립적인 제3자임을 인정하며, 에이전시는 캠페인 진행에 필요한 커뮤니케이션을 지원하고, 광고·협찬 표시 등 관련 준수사항을 인플루언서에게 안내한다. 단, 승인된 캠페인 범위를 벗어난 인플루언서 또는 제3자의 독립적인 행위에 대해서는 에이전시가 책임을 부담하지 아니한다.`
+    : `The Agency will provide the Services professionally in accordance with industry practice but does not warrant specific campaign results (views, sales, conversions and the like). The Client acknowledges that influencers participating in the campaign are independent third parties and not employees or agents of the Agency. The Agency supports the communication required to run the campaign and briefs influencers on compliance matters such as advertising and sponsorship disclosure. The Agency is not liable for the independent acts of an influencer or third party outside the approved campaign scope.`));
+  if (f.clauses.indemnity) {
+    b.push({ t: 'h3', text: ko ? '4-1. 면책 및 인플루언서 대체' : '4-1. Indemnity and Influencer Substitution' });
+    b.push(P(ko
+      ? `고객사는 (i) 고객사가 제공한 제품, 서비스, 정보 또는 소재의 하자, 허위·과장 표시 또는 관련 법령 위반, (ii) 고객사의 지시에 따른 콘텐츠 제작으로 인하여 에이전시 또는 인플루언서에게 발생하는 모든 손해, 청구, 분쟁 및 비용(합리적인 변호사 비용 포함)을 배상하고, 에이전시 및 인플루언서를 면책하여야 한다. 인플루언서가 질병, 계정 정지, 불가항력 등 불가피한 사유로 캠페인을 수행할 수 없는 경우, 에이전시는 고객사와 협의하여 유사한 조건의 인플루언서로 이를 대체할 권리를 가진다.`
+      : `The Client shall indemnify and hold harmless the Agency and the influencers against all damages, claims, disputes and costs (including reasonable legal fees) arising from (i) defects, false or exaggerated claims, or breaches of applicable law in the products, services, information or materials supplied by the Client, or (ii) content produced at the Client's direction. Where an influencer cannot perform for unavoidable reasons such as illness, account suspension or force majeure, the Agency has the right, in consultation with the Client, to substitute an influencer on comparable terms.`));
+  }
+  if (f.clauses.nonCircumvention) {
+    b.push({ t: 'h3', text: ko ? '4-2. 비경유 금지 (Non-Circumvention)' : '4-2. Non-Circumvention' });
+    b.push(P(ko
+      ? `고객사는 본 계약에 따라 에이전시로부터 소개받은 인플루언서에 대하여, 캠페인 종료일로부터 ${f.nonCircMonths}개월간 에이전시를 배제하고 직접 또는 제3자를 통하여 접촉, 협상 또는 계약을 체결하지 아니한다. 이를 위반하는 경우 고객사는 해당 인플루언서와 직접 또는 간접적으로 체결한 거래의 총 계약금액의 ${f.nonCircPenalty}%에 해당하는 금액을 위약벌로 에이전시에 지급하여야 한다.`
+      : `For ${f.nonCircMonths} months from the campaign end date, the Client shall not contact, negotiate with, or contract with any influencer introduced by the Agency under this Agreement, whether directly or through a third party, so as to exclude the Agency. In breach of this clause, the Client shall pay the Agency a penalty equal to ${f.nonCircPenalty}% of the total contract value of any transaction concluded directly or indirectly with that influencer.`));
+  }
+
+  b.push(H2(ko ? '5. 기밀유지' : '5. Confidentiality'));
+  b.push(P(ko
+    ? `양 당사자는 본 계약과 관련하여 상대방으로부터 제공받은 비공개 정보를 제3자에게 공개하거나 본 계약 목적 외에 사용하지 아니하며, 본 의무는 계약 종료 후 ${f.confidentialityYears}년간 존속한다.`
+    : `Neither Party shall disclose to any third party, or use for any purpose other than this Agreement, non-public information received from the other Party in connection with this Agreement. This obligation survives for ${f.confidentialityYears} years after termination.`));
+
+  b.push(H2(ko ? '6. 책임의 제한 및 계약기간' : '6. Limitation of Liability and Term'));
+  b.push(P(ko
+    ? `에이전시의 총 책임은 본 계약에 따라 고객사가 실제로 지급한 용역비 총액을 초과하지 아니한다. 에이전시는 어떠한 경우에도 일실이익, 간접손해, 결과적 손해 또는 징벌적 손해에 대하여 책임을 지지 아니한다. 본 계약은 위 캠페인 기간 동안 유효하며, 일방이 본 계약을 중대하게 위반하고 상대방의 서면 통지 후 ${f.cureDays}일 이내에 이를 시정하지 아니하는 경우, 상대방은 본 계약을 즉시 해지할 수 있다.`
+    : `The Agency's total liability shall not exceed the total Service Fee actually paid by the Client under this Agreement. In no event is the Agency liable for lost profits, indirect, consequential or punitive damages. This Agreement remains in effect for the campaign period stated above. If a Party materially breaches this Agreement and fails to cure within ${f.cureDays} days of the other Party's written notice, the other Party may terminate immediately.`));
+  if (f.clauses.forceMajeure) {
+    b.push({ t: 'h3', text: ko ? '6-1. 불가항력' : '6-1. Force Majeure' });
+    b.push(P(ko
+      ? `천재지변, 전쟁, 감염병, 정부 조치, 플랫폼 장애 등 당사자의 합리적 통제를 벗어난 사유로 본 계약상 의무의 이행이 지연되거나 불가능하게 되는 경우, 해당 당사자는 그 사유가 존속하는 기간 동안 이에 대한 책임을 지지 아니하며, 지체 없이 상대방에게 이를 통지하여야 한다.`
+      : `Where performance is delayed or prevented by causes beyond a Party's reasonable control — natural disaster, war, epidemic, government action, platform outage and the like — that Party is not liable for so long as the cause continues, and shall notify the other Party without delay.`));
+  }
+  if (f.clauses.terminationEffect) {
+    b.push({ t: 'h3', text: ko ? '6-2. 해지의 효과' : '6-2. Effect of Termination' });
+    b.push(P(ko
+      ? `계약이 해지되는 경우, 고객사는 해지 시점까지 에이전시가 수행한 서비스에 상응하는 용역비를 지급하여야 하며, 이미 지급된 금액은 해당 용역비에 충당한다.`
+      : `On termination, the Client shall pay the Service Fee corresponding to the Services performed by the Agency up to the point of termination; amounts already paid are applied against that fee.`));
+  }
+
+  b.push(H2(ko ? '7. 기타' : '7. General'));
+  b.push(P(ko
+    ? `본 계약에서 정하지 않은 사항은 양 당사자 간 별도의 서면 합의에 따르며, 별도의 마스터 서비스 계약이 체결된 경우 해당 계약의 관련 조항을 적용한다.`
+    : `Matters not provided for in this Agreement are governed by separate written agreement between the Parties. Where a Master Service Agreement has been executed, the relevant provisions of that agreement apply.`));
+  if (f.clauses.esign) {
+    b.push({ t: 'h3', text: ko ? '7-1. 계약의 변경, 양도 및 전자서명' : '7-1. Amendment, Assignment and Electronic Signature' });
+    b.push(P(ko
+      ? `본 계약의 변경은 양 당사자가 서명한 서면에 의해서만 유효하며, 어느 당사자도 상대방의 사전 서면 동의 없이 본 계약상의 권리·의무를 제3자에게 양도할 수 없다. 본 계약은 전자서명법에 따른 전자서명 및 전자문서의 방식으로 체결될 수 있으며, 이는 서면 계약과 동일한 효력을 가진다.`
+      : `Amendments are effective only if made in writing and signed by both Parties. Neither Party may assign its rights or obligations to a third party without the other Party's prior written consent. This Agreement may be executed by electronic signature and as an electronic document under the applicable electronic signature legislation, with the same effect as a written contract.`));
+  }
+  if (f.clauses.nonCircumvention) {
+    b.push(H2(ko ? '8. 크리에이터 비유인 및 우회거래 금지' : '8. Creator Non-Solicitation and Non-Circumvention'));
+    b.push(P(ko
+      ? `고객사는 에이전시가 본 캠페인 또는 용역 수행 과정에서 최초로 발굴, 섭외 또는 연결한 크리에이터에 대하여, 해당 캠페인 종료일로부터 ${f.nonCircMonths}개월간 에이전시의 사전 서면 동의 없이 에이전시를 배제하고 직접 또는 제3자를 통하여 광고, 협찬, 콘텐츠 제작, 공동구매, 앰배서더 활동 기타 이에 준하는 상업적 거래를 제안하거나 체결하여서는 아니 된다.`
+      : `For ${f.nonCircMonths} months from the campaign end date, the Client shall not, without the Agency's prior written consent, propose or conclude advertising, sponsorship, content production, group-buy, ambassador or comparable commercial arrangements — directly or through a third party, excluding the Agency — with any creator first identified, sourced or introduced by the Agency in the course of this campaign or the Services.`));
+  }
+
+  b.push({ t: 'space' });
+  b.push(P(ko
+    ? `양 당사자는 본 계약의 내용을 충분히 이해하고 이에 동의하며, 이를 증명하기 위하여 아래에 서명 또는 날인한다.`
+    : `Each Party acknowledges that it has fully understood and agrees to the contents of this Agreement, and in witness whereof signs or seals below.`));
+  b.push({ t: 'space' });
+  b.push(signatureTable(f, L));
+  return b;
+}
+
+const CONTRACT_DOCS = {
+  msa:   { id: 'msa',   label: 'Master Service Agreement', sub: 'long form, covers every SOW', build: buildMSA,
+           file: 'MSA', ko: '기본 용역 계약서' },
+  sow:   { id: 'sow',   label: 'Statement of Work',        sub: 'one project under an MSA',    build: buildSOW,
+           file: 'SOW', ko: '과업지시서' },
+  short: { id: 'short', label: 'Short-form Agreement',     sub: '약식 · single project, no MSA', build: buildShort,
+           file: 'ShortForm', ko: '약식 서비스 계약서' }
+};
+const CONTRACT_TABS = [['draft', 'Draft'], ['clauses', 'Clauses & terms'], ['preview', 'Full preview']];
+/* ============================================================
+   VIEW — CONTRACTS
+   layer 2 = which document · layer 3 = draft / clauses / preview
+   ============================================================ */
+
+function contractFileName(docId, L) {
+  const d = CONTRACT_DOCS[docId];
+  const who = (CONTRACT.clientName || 'Client').replace(/[^\w가-힣 .-]/g, '').trim().replace(/\s+/g, '_') || 'Client';
+  return `${(CONTRACT.agencyName || 'ScoutLab').replace(/\W+/g, '')}_${d.file}_${who}_${L.toUpperCase()}.docx`;
+}
+
+function contractBlocks(docId) {
+  return CONTRACT_DOCS[docId].build(CONTRACT, CONTRACT.lang);
+}
+
+function refreshContractPreview(docId) {
+  const el = $('#docPreview');
+  if (el) el.innerHTML = blocksToHtml(contractBlocks(docId));
+  const warn = $('#docWarn');
+  if (warn) warn.style.display = CONTRACT.clientName.trim() ? 'none' : '';
+}
+
+function contractToolbar(docId) {
+  return `<div class="card-head" style="margin-bottom:14px">
+    <div class="seg no-print" id="langSeg">
+      <button data-l="en" class="${CONTRACT.lang === 'en' ? 'active' : ''}">English</button>
+      <button data-l="ko" class="${CONTRACT.lang === 'ko' ? 'active' : ''}">한국어</button>
+    </div>
+    <div class="sp"></div>
+    <button class="btn sm" id="docCopy">Copy text</button>
+    <button class="btn sm" id="docPrint">Print / PDF</button>
+    <button class="btn primary sm" id="docWord">Download .docx</button>
+  </div>`;
+}
+
+function wireContractToolbar(docId) {
+  $('#langSeg').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    CONTRACT.lang = b.dataset.l; saveContractDefaults(); render();
+  });
+  $('#docWord').addEventListener('click', () => {
+    if (!CONTRACT.clientName.trim() && !confirm('No client company name yet — the document will show blanks. Download anyway?')) return;
+    downloadDocx(contractBlocks(docId), contractFileName(docId, CONTRACT.lang), CONTRACT_DOCS[docId].label);
+  });
+  $('#docPrint').addEventListener('click', () => window.print());
+  $('#docCopy').addEventListener('click', () => copyText(blocksToText(contractBlocks(docId)), 'Contract text'));
+}
+
+/* --------------------------------- draft --------------------------------- */
+function contractDraftTab(view, docId) {
+  const f = CONTRACT;
+  const isSow = docId === 'sow';
+  const isShort = docId === 'short';
+  const showProject = docId !== 'msa';
+
+  view.innerHTML = contractToolbar(docId) + `
+    <div class="grid g-1-2" style="align-items:start">
+      <div>
+        <div id="docWarn" class="note warn" style="margin-bottom:14px;display:${f.clientName.trim() ? 'none' : ''}">
+          <strong>Client company name</strong> is the only thing this document really needs. Everything else already has a
+          default from your signed template and can be left alone.
+        </div>
+
+        <div class="card" style="margin-bottom:14px">
+          <div class="card-head"><h3>Client</h3><div class="sp"></div>
+            ${DB.campaigns.length ? `<select id="docFromCampaign" style="width:190px;padding:5px 8px;font-size:12px">
+              <option value="">Prefill from campaign…</option>
+              ${DB.campaigns.map((c) => `<option value="${c.id}">${esc(c.brand)} — ${esc(c.name)}</option>`).join('')}
+            </select>` : ''}</div>
+          <div class="field"><label>Company name <span style="color:var(--critical)">*</span></label>
+            <input type="text" data-cf="clientName" value="${esc(f.clientName)}" placeholder="e.g. TONYMOLY Co., Ltd."/></div>
+          <div class="grid g2" style="gap:10px">
+            <div class="field"><label>Business reg. no.</label><input type="text" data-cf="clientReg" value="${esc(f.clientReg)}"/></div>
+            <div class="field"><label>Representative</label><input type="text" data-cf="clientRep" value="${esc(f.clientRep)}"/></div>
+          </div>
+          <div class="field"><label>Address</label><input type="text" data-cf="clientAddress" value="${esc(f.clientAddress)}"/></div>
+          <div class="grid g2" style="gap:10px">
+            <div class="field"><label>Contact person</label><input type="text" data-cf="clientContact" value="${esc(f.clientContact)}"/></div>
+            <div class="field"><label>Phone / email</label><input type="text" data-cf="clientPhone" value="${esc(f.clientPhone)}"/></div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-bottom:14px">
+          <div class="card-head"><h3>Agency</h3><div class="sp"></div><span class="pill grey">remembered</span></div>
+          <p class="card-sub">Saved in this browser, so you only fill it in once.</p>
+          <div class="grid g2" style="gap:10px">
+            <div class="field"><label>Company name</label><input type="text" data-cf="agencyName" value="${esc(f.agencyName)}"/></div>
+            <div class="field"><label>Business reg. no.</label><input type="text" data-cf="agencyReg" value="${esc(f.agencyReg)}"/></div>
+            <div class="field"><label>Representative</label><input type="text" data-cf="agencyRep" value="${esc(f.agencyRep)}"/></div>
+            <div class="field"><label>Contact person</label><input type="text" data-cf="agencyContact" value="${esc(f.agencyContact)}"/></div>
+          </div>
+          <div class="field"><label>Address</label><input type="text" data-cf="agencyAddress" value="${esc(f.agencyAddress)}"/></div>
+          <div class="field" style="margin-bottom:0"><label>Phone / email</label><input type="text" data-cf="agencyPhone" value="${esc(f.agencyPhone)}"/></div>
+        </div>
+
+        <div class="card" style="margin-bottom:14px">
+          <div class="card-head"><h3>Dates</h3></div>
+          <div class="grid g2" style="gap:10px">
+            <div class="field"><label>${isSow ? 'SOW date' : 'Effective date'}</label>
+              <input type="date" data-cf="effectiveDate" value="${esc(f.effectiveDate)}"/></div>
+            ${isSow ? `<div class="field"><label>Master agreement dated</label>
+              <input type="date" data-cf="masterDate" value="${esc(f.masterDate)}"/></div>` : ''}
+          </div>
+        </div>
+
+        ${showProject ? `<div class="card" style="margin-bottom:14px">
+          <div class="card-head"><h3>Project</h3></div>
+          <div class="field"><label>Campaign / project name</label><input type="text" data-cf="campaignName" value="${esc(f.campaignName)}"/></div>
+          <div class="field"><label>${isShort ? 'Scope of services and deliverables' : 'Purpose and overview'}</label>
+            <textarea data-cf="campaignPurpose" style="min-height:64px">${esc(f.campaignPurpose)}</textarea></div>
+          <div class="grid g2" style="gap:10px">
+            <div class="field"><label>Platforms</label><input type="text" data-cf="platforms" value="${esc(f.platforms)}" placeholder="Instagram, TikTok"/></div>
+            <div class="field"><label>Key milestones</label><input type="text" data-cf="milestones" value="${esc(f.milestones)}"/></div>
+            <div class="field"><label>Campaign start</label><input type="date" data-cf="periodStart" value="${esc(f.periodStart)}"/></div>
+            <div class="field"><label>Campaign end</label><input type="date" data-cf="periodEnd" value="${esc(f.periodEnd)}"/></div>
+          </div>
+          ${isSow ? `<div class="divider"></div>
+            <div class="card-head"><h3>Deliverables table</h3><div class="sp"></div>
+              <button class="btn xs" id="delivAdd">+ Row</button></div>
+            <div id="delivRows" style="margin-top:10px"></div>` : ''}
+          ${isSow ? `<div class="field" style="margin-top:12px"><label>Special notes / assumptions</label>
+            <textarea data-cf="notes" style="min-height:56px">${esc(f.notes)}</textarea></div>` : ''}
+        </div>` : ''}
+
+        <div class="card">
+          <div class="card-head"><h3>Fee &amp; billing</h3></div>
+          <div class="grid g2" style="gap:10px">
+            <div class="field"><label>Currency</label><select data-cf="currency">
+              <option value="KRW" ${f.currency === 'KRW' ? 'selected' : ''}>KRW ₩</option>
+              <option value="USD" ${f.currency === 'USD' ? 'selected' : ''}>USD $</option></select></div>
+            <div class="field"><label>Total service fee (VAT excl.)</label>
+              <input type="text" data-cf="fee" value="${esc(f.fee)}" placeholder="12000000"/></div>
+          </div>
+          <div class="field"><label>Billing cycle</label><select data-cf="billing">
+            ${Object.entries(BILLING_LABELS).map(([k, l]) => `<option value="${k}" ${f.billing === k ? 'selected' : ''}>${l}</option>`).join('')}
+          </select></div>
+          <div class="field" id="billingCustomWrap" style="display:${f.billing === 'custom' ? '' : 'none'}">
+            <label>Custom payment wording</label>
+            <textarea data-cf="billingCustom" style="min-height:56px">${esc(f.billingCustom)}</textarea></div>
+          <div class="field" style="margin-bottom:0"><label>Payment due (days from invoice)</label>
+            <input type="number" data-cf="netDays" value="${f.netDays}" min="0" max="120"/></div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="card-head" style="padding:14px 18px 0"><h3>Live preview</h3><div class="sp"></div>
+          <span style="font-size:11.5px;color:var(--text-3)">${CONTRACT.lang === 'ko' ? '한국어' : 'English'}</span></div>
+        <div class="doc-scroll"><div class="doc-page" id="docPreview"></div></div>
+      </div>
+    </div>`;
+
+  if (isSow) renderDeliverableRows();
+  wireContractToolbar(docId);
+  wireContractFields(docId);
+  refreshContractPreview(docId);
+
+  const pick = $('#docFromCampaign');
+  if (pick) pick.addEventListener('change', () => {
+    const cp = byCampaign[pick.value];
+    if (!cp) return;
+    CONTRACT.clientName = cp.brand || CONTRACT.clientName;
+    CONTRACT.campaignName = cp.name || '';
+    CONTRACT.campaignPurpose = cp.deliverables || '';
+    CONTRACT.platforms = (cp.platforms || []).join(', ');
+    CONTRACT.periodStart = cp.start || '';
+    CONTRACT.periodEnd = cp.end || '';
+    if (cp.budget) CONTRACT.fee = String(cp.budget);
+    toast('Prefilled from ' + cp.brand);
+    render();
+  });
+  const add = $('#delivAdd');
+  if (add) add.addEventListener('click', () => {
+    CONTRACT.deliverables.push({ service: '', platform: '', qty: '', deadline: '' });
+    renderDeliverableRows(); refreshContractPreview(docId);
+  });
+}
+
+function renderDeliverableRows() {
+  const wrap = $('#delivRows');
+  if (!wrap) return;
+  wrap.innerHTML = CONTRACT.deliverables.map((d, i) => `
+    <div style="display:grid;grid-template-columns:1.6fr 1fr .7fr 1fr 28px;gap:6px;margin-bottom:6px">
+      <input type="text" data-dv="${i}.service" value="${esc(d.service)}" placeholder="Service / deliverable" style="padding:6px 9px;font-size:12.5px"/>
+      <input type="text" data-dv="${i}.platform" value="${esc(d.platform)}" placeholder="Platform" style="padding:6px 9px;font-size:12.5px"/>
+      <input type="text" data-dv="${i}.qty" value="${esc(d.qty)}" placeholder="Qty" style="padding:6px 9px;font-size:12.5px"/>
+      <input type="text" data-dv="${i}.deadline" value="${esc(d.deadline)}" placeholder="Deadline" style="padding:6px 9px;font-size:12.5px"/>
+      <button class="icon-btn" data-dvdel="${i}" title="Remove" style="width:28px;height:28px;font-size:14px">&times;</button>
+    </div>`).join('');
+  $$('[data-dvdel]', wrap).forEach((b) => b.addEventListener('click', () => {
+    CONTRACT.deliverables.splice(+b.dataset.dvdel, 1);
+    if (!CONTRACT.deliverables.length) CONTRACT.deliverables.push({ service: '', platform: '', qty: '', deadline: '' });
+    renderDeliverableRows(); refreshContractPreview('sow');
+  }));
+  $$('[data-dv]', wrap).forEach((inp) => inp.addEventListener('input', () => {
+    const [i, key] = inp.dataset.dv.split('.');
+    CONTRACT.deliverables[+i][key] = inp.value;
+    refreshContractPreview('sow');
+  }));
+}
+
+const CONTRACT_NUMERIC = new Set(['netDays','lateInterest','cancelFee','cancelWindowDays','reviewDays','revisionRounds',
+  'nonCircMonths','nonCircPenalty','confidentialityYears','termYears','cureDays','forceMajeureDays']);
+
+function wireContractFields(docId) {
+  $$('[data-cf]').forEach((el) => {
+    const key = el.dataset.cf;
+    const handler = () => {
+      CONTRACT[key] = CONTRACT_NUMERIC.has(key) ? (el.value === '' ? '' : Number(el.value)) : el.value;
+      if (key === 'billing') {
+        const w = $('#billingCustomWrap');
+        if (w) w.style.display = el.value === 'custom' ? '' : 'none';
+      }
+      saveContractDefaults();
+      refreshContractPreview(docId);
+    };
+    el.addEventListener('input', handler);
+    el.addEventListener('change', handler);
+  });
+  $$('[data-cc]').forEach((el) => el.addEventListener('change', () => {
+    CONTRACT.clauses[el.dataset.cc] = el.checked;
+    refreshContractPreview(docId);
+  }));
+}
+
+/* -------------------------------- clauses -------------------------------- */
+const CLAUSE_INFO = {
+  portfolio:        ['Portfolio & reference use', 'Lets you show the campaign in your portfolio. MSA needs written consent; short form uses notice + 5 days to object.'],
+  language:         ['Language precedence article', 'Says which language version wins if the EN and KO texts disagree. MSA only.'],
+  cancellationFee:  ['Late interest & cancellation fee', 'Charges interest on late payment and a cancellation fee if the client pulls out close to the start date.'],
+  reviewProcess:    ['Content review window', 'Client must approve or request changes within the review window, or the draft counts as approved.'],
+  indemnity:        ['Indemnity & influencer substitution', 'Client covers claims caused by their own product or instructions; you may swap an influencer who drops out.'],
+  nonCircumvention: ['Non-circumvention', 'Stops the client going direct to creators you introduced, with a penalty. Short form only.'],
+  forceMajeure:     ['Force majeure', 'No liability while something outside anyone’s control is blocking performance.'],
+  terminationEffect:['Effect of termination', 'Client pays for work done up to the termination date.'],
+  esign:            ['Amendment, assignment & e-signature', 'Written amendments only, no assignment without consent, electronic signature valid.']
+};
+const CLAUSES_FOR = {
+  msa:   ['portfolio', 'language', 'esign'],
+  sow:   [],
+  short: ['cancellationFee', 'reviewProcess', 'indemnity', 'nonCircumvention', 'forceMajeure', 'terminationEffect', 'portfolio', 'esign']
+};
+const TERMS_FOR = {
+  msa:   ['netDays', 'lateInterest', 'reviewDays', 'confidentialityYears', 'termYears', 'cureDays', 'forceMajeureDays'],
+  sow:   ['netDays'],
+  short: ['netDays', 'lateInterest', 'cancelFee', 'cancelWindowDays', 'reviewDays', 'revisionRounds', 'nonCircMonths', 'nonCircPenalty', 'confidentialityYears', 'cureDays']
+};
+const TERM_LABELS = {
+  netDays: ['Payment due', 'days from invoice'],
+  lateInterest: ['Late payment interest', '% per year'],
+  cancelFee: ['Cancellation fee', '% of total fee'],
+  cancelWindowDays: ['Cancellation window', 'days before start'],
+  reviewDays: ['Content review window', 'business days'],
+  revisionRounds: ['Revision rounds included', 'per content'],
+  nonCircMonths: ['Non-circumvention period', 'months'],
+  nonCircPenalty: ['Non-circumvention penalty', '% of deal value'],
+  confidentialityYears: ['Confidentiality survives', 'years'],
+  termYears: ['Agreement term', 'years, auto-renewing'],
+  cureDays: ['Cure period after breach', 'days'],
+  forceMajeureDays: ['Force majeure exit after', 'days']
+};
+
+function contractClausesTab(view, docId) {
+  const clauses = CLAUSES_FOR[docId];
+  const terms = TERMS_FOR[docId];
+
+  view.innerHTML = contractToolbar(docId) + `
+    <div class="grid g-1-2" style="align-items:start">
+      <div>
+        <div class="card" style="margin-bottom:14px">
+          <div class="card-head"><h3>Commercial terms</h3></div>
+          <p class="card-sub">These numbers flow straight into the clause wording.</p>
+          <div class="grid g2" style="gap:10px">
+            ${terms.map((k) => `<div class="field"><label>${TERM_LABELS[k][0]}</label>
+              <div style="display:flex;align-items:center;gap:8px">
+                <input type="number" data-cf="${k}" value="${CONTRACT[k]}" style="width:90px"/>
+                <span style="font-size:12px;color:var(--text-3)">${TERM_LABELS[k][1]}</span>
+              </div></div>`).join('')}
+          </div>
+        </div>
+
+        ${clauses.length ? `<div class="card" style="margin-bottom:14px">
+          <div class="card-head"><h3>Optional clauses</h3></div>
+          <p class="card-sub">Switch a clause off and it disappears from the document.</p>
+          ${clauses.map((k) => `<label style="display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--line);text-transform:none;letter-spacing:0">
+            <input type="checkbox" data-cc="${k}" ${CONTRACT.clauses[k] ? 'checked' : ''} style="margin-top:2px"/>
+            <span><span style="font-size:13.5px;color:var(--text);font-weight:500">${CLAUSE_INFO[k][0]}</span>
+            <span style="display:block;font-size:12px;color:var(--text-3);margin-top:2px">${CLAUSE_INFO[k][1]}</span></span>
+          </label>`).join('')}
+        </div>` : ''}
+
+        <div class="card">
+          <div class="card-head"><h3>Law &amp; language</h3></div>
+          <div class="field"><label>Governing law</label><input type="text" data-cf="governingLaw" value="${esc(CONTRACT.governingLaw)}"/></div>
+          <div class="field"><label>Jurisdiction</label><input type="text" data-cf="jurisdiction" value="${esc(CONTRACT.jurisdiction)}"/></div>
+          <div class="field" style="margin-bottom:0"><label>Which language version prevails</label>
+            <select data-cf="masterLanguage">
+              <option value="en" ${CONTRACT.masterLanguage === 'en' ? 'selected' : ''}>English is the master version</option>
+              <option value="ko" ${CONTRACT.masterLanguage === 'ko' ? 'selected' : ''}>한국어 is the master version</option>
+            </select></div>
+          <p class="card-sub" style="margin:10px 0 0">This decides the wording of the language article — it is independent of which
+          language you are currently reading.</p>
+        </div>
+      </div>
+
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="card-head" style="padding:14px 18px 0"><h3>Live preview</h3></div>
+        <div class="doc-scroll"><div class="doc-page" id="docPreview"></div></div>
+      </div>
+    </div>`;
+
+  wireContractToolbar(docId);
+  wireContractFields(docId);
+  refreshContractPreview(docId);
+}
+
+/* -------------------------------- preview -------------------------------- */
+function contractPreviewTab(view, docId) {
+  view.innerHTML = contractToolbar(docId) + `
+    <div id="docWarn" class="note warn no-print" style="margin-bottom:14px;display:${CONTRACT.clientName.trim() ? 'none' : ''}">
+      No client company name yet — the document will print with blanks where the name should be.
+    </div>
+    <div class="doc-page wide" id="docPreview"></div>`;
+  wireContractToolbar(docId);
+  refreshContractPreview(docId);
+}
+
+function renderContracts(view, item, tab) {
+  const docId = CONTRACT_DOCS[item] ? item : 'msa';
+  if (tab === 'clauses') return contractClausesTab(view, docId);
+  if (tab === 'preview') return contractPreviewTab(view, docId);
+  return contractDraftTab(view, docId);
+}
+/* ============================================================
    SETTINGS SECTION
    ============================================================ */
 const SETTINGS_ITEMS = [
@@ -4414,6 +5519,8 @@ function renderSettings(view, item) {
   if (item === 'blacklist')  return settingsBlacklist(view);
   if (item === 'sheet')      return settingsSheets(view);
   if (item === 'sources') {
+    const dupGroups = duplicateCreatorGroups();
+    const dupExtra = dupGroups.reduce((a, g) => a + g.list.length - 1, 0);
     view.innerHTML = `<div class="grid g2">
       <div class="card"><div class="card-head"><h3>Where creators enter the database</h3></div>
         <dl class="kv" style="margin-top:12px">
@@ -4453,8 +5560,28 @@ function renderSettings(view, item) {
           ${statCard('Missing email', num(DB.creators.filter((c) => !c.email).length))}
           ${statCard('Never contacted', num(DB.creators.filter((c) => !c.campaignIds.length).length))}
         </div>
+        <div class="divider"></div>
+        <div class="lbl">Duplicates</div>
+        ${dupGroups.length
+          ? `<div class="note warn" style="margin-bottom:12px"><strong>${dupGroups.length} handle${dupGroups.length === 1 ? '' : 's'}</strong>
+               appear${dupGroups.length === 1 ? 's' : ''} more than once — ${num(dupExtra)} extra record${dupExtra === 1 ? '' : 's'} in total.</div>
+             <table class="tbl" style="margin-bottom:12px"><thead><tr><th>Handle</th><th>Records</th><th>Campaigns</th></tr></thead><tbody>
+               ${dupGroups.slice(0, 8).map((g) => `<tr>
+                 <td>@${esc(g.key)}</td><td>${g.list.length}</td>
+                 <td>${num(new Set(g.list.flatMap((c) => c.campaignIds || [])).size)}</td></tr>`).join('')}
+             </tbody></table>
+             ${dupGroups.length > 8 ? `<p class="card-sub">and ${dupGroups.length - 8} more.</p>` : ''}
+             <button class="btn primary sm" id="setMerge">Merge duplicates</button>`
+          : `<p class="card-sub" style="margin-top:0">No duplicates. Every creator appears once, matched on their handle
+             regardless of <span class="kbd">@</span>, capitals, trailing slashes or a full profile URL. New imports are
+             checked automatically — a creator already in the database is joined to the new campaign instead of copied.</p>`}
       </div>
     </div>`;
+    if (dupGroups.length) $('#setMerge').addEventListener('click', () => {
+      const r = mergeDuplicateCreators();
+      toast(`Merged ${r.mergedCreators} duplicate record${r.mergedCreators === 1 ? '' : 's'} into ${r.groups} creator${r.groups === 1 ? '' : 's'}`);
+      persist(true); render();
+    });
     $('#setExportAll').addEventListener('click', () => downloadFile(
       JSON.stringify({ savedAt: new Date().toISOString(), db: DB, settings: SETTINGS }, null, 2),
       `vively-workspace-${iso(new Date())}.json`, 'application/json'));
@@ -4628,7 +5755,7 @@ async function importCreatorsCsv(e) {
   const text = await f.text();
   const [head, ...lines] = text.trim().split(/\r?\n/);
   const cols = head.split(',').map((h) => h.trim().toLowerCase());
-  let n = 0;
+  let n = 0, dup = 0;
   lines.forEach((l) => {
     const v = l.split(',');
     const get = (k) => { const i = cols.indexOf(k); return i >= 0 ? (v[i] || '').trim().replace(/^"|"$/g, '') : ''; };
@@ -4646,7 +5773,8 @@ async function importCreatorsCsv(e) {
     };
     DB.creators.push(c); byCreator[id] = c; n++;
   });
-  toast(n + ' creators imported'); render();
+  mergeDuplicateCreators();
+  toast(`${n} creators imported${dup ? `, ${dup} already in the database` : ''}`); render();
 }
 
 /* ============================================================
@@ -4657,19 +5785,21 @@ const SECTIONS = [
   { id: 'campaigns', icon: '▤', label: 'Campaigns', badge: () => activeCampaigns().length },
   { id: 'messages',  icon: '✉', label: 'Messages' },
   { id: 'creators',  icon: '◎', label: 'Creators', badge: () => DB.creators.length },
+  { id: 'contracts', icon: '§', label: 'Contracts' },
   { id: 'analytics', icon: '◫', label: 'Analytics' },
   { id: 'settings',  icon: '⚙', label: 'Setup' }
 ];
 
 function defaultItem(section) {
-  return { overview: 'summary', campaigns: 'all', creators: 'all', analytics: 'trend',
-           settings: 'integrations', messages: (activeCampaigns()[0] || DB.campaigns[0] || {}).id }[section] || '';
+  return { overview: 'summary', campaigns: 'all', creators: 'all', analytics: 'trend', contracts: 'msa',
+           settings: 'templates', messages: (activeCampaigns()[0] || DB.campaigns[0] || {}).id }[section] || '';
 }
 
 function tabsFor(section, item) {
   if (section === 'overview')  return OVERVIEW_TABS[item] || OVERVIEW_TABS.summary;
   if (section === 'analytics') return ANALYTICS_TABS[item] || ANALYTICS_TABS.trend;
   if (section === 'creators')  return CREATOR_TABS;
+  if (section === 'contracts') return CONTRACT_TABS;
   if (section === 'messages')  return MSG_KINDS.map(([k, l]) => [k, l]);
   if (section === 'campaigns') return (!item || item === 'all')
     ? [['active', 'Active'], ['all', 'All'], ['wrapped', 'Wrapped']]
@@ -4689,6 +5819,9 @@ function panelFor(section, item) {
 
   if (section === 'settings')
     return { title: 'Setup', groups: [{ items: SETTINGS_ITEMS.map((o) => ({ id: o.id, title: o.label, sub: o.sub })) }] };
+
+  if (section === 'contracts')
+    return { title: 'Documents', groups: [{ items: Object.values(CONTRACT_DOCS).map((d) => ({ id: d.id, title: d.label, sub: d.sub })) }] };
 
   if (section === 'creators')
     return { title: 'Segments', search: true, searchPlaceholder: 'Filter segments…',
@@ -4722,6 +5855,7 @@ function titleFor(section, item) {
   if (section === 'messages')  return (byCampaign[item] || {}).brand || 'Messages';
   if (section === 'creators')  return segmentOf(item).label;
   if (section === 'analytics') return (ANALYTICS_ITEMS.find((x) => x.id === item) || {}).label || 'Analytics';
+  if (section === 'contracts') return (CONTRACT_DOCS[item] || CONTRACT_DOCS.msa).label;
   if (section === 'settings')  return (SETTINGS_ITEMS.find((x) => x.id === item) || {}).label || 'Setup';
   return (OVERVIEW_ITEMS.find((x) => x.id === item) || {}).label || 'Overview';
 }
@@ -4819,6 +5953,7 @@ function render() {
   else if (section === 'creators')  renderCreators(view, item, tab);
   else if (section === 'analytics') renderAnalytics(view, item, tab);
   else if (section === 'messages')  renderMessagesSection(view, item, tab);
+  else if (section === 'contracts') renderContracts(view, item, tab);
   else if (section === 'settings')  renderSettings(view, item);
   else                              renderOverview(view, item, tab);
   window.scrollTo(0, 0);
@@ -4913,139 +6048,12 @@ $('#btnExportAll').addEventListener('click', () => {
     'vively-all-campaigns.csv', 'text/csv;charset=utf-8');
 });
 
-/* ------------------------------ auth ------------------------------ */
-const authState = { mode: 'login', user: null };
-
-function setAuthMode(mode) {
-  authState.mode = mode === 'signup' ? 'signup' : 'login';
-  $$('#authMode button').forEach((btn) => {
-    btn.classList.toggle('active', btn.dataset.mode === authState.mode);
-  });
-  $('#loginForm').classList.toggle('active', authState.mode === 'login');
-  $('#signupForm').classList.toggle('active', authState.mode === 'signup');
-}
-
-function openAuth(mode) {
-  setAuthMode(mode || authState.mode);
-  const ov = $('#authOverlay');
-  ov.classList.add('open');
-  ov.setAttribute('aria-hidden', 'false');
-  (authState.mode === 'login' ? $('#loginEmail') : $('#signupName')).focus();
-}
-
-function closeAuth() {
-  const ov = $('#authOverlay');
-  ov.classList.remove('open');
-  ov.setAttribute('aria-hidden', 'true');
-}
-
-async function sendAuth(path, payload) {
-  const res = await fetch(path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || 'Request failed');
-  return body;
-}
-
-function setAuthButtons() {
-  const loginBtn = $('#btnLogin');
-  const signupBtn = $('#btnSignup');
-  if (!loginBtn || !signupBtn) return;
-  if (authState.user) {
-    loginBtn.textContent = 'Logout';
-    signupBtn.textContent = authState.user.name || authState.user.email;
-    signupBtn.disabled = true;
-  } else {
-    loginBtn.textContent = 'Login';
-    signupBtn.textContent = 'Signup';
-    signupBtn.disabled = false;
-  }
-}
-
-$('#btnLogin').addEventListener('click', () => {
-  if (authState.user) {
-    authState.user = null;
-    setAuthButtons();
-    toast('Logged out');
-    return;
-  }
-  openAuth('login');
-});
-
-$('#btnSignup').addEventListener('click', () => {
-  if (authState.user) return;
-  openAuth('signup');
-});
-
-$('#authClose').addEventListener('click', closeAuth);
-$('#authOverlay').addEventListener('click', (e) => {
-  if (e.target.id === 'authOverlay') closeAuth();
-});
-
-$$('#authMode button').forEach((btn) => btn.addEventListener('click', () => setAuthMode(btn.dataset.mode)));
-
-$('#signupForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const name = $('#signupName').value.trim();
-  const email = $('#signupEmail').value.trim().toLowerCase();
-  const password = $('#signupPassword').value;
-  const confirm = $('#signupConfirm').value;
-
-  if (password.length < 8) return toast('Password minimal 8 karakter');
-  if (password !== confirm) return toast('Konfirmasi password tidak sama');
-
-  const btn = $('#signupSubmit');
-  const old = btn.textContent;
-  btn.textContent = 'Creating...';
-  btn.disabled = true;
-  try {
-    const data = await sendAuth('/api/signup', { name, email, password });
-    authState.user = data.user;
-    setAuthButtons();
-    closeAuth();
-    $('#signupForm').reset();
-    toast('Signup berhasil. Welcome ' + authState.user.name);
-  } catch (err) {
-    toast(err.message || 'Signup gagal');
-  } finally {
-    btn.textContent = old;
-    btn.disabled = false;
-  }
-});
-
-$('#loginForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const email = $('#loginEmail').value.trim().toLowerCase();
-  const password = $('#loginPassword').value;
-  const btn = $('#loginSubmit');
-  const old = btn.textContent;
-  btn.textContent = 'Logging in...';
-  btn.disabled = true;
-  try {
-    const data = await sendAuth('/api/login', { email, password });
-    authState.user = data.user;
-    setAuthButtons();
-    closeAuth();
-    $('#loginForm').reset();
-    toast('Login sukses. Hi ' + authState.user.name);
-  } catch (err) {
-    toast(err.message || 'Login gagal');
-  } finally {
-    btn.textContent = old;
-    btn.disabled = false;
-  }
-});
-
-setAuthButtons();
-
 window.addEventListener('hashchange', render);
 window.addEventListener('beforeunload', () => persist(true));
 persistState.on = storageAvailable();
 loadPersisted();
 loadSyncConfig();
+loadContractDefaults();
 lastPushedJson = JSON.stringify(DB);
 wireSearch();
 if (window.innerWidth <= 1080) togglePanel(false);
