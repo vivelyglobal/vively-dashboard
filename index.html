@@ -325,6 +325,11 @@ body.panel-closed .panel { border-right: 0; }
 .auth-row { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0,1fr)); }
 .auth-note { margin: 8px 0 0; color: var(--text-3); font-size: 11.5px; }
 
+body.auth-locked { overflow: hidden; }
+body.auth-locked .app { display: none; }
+body.auth-locked .auth-overlay { display: flex; background: var(--bg); }
+body.auth-locked .auth-close { display: none; }
+
 @media (max-width: 640px) {
   .auth-row { grid-template-columns: 1fr; }
   .auth-actions { display: none; }
@@ -6133,6 +6138,7 @@ $('#btnExportAll').addEventListener('click', () => {
 
 /* ------------------------------ auth ------------------------------ */
 const authState = { mode: 'login', user: null };
+const AUTH_USER_KEY = 'vively-auth-user-v1';
 
 function setAuthMode(mode) {
   authState.mode = mode === 'signup' ? 'signup' : 'login';
@@ -6152,9 +6158,38 @@ function openAuth(mode) {
 }
 
 function closeAuth() {
+  if (document.body.classList.contains('auth-locked')) return;
   const ov = $('#authOverlay');
   ov.classList.remove('open');
   ov.setAttribute('aria-hidden', 'true');
+}
+
+function saveAuthUser() {
+  try {
+    if (!authState.user) localStorage.removeItem(AUTH_USER_KEY);
+    else localStorage.setItem(AUTH_USER_KEY, JSON.stringify(authState.user));
+  } catch (e) { /* storage unavailable */ }
+}
+
+function loadAuthUser() {
+  try {
+    const raw = localStorage.getItem(AUTH_USER_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && parsed.email ? parsed : null;
+  } catch (e) { return null; }
+}
+
+function setAuthLocked(locked) {
+  document.body.classList.toggle('auth-locked', !!locked);
+  if (locked) {
+    openAuth('login');
+  } else {
+    const ov = $('#authOverlay');
+    ov.classList.remove('open');
+    ov.setAttribute('aria-hidden', 'true');
+    render();
+  }
 }
 
 async function sendAuth(path, payload) {
@@ -6186,7 +6221,10 @@ function refreshAuthButtons() {
 $('#btnLogin').addEventListener('click', () => {
   if (authState.user) {
     authState.user = null;
+    saveAuthUser();
     refreshAuthButtons();
+    setAuthMode('login');
+    setAuthLocked(true);
     toast('Logged out');
     return;
   }
@@ -6199,6 +6237,7 @@ $('#btnSignup').addEventListener('click', () => {
 
 $('#authClose').addEventListener('click', closeAuth);
 $('#authOverlay').addEventListener('click', (e) => {
+  if (document.body.classList.contains('auth-locked')) return;
   if (e.target.id === 'authOverlay') closeAuth();
 });
 
@@ -6223,8 +6262,9 @@ $('#signupForm').addEventListener('submit', async (e) => {
   try {
     const data = await sendAuth('/api/signup', { name, email, password });
     authState.user = data.user;
+    saveAuthUser();
     refreshAuthButtons();
-    closeAuth();
+    setAuthLocked(false);
     $('#signupForm').reset();
     toast('Signup berhasil. Welcome ' + authState.user.name);
   } catch (err) {
@@ -6246,8 +6286,9 @@ $('#loginForm').addEventListener('submit', async (e) => {
   try {
     const data = await sendAuth('/api/login', { email, password });
     authState.user = data.user;
+    saveAuthUser();
     refreshAuthButtons();
-    closeAuth();
+    setAuthLocked(false);
     $('#loginForm').reset();
     toast('Login sukses. Hi ' + authState.user.name);
   } catch (err) {
@@ -6258,6 +6299,7 @@ $('#loginForm').addEventListener('submit', async (e) => {
   }
 });
 
+authState.user = loadAuthUser();
 refreshAuthButtons();
 
 window.addEventListener('hashchange', render);
@@ -6269,7 +6311,8 @@ loadContractDefaults();
 lastPushedJson = JSON.stringify(DB);
 wireSearch();
 if (window.innerWidth <= 1080) togglePanel(false);
-render();
+if (authState.user) setAuthLocked(false);
+else setAuthLocked(true);
 </script>
 </body>
 </html>
