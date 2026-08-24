@@ -46,6 +46,81 @@ async function getWorkspaceCollection() {
   return client.db(MONGODB_DB).collection("workspace");
 }
 
+/* ------------------------------------------------------------------
+   Notion integration.
+
+   Each campaign can point at a Notion database (the one behind that
+   campaign's duplicated form) — the dashboard's "Sync from Notion"
+   button reads it through here. The integration secret stays on the
+   server, never sent to the browser, same reasoning as MONGODB_URI.
+
+   Setup on Notion's side (one time): create an internal integration
+   at notion.so/my-integrations, copy its secret into NOTION_TOKEN,
+   then for each campaign's database, open it in Notion → Share →
+   invite that integration. Without that per-database share, Notion's
+   API returns a 404 even with a valid token — that's expected, not
+   a bug here.
+   ------------------------------------------------------------------ */
+const NOTION_TOKEN = process.env.NOTION_TOKEN || "";
+const NOTION_VERSION = "2022-06-28";
+const NOTION_API = "https://api.notion.com/v1";
+
+function normalizeNotionId(raw) {
+  const s = String(raw || "").trim();
+  let m = s.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  if (m) return m[0].toLowerCase();
+  m = s.match(/[0-9a-f]{32}/i);
+  if (!m) return null;
+  const h = m[0].toLowerCase();
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+async function notionFetch(path, opts) {
+  const res = await fetch(NOTION_API + path, Object.assign({
+    headers: {
+      Authorization: "Bearer " + NOTION_TOKEN,
+      "Notion-Version": NOTION_VERSION,
+      "Content-Type": "application/json"
+    }
+  }, opts || {}));
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((body && body.message) || `Notion responded ${res.status}`);
+  }
+  return body;
+}
+
+function extractNotionValue(prop) {
+  if (!prop) return "";
+  switch (prop.type) {
+    case "title": return (prop.title || []).map((t) => t.plain_text).join("");
+    case "rich_text": return (prop.rich_text || []).map((t) => t.plain_text).join("");
+    case "email": return prop.email || "";
+    case "phone_number": return prop.phone_number || "";
+    case "url": return prop.url || "";
+    case "number": return prop.number == null ? "" : prop.number;
+    case "select": return prop.select ? prop.select.name : "";
+    case "status": return prop.status ? prop.status.name : "";
+    case "multi_select": return (prop.multi_select || []).map((o) => o.name).join(", ");
+    case "checkbox": return prop.checkbox ? "true" : "false";
+    case "date": return prop.date ? (prop.date.start || "") : "";
+    case "people": return (prop.people || []).map((p) => p.name || p.id).join(", ");
+    case "files": return (prop.files || []).map((f) => f.name || (f.file && f.file.url) || (f.external && f.external.url) || "").join(", ");
+    case "created_time": return prop.created_time || "";
+    case "last_edited_time": return prop.last_edited_time || "";
+    case "relation": return (prop.relation || []).map((r) => r.id).join(", ");
+    case "formula": {
+      const f = prop.formula || {};
+      if (f.type === "string") return f.string || "";
+      if (f.type === "number") return f.number == null ? "" : f.number;
+      if (f.type === "boolean") return f.boolean ? "true" : "false";
+      if (f.type === "date") return f.date ? f.date.start || "" : "";
+      return "";
+    }
+    default: return "";
+  }
+}
+
 function ensureDataFile() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, "[]", "utf8");
@@ -97,7 +172,12 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.static(__dirname));
 
 app.get("/api/health", (req, res) => {
-  res.json({ ok: true, service: "vively-auth-api", database: MONGODB_URI ? "configured" : "not-configured" });
+  res.json({
+    ok: true,
+    service: "vively-auth-api",
+    database: MONGODB_URI ? "configured" : "not-configured",
+    notion: NOTION_TOKEN ? "configured" : "not-configured"
+  });
 });
 
 /* ---------------------------- workspace save/load ---------------------------- */
@@ -158,6 +238,61 @@ app.post("/api/workspace", async (req, res) => {
   } catch (err) {
     console.error("POST /api/workspace failed:", err.message);
     return res.status(502).json({ error: "Could not reach the database." });
+  }
+});
+
+/* ---------------------------- notion sync ---------------------------- */
+
+app.get("/api/notion/database", async (req, res) => {
+  if (!NOTION_TOKEN) {
+    return res.status(503).json({ error: "Notion is not configured on the server yet — set NOTION_TOKEN." });
+  }
+  const id = normalizeNotionId(req.query.id);
+  if (!id) return res.status(400).json({ error: "That doesn't look like a Notion database link or ID." });
+  try {
+    const db = await notionFetch("/databases/" + id);
+    const properties = Object.entries(db.properties || {}).map(([name, def]) => ({ name, type: def.type }));
+    return res.json({
+      ok: true,
+      id,
+      title: (db.title || []).map((t) => t.plain_text).join("") || "Untitled database",
+      properties
+    });
+  } catch (err) {
+    console.error("GET /api/notion/database failed:", err.message);
+    return res.status(502).json({ error: err.message });
+  }
+});
+
+app.get("/api/notion/query", async (req, res) => {
+  if (!NOTION_TOKEN) {
+    return res.status(503).json({ error: "Notion is not configured on the server yet — set NOTION_TOKEN." });
+  }
+  const id = normalizeNotionId(req.query.id);
+  if (!id) return res.status(400).json({ error: "That doesn't look like a Notion database link or ID." });
+  try {
+    const rows = [];
+    let cursor = null;
+    let guard = 0;
+    do {
+      const body = await notionFetch("/databases/" + id + "/query", {
+        method: "POST",
+        body: JSON.stringify(cursor ? { start_cursor: cursor, page_size: 100 } : { page_size: 100 })
+      });
+      (body.results || []).forEach((page) => {
+        const properties = {};
+        Object.entries(page.properties || {}).forEach(([name, prop]) => {
+          properties[name] = extractNotionValue(prop);
+        });
+        rows.push({ pageId: page.id, url: page.url, createdTime: page.created_time, properties });
+      });
+      cursor = body.has_more ? body.next_cursor : null;
+      guard++;
+    } while (cursor && guard < 50); // safety cap: 5,000 rows
+    return res.json({ ok: true, count: rows.length, rows });
+  } catch (err) {
+    console.error("GET /api/notion/query failed:", err.message);
+    return res.status(502).json({ error: err.message });
   }
 });
 

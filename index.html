@@ -2204,6 +2204,8 @@ function rosterTab(mount, cp) {
       <div class="sp"></div>
       <span style="font-size:12px;color:var(--text-3)">${ps.length} sourced · drag cards between columns</span>
       <button class="btn sm" id="rosterCsv">Export roster</button>
+      <button class="btn sm" id="notionSync" title="${cp.notionSyncedAt ? 'Last synced ' + new Date(cp.notionSyncedAt).toLocaleString() : "Pull submissions from this campaign's Notion form"}">Sync from Notion</button>
+      ${cp.notionDatabaseId ? `<button class="icon-btn sm" id="notionConfig" title="Change Notion database or field mapping">&#9881;</button>` : ''}
       <button class="btn primary sm" id="addCreators">+ Add creators</button>
     </div>
     <div id="rosterBody"></div>`;
@@ -2217,6 +2219,9 @@ function rosterTab(mount, cp) {
   });
   $('#addCreators').addEventListener('click', () => openAddCreators(cp));
   $('#rosterCsv').addEventListener('click', () => exportRoster(cp));
+  $('#notionSync').addEventListener('click', () => openNotionSync(cp));
+  const notionCfg = $('#notionConfig');
+  if (notionCfg) notionCfg.addEventListener('click', () => openNotionLinkDrawer(cp));
 }
 
 function renderBoard(mount, cp) {
@@ -4125,6 +4130,261 @@ function parseImportRows(rows, mapping) {
     });
   });
   return out;
+}
+
+/* ============================================================
+   NOTION SYNC
+   Each campaign can point at the Notion database behind its
+   duplicated form. "Sync from Notion" reads it through the
+   server (the integration secret never reaches the browser) and
+   feeds it through the same field vocabulary as the Excel
+   importer above — handleFromUrl, parseFollowers, STATUS_MAP,
+   countryOf — so a Notion submission and a spreadsheet row end
+   up shaped the same way.
+   ============================================================ */
+const NOTION_FIELD_DEFS = [
+  { key: 'instagram',   label: 'Instagram (link or handle)' },
+  { key: 'tiktok',      label: 'TikTok (link or handle)' },
+  { key: 'fullName',    label: 'Full name' },
+  { key: 'email',       label: 'Email' },
+  { key: 'contact',     label: 'Contact (phone / KakaoTalk)' },
+  { key: 'address',     label: 'Shipping address' },
+  { key: 'nationality', label: 'Nationality / country' },
+  { key: 'followers',   label: 'Follower count' },
+  { key: 'otherSns',    label: 'Other SNS' },
+  { key: 'contentUrl',  label: 'Content link' },
+  { key: 'status',      label: 'Status (maps to pipeline stage)' },
+  { key: 'note',        label: 'Note / message' }
+];
+
+function guessNotionField(propName, propType) {
+  if (propType === 'email') return 'email';
+  const g = guessField(propName, 0, []);
+  if (g !== 'skip') return g;
+  const h = normHeader(propName);
+  if (/email|이메일/.test(h)) return 'email';
+  if (/note|message|comment|비고|메모/.test(h)) return 'note';
+  return 'skip';
+}
+
+/* one Notion page's properties, read through a saved field mapping,
+   shaped exactly like one row out of parseImportRows() above */
+function notionRowToApplicant(properties, mapping) {
+  const get = (key) => {
+    const propName = mapping[key];
+    if (!propName) return '';
+    const v = properties[propName];
+    return v == null ? '' : v;
+  };
+  const igRaw = get('instagram');
+  const ttRaw = get('tiktok');
+  const id1 = handleFromUrl(igRaw, 'Instagram');
+  const id2 = handleFromUrl(ttRaw, 'TikTok');
+  const ident = id1 || id2;
+  const nameRaw = get('fullName');
+  const statusRaw = String(get('status') || '').trim();
+  const mapped = STATUS_MAP[statusRaw.toLowerCase()] || null;
+  const fol = parseFollowers(get('followers'));
+  const stage = (mapped || { stage: 'sourced' }).stage;
+
+  return {
+    handle: ident ? ident.handle : null,
+    platform: ident ? ident.platform : 'Instagram',
+    fullName: nameRaw ? String(nameRaw).trim() : (ident ? ident.handle : ''),
+    email: String(get('email') || '').trim(),
+    address: String(get('address') || '').trim(),
+    contact: String(get('contact') || '').trim(),
+    nationality: String(get('nationality') || '').trim(),
+    otherSns: String(get('otherSns') || '').trim(),
+    contentUrl: String(get('contentUrl') || '').trim(),
+    note: String(get('note') || '').trim(),
+    followers: fol.value,
+    statusRaw,
+    stage,
+    dropReason: (mapped || {}).reason || (stage === 'dropped' ? 'Rejected' : null)
+  };
+}
+
+function openNotionLinkDrawer(cp) {
+  openDrawer('Connect Notion — ' + esc(cp.brand), `
+    <div class="note" style="margin-bottom:16px;">
+      Paste the link to this campaign's Notion submissions database — the one behind your duplicated form.
+      In Notion, open it as a full page, click <strong>Share</strong>, and make sure the integration this
+      dashboard uses has access, then copy the page link here.
+    </div>
+    <div class="field"><label>Notion database link or ID</label>
+      <input type="text" id="notionDbInput" placeholder="https://www.notion.so/.../1a2b3c4d5e6f..." value="${esc(cp.notionDatabaseId || '')}"/></div>
+    <button class="btn primary" id="notionDbSave">Continue</button>
+  `);
+  $('#notionDbSave').addEventListener('click', () => {
+    const v = $('#notionDbInput').value.trim();
+    if (!v) { toast('Paste a Notion database link first'); return; }
+    cp.notionDatabaseId = v;
+    cp.notionMapping = null; /* new database — mapping needs to be redone */
+    closeDrawer();
+    openNotionMappingDrawer(cp);
+  });
+}
+
+async function openNotionMappingDrawer(cp) {
+  openDrawer('Map Notion fields — ' + esc(cp.brand), `<div class="empty">Reading the database…</div>`);
+  let schema;
+  try {
+    const res = await fetch('/api/notion/database?id=' + encodeURIComponent(cp.notionDatabaseId));
+    const out = await res.json();
+    if (!res.ok) throw new Error(out.error || ('Server responded ' + res.status));
+    schema = out;
+  } catch (err) {
+    $('#drawerBody').innerHTML = `
+      <div class="note warn"><strong>Could not read that database.</strong> ${esc(err.message)}</div>
+      <button class="btn" id="notionRetryLink" style="margin-top:12px">Use a different link</button>`;
+    $('#notionRetryLink').addEventListener('click', () => openNotionLinkDrawer(cp));
+    return;
+  }
+
+  const props = schema.properties || [];
+  const used = new Set();
+  const guesses = {};
+  NOTION_FIELD_DEFS.forEach((f) => {
+    const saved = cp.notionMapping && cp.notionMapping[f.key];
+    let pick = saved && props.some((p) => p.name === saved) ? saved : '';
+    if (!pick) {
+      const hit = props.find((p) => !used.has(p.name) && guessNotionField(p.name, p.type) === f.key);
+      pick = hit ? hit.name : '';
+    }
+    if (pick) used.add(pick);
+    guesses[f.key] = pick;
+  });
+
+  $('#drawerBody').innerHTML = `
+    <div class="note" style="margin-bottom:16px;">
+      <strong>${esc(schema.title)}</strong> — ${props.length} fields found.
+      Match each of ours to the Notion property that holds it. Leave “— none —” for anything this form doesn't collect.
+      This mapping is remembered, so future syncs for this campaign won't ask again.
+    </div>
+    ${NOTION_FIELD_DEFS.map((f) => `
+      <div class="field">
+        <label>${esc(f.label)}</label>
+        <select id="nm_${f.key}">
+          <option value="">— none —</option>
+          ${props.map((p) => `<option value="${esc(p.name)}" ${guesses[f.key] === p.name ? 'selected' : ''}>${esc(p.name)} (${esc(p.type)})</option>`).join('')}
+        </select>
+      </div>`).join('')}
+    <div style="display:flex;gap:8px;margin-top:6px">
+      <button class="btn primary" id="notionMapSave">Save mapping & sync</button>
+      <button class="btn" id="notionMapBack">Use a different link</button>
+    </div>`;
+
+  $('#notionMapBack').addEventListener('click', () => openNotionLinkDrawer(cp));
+  $('#notionMapSave').addEventListener('click', async () => {
+    const mapping = {};
+    NOTION_FIELD_DEFS.forEach((f) => { mapping[f.key] = $('#nm_' + f.key).value || null; });
+    if (!mapping.instagram && !mapping.tiktok) {
+      if (!confirm("Neither Instagram nor TikTok is mapped, so synced submissions won't match to a creator. Continue anyway?")) return;
+    }
+    cp.notionMapping = mapping;
+    closeDrawer();
+    await runNotionSync(cp);
+  });
+}
+
+async function runNotionSync(cp) {
+  toast('Syncing from Notion…');
+  let data;
+  try {
+    const res = await fetch('/api/notion/query?id=' + encodeURIComponent(cp.notionDatabaseId));
+    data = await res.json();
+    if (!res.ok) throw new Error(data.error || ('Server responded ' + res.status));
+  } catch (err) {
+    toast('Notion sync failed — ' + err.message);
+    return;
+  }
+
+  let newRows = 0, updated = 0, newCreators = 0, matched = 0, skipped = 0;
+  data.rows.forEach((row) => {
+    const ap = notionRowToApplicant(row.properties, cp.notionMapping);
+    if (!ap.handle) { skipped++; return; }
+
+    let cr = findCreatorByHandle(ap.handle);
+    if (!cr) {
+      const crId = 'nt' + (DB.creators.length + 1) + '-' + Math.floor(rnd() * 9999);
+      cr = {
+        id: crId, handle: ap.handle, name: ap.fullName || ap.handle,
+        platform: ap.platform, followers: ap.followers,
+        er: 0, avgViews: Math.round(ap.followers * 0.6),
+        categories: [cp.category], country: countryOf(ap.nationality),
+        nationality: ap.nationality, languages: ['EN'],
+        tier: tierOf(ap.followers).id, source: 'Notion form',
+        rate: 0, reliability: null, avgTurnaroundDays: null,
+        campaignsDone: 0, lastWorked: null,
+        email: ap.email, contact: ap.contact, address: ap.address,
+        tags: [], notes: '', flag: null, flagReason: '', flagAt: null,
+        campaignIds: [], contentCount: 0, totalViews: 0, bestViews: 0
+      };
+      DB.creators.push(cr); byCreator[crId] = cr; newCreators++;
+    } else {
+      matched++;
+      if (ap.followers && !cr.followers) cr.followers = ap.followers;
+      if (ap.email && !cr.email) cr.email = ap.email;
+      if (ap.contact && !cr.contact) cr.contact = ap.contact;
+      if (ap.address && !cr.address) cr.address = ap.address;
+      if (ap.nationality && !cr.nationality) cr.nationality = ap.nationality;
+    }
+
+    const p = DB.participants.find((x) => x.notionPageId === row.pageId);
+    if (p) {
+      updated++;
+      p.fullName = ap.fullName || p.fullName;
+      p.address = ap.address || p.address;
+      p.contact = ap.contact || p.contact;
+      p.nationality = ap.nationality || p.nationality;
+      p.otherSns = ap.otherSns || p.otherSns;
+      p.importedStatus = ap.statusRaw || p.importedStatus;
+      if (ap.contentUrl && (!p.content || !p.content.url)) {
+        p.content = p.content || {
+          url: '', platform: ap.platform, format: 'Reel', postedAt: iso(TODAY), submittedAt: iso(TODAY),
+          views: 0, paidViews: 0, organicViews: 0, likes: 0, comments: 0, shares: 0, saves: 0,
+          reach: 0, profileVisits: 0, followsGained: 0, linkClicks: 0,
+          curve: [], boosted: false, viral: false, topCountries: [], thumbTint: avColor(cr.handle)
+        };
+        p.content.url = ap.contentUrl;
+      }
+    } else {
+      if (DB.participants.some((x) => x.campaignId === cp.id && x.creatorId === cr.id)) { skipped++; return; }
+      const np = {
+        id: cp.id + '-' + cr.id, campaignId: cp.id, creatorId: cr.id, stage: ap.stage,
+        source: 'Notion form', fee: 0, contactedAt: null, repliedAt: null, confirmedAt: null, shippedAt: null,
+        dropReason: ap.dropReason, revisions: 0, note: ap.note,
+        fullName: ap.fullName, address: ap.address, contact: ap.contact, nationality: ap.nationality,
+        visitAt: '', arrivingDate: '', otherSns: ap.otherSns, importedStatus: ap.statusRaw,
+        notionPageId: row.pageId, content: null
+      };
+      if (ap.contentUrl) {
+        np.content = {
+          url: ap.contentUrl, platform: ap.platform, format: 'Reel', postedAt: iso(TODAY), submittedAt: iso(TODAY),
+          views: 0, paidViews: 0, organicViews: 0, likes: 0, comments: 0, shares: 0, saves: 0,
+          reach: 0, profileVisits: 0, followsGained: 0, linkClicks: 0,
+          curve: [], boosted: false, viral: false, topCountries: [], thumbTint: avColor(cr.handle)
+        };
+      }
+      DB.participants.push(np); newRows++;
+    }
+  });
+
+  const dedupe = mergeDuplicateCreators();
+  cp.notionSyncedAt = new Date().toISOString();
+  render();
+  const summary = `Synced ${data.rows.length} Notion submission${data.rows.length === 1 ? '' : 's'} — ${newRows} new, ${updated} updated${skipped ? ', ' + skipped + ' skipped' : ''}${newCreators ? ', ' + newCreators + ' new creators' : ''}` +
+    (dedupe.mergedCreators ? `, ${dedupe.mergedCreators} duplicate${dedupe.mergedCreators === 1 ? '' : 's'} merged` : '');
+  toast(summary);
+  serverSave({ force: true, silent: true }).then(() =>
+    toast(SERVER.status === 'idle' ? summary + ' — saved' : summary + ' — click Save to store it on the server'));
+}
+
+function openNotionSync(cp) {
+  if (!cp.notionDatabaseId) return openNotionLinkDrawer(cp);
+  if (!cp.notionMapping) return openNotionMappingDrawer(cp);
+  runNotionSync(cp);
 }
 
 /* --------------------------------- wizard --------------------------------- */
