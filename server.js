@@ -79,7 +79,12 @@ async function getUsersCollection() {
    a bug here.
    ------------------------------------------------------------------ */
 const NOTION_TOKEN = process.env.NOTION_TOKEN || "";
-const NOTION_VERSION = "2022-06-28";
+/* 2025-09-03 is the "data sources" API version — Notion split a database's
+   schema/rows out into one-or-more "data source" objects underneath it, and
+   the old 2022-06-28 database endpoints refuse to answer for a database that
+   has more than one. Everything below talks to /data_sources/... instead of
+   /databases/.../query, per Notion's upgrade guide. */
+const NOTION_VERSION = "2025-09-03";
 const NOTION_API = "https://api.notion.com/v1";
 
 function normalizeNotionId(raw) {
@@ -107,28 +112,47 @@ async function notionFetch(path, opts) {
   return body;
 }
 
-/* Notion's "Copy link" gives you a *page* link almost as often as the
-   database link itself — from inside one submission, from a column
-   header, from the database's own "view as page" — and pages 404 when
-   asked for as a database (with a message telling you so). Rather than
-   sending the user back to Notion to hunt for the exact right link,
-   try the ID as a database first and, if it turns out to be a page,
-   look inside that page for the database it holds. */
-async function resolveDatabaseId(id) {
+/* Whatever ID gets pasted in — a database link, a page link, a link to
+   one submission, a data source link — resolve it down to the actual
+   Notion "data source" ID that /data_sources/... reads from. Handles:
+     - a database with exactly one data source (the normal case): use it
+     - a database with several data sources: use the first, and log it,
+       since there's no way for us to guess which one the form feeds
+     - a page that merely contains a database (Notion's "Copy link" hands
+       these out constantly — from inside one entry, from a column, from
+       the database's own "view as page"): look inside the page for the
+       database it holds, then resolve that
+     - an ID that's already a data source: used as-is */
+async function resolveDataSourceId(id) {
   try {
-    await notionFetch("/databases/" + id);
-    return id;
+    const db = await notionFetch("/databases/" + id);
+    const sources = db.data_sources || [];
+    if (!sources.length) {
+      throw new Error("That database doesn't have a data source Notion will let this integration read.");
+    }
+    if (sources.length > 1) {
+      console.error(`Notion database ${id} has ${sources.length} data sources — using "${sources[0].name}".`);
+    }
+    return sources[0].id;
   } catch (err) {
-    if (!/is a page, not a database/i.test(err.message || "")) throw err;
+    if (/is a page, not a database/i.test(err.message || "")) {
+      const children = await notionFetch("/blocks/" + id + "/children?page_size=100");
+      const dbBlock = (children.results || []).find((b) => b.type === "child_database");
+      if (!dbBlock) {
+        throw new Error(
+          "That link points to a page that doesn't contain a database. Open the actual submissions table in Notion (not one entry, and not the form itself) and copy its link from there."
+        );
+      }
+      return resolveDataSourceId(dbBlock.id);
+    }
+    // last resort: maybe this was already a data source ID
+    try {
+      await notionFetch("/data_sources/" + id);
+      return id;
+    } catch (err2) {
+      throw err; // the original error is the more useful one to surface
+    }
   }
-  const children = await notionFetch("/blocks/" + id + "/children?page_size=100");
-  const dbBlock = (children.results || []).find((b) => b.type === "child_database");
-  if (!dbBlock) {
-    throw new Error(
-      "That link points to a page that doesn't contain a database. Open the actual submissions table in Notion (not one entry, and not the form itself) and copy its link from there."
-    );
-  }
-  return dbBlock.id;
 }
 
 function extractNotionValue(prop) {
@@ -299,13 +323,13 @@ app.get("/api/notion/database", async (req, res) => {
   const rawId = normalizeNotionId(req.query.id);
   if (!rawId) return res.status(400).json({ error: "That doesn't look like a Notion database link or ID." });
   try {
-    const id = await resolveDatabaseId(rawId);
-    const db = await notionFetch("/databases/" + id);
-    const properties = Object.entries(db.properties || {}).map(([name, def]) => ({ name, type: def.type }));
+    const dataSourceId = await resolveDataSourceId(rawId);
+    const ds = await notionFetch("/data_sources/" + dataSourceId);
+    const properties = Object.entries(ds.properties || {}).map(([name, def]) => ({ name, type: def.type }));
     return res.json({
       ok: true,
-      id, // the resolved database ID — may differ from what was pasted, e.g. a page link that held the database
-      title: (db.title || []).map((t) => t.plain_text).join("") || "Untitled database",
+      id: dataSourceId, // a data-source ID now, not a database ID — store and reuse this as-is
+      title: (ds.title || []).map((t) => t.plain_text).join("") || "Untitled database",
       properties
     });
   } catch (err) {
@@ -321,12 +345,12 @@ app.get("/api/notion/query", async (req, res) => {
   const rawId = normalizeNotionId(req.query.id);
   if (!rawId) return res.status(400).json({ error: "That doesn't look like a Notion database link or ID." });
   try {
-    const id = await resolveDatabaseId(rawId);
+    const dataSourceId = await resolveDataSourceId(rawId);
     const rows = [];
     let cursor = null;
     let guard = 0;
     do {
-      const body = await notionFetch("/databases/" + id + "/query", {
+      const body = await notionFetch("/data_sources/" + dataSourceId + "/query", {
         method: "POST",
         body: JSON.stringify(cursor ? { start_cursor: cursor, page_size: 100 } : { page_size: 100 })
       });
