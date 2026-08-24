@@ -2028,6 +2028,7 @@ function renderCampaignCalendar(view, scope) {
       <span style="font-size:14px;font-weight:500;min-width:170px;text-align:center">${esc(monthLabel)}</span>
       <button class="icon-btn sm" id="calNext" title="Next month">&#8250;</button>
       <button class="btn sm" id="calToday">Today</button>
+      ${!scope && notionLinkedCampaigns().length ? `<button class="btn sm" id="calSyncAll" title="Pull the latest bookings for every campaign linked to a Notion form">Sync all from Notion</button>` : ''}
       <div class="sp"></div>
       <span style="font-size:12px;color:var(--text-3)">${monthCount} visit${monthCount === 1 ? '' : 's'} this month · ${total} booked${scope ? '' : ' overall'}</span>
       ${scope ? '' : `<select id="calCampaign" style="padding:5px 8px;font-size:12px;max-width:220px">
@@ -2072,6 +2073,13 @@ function renderCampaignCalendar(view, scope) {
   $('#calToday').addEventListener('click', () => { state.calMonth = new Date(TODAY.getFullYear(), TODAY.getMonth(), 1); render(); });
   const calSel = $('#calCampaign');
   if (calSel) calSel.addEventListener('change', (e) => { state.calCampaign = e.target.value; render(); });
+  const calSync = $('#calSyncAll');
+  if (calSync) calSync.addEventListener('click', () => {
+    calSync.disabled = true; calSync.textContent = 'Syncing…';
+    /* new bookings may land in another month — let it re-pick */
+    state.calSeededFor = null;
+    syncAllNotionCampaigns().finally(() => render());
+  });
   $$('.cal-item', view).forEach((el) => el.addEventListener('click', () => showParticipant(el.dataset.pid)));
 }
 
@@ -2127,6 +2135,7 @@ function renderCampaignGrid(view, tab) {
       <button class="btn sm" id="cpExport">Export list (CSV)</button>
       <button class="btn sm" id="cpImport">Import from Excel</button>
       <button class="btn sm" id="cpImportNotion">Import from Notion</button>
+      ${notionLinkedCampaigns().length ? `<button class="btn sm" id="cpSyncAll" title="Pull new submissions for every campaign linked to a Notion form">Sync all from Notion (${notionLinkedCampaigns().length})</button>` : ''}
       <button class="btn primary sm" id="cpNew">New campaign</button>
     </div>
     <div class="grid g3" id="cpGrid"></div>`;
@@ -2142,7 +2151,8 @@ function renderCampaignGrid(view, tab) {
         </div>
         <div class="sp"></div>${statusPill(cp.status)}
       </div>
-      <div style="font-size:11.5px;color:var(--text-3);margin:10px 0 12px;">${dLabel(cp.start)} – ${dLabel(cp.end)} · owner ${esc(cp.owner)}</div>
+      <div style="font-size:11.5px;color:var(--text-3);margin:10px 0 12px;">${dLabel(cp.start)} – ${dLabel(cp.end)} · owner ${esc(cp.owner)}${
+        cp.notionDatabaseId ? ` · <span title="${cp.notionSyncedAt ? 'Last Notion sync ' + new Date(cp.notionSyncedAt).toLocaleString() : 'Linked to Notion but never synced'}">Notion ${cp.notionSyncedAt ? dLabel(cp.notionSyncedAt.slice(0, 10)) : 'not synced'}</span>` : ''}</div>
       <div class="bar"><i style="width:${(s.progress * 100).toFixed(0)}%"></i></div>
       <div style="display:flex;gap:14px;font-size:11.5px;color:var(--text-3);margin-top:6px;">
         <span>${s.confirmed}/${cp.targetCreators} confirmed</span><span>${s.delivered} live</span>
@@ -2159,6 +2169,11 @@ function renderCampaignGrid(view, tab) {
   $('#cpNew').addEventListener('click', () => openNewCampaign());
   $('#cpImport').addEventListener('click', () => openImportWizard());
   $('#cpImportNotion').addEventListener('click', () => openNotionImportWizard());
+  const syncAll = $('#cpSyncAll');
+  if (syncAll) syncAll.addEventListener('click', () => {
+    syncAll.disabled = true; syncAll.textContent = 'Syncing…';
+    syncAllNotionCampaigns().finally(() => render());
+  });
   $('#cpExport').addEventListener('click', () => {
     const rows = list.map((cp) => {
       const s = campaignStats(cp);
@@ -4600,16 +4615,19 @@ async function openNotionMappingDrawer(cp) {
   });
 }
 
-async function runNotionSync(cp) {
-  toast('Syncing from Notion…');
+/* opts.batch: caller is syncing several campaigns, so skip the per-campaign
+   toast / render / save and hand the numbers back to be totalled instead. */
+async function runNotionSync(cp, opts) {
+  const batch = opts && opts.batch;
+  if (!batch) toast('Syncing from Notion…');
   let data;
   try {
     const res = await fetch('/api/notion/query?id=' + encodeURIComponent(cp.notionDatabaseId));
     data = await res.json();
     if (!res.ok) throw new Error(data.error || ('Server responded ' + res.status));
   } catch (err) {
-    toast('Notion sync failed — ' + err.message);
-    return;
+    if (!batch) toast('Notion sync failed — ' + err.message);
+    return { campaign: cp, error: err.message };
   }
 
   let newRows = 0, updated = 0, newCreators = 0, matched = 0, skipped = 0, moved = 0, reslotted = 0;
@@ -4699,20 +4717,22 @@ async function runNotionSync(cp) {
     }
   });
 
-  const dedupe = mergeDuplicateCreators();
+  const dedupe = batch ? { mergedCreators: 0 } : mergeDuplicateCreators();
   cp.notionSyncedAt = new Date().toISOString();
-  render();
 
-  /* Say why no visit dates landed instead of leaving an empty calendar to
-     be interpreted. Three different causes, three different fixes. */
+  /* why no visit dates landed — three different causes, three different fixes */
+  let visitWarning = null;
   if (!reslotted && data.rows.length) {
     const mappedTo = cp.notionMapping.visitAt;
-    if (!mappedTo) {
-      toast('No Notion field is mapped to “Visit date & time” — click ⚙ next to Sync to pick the column');
-    } else if (!data.rows.some((r) => r.properties[mappedTo])) {
-      toast(`“${mappedTo}” came back empty for every row — click ⚙ and pick the column holding the date`);
-    }
+    if (!mappedTo) visitWarning = 'no field mapped to “Visit date & time”';
+    else if (!data.rows.some((r) => r.properties[mappedTo])) visitWarning = `“${mappedTo}” is empty for every row`;
   }
+
+  const stats = { campaign: cp, rows: data.rows.length, newRows, updated, moved, reslotted, skipped, newCreators, visitWarning };
+  if (batch) return stats;
+
+  render();
+  if (visitWarning) toast(`No visit dates — ${visitWarning}. Click ⚙ next to Sync to pick the column.`);
   const summary = `Synced ${data.rows.length} Notion submission${data.rows.length === 1 ? '' : 's'} — ${newRows} new, ${updated} updated` +
     (moved ? `, ${moved} moved stage` : '') +
     (reslotted ? `, ${reslotted} visit date${reslotted === 1 ? '' : 's'}` : '') +
@@ -4720,6 +4740,53 @@ async function runNotionSync(cp) {
     (newCreators ? ', ' + newCreators + ' new creators' : '') +
     (dedupe.mergedCreators ? `, ${dedupe.mergedCreators} duplicate${dedupe.mergedCreators === 1 ? '' : 's'} merged` : '');
   toast(summary);
+  serverSave({ force: true, silent: true }).then(() =>
+    toast(SERVER.status === 'idle' ? summary + ' — saved' : summary + ' — click Save to store it on the server'));
+  return stats;
+}
+
+/* Sync every campaign that has a Notion database linked. Syncing is
+   otherwise per-campaign and manual, so with several live campaigns it's
+   easy to update one and assume the rest followed — they don't. */
+function notionLinkedCampaigns() { return DB.campaigns.filter((c) => c.notionDatabaseId && c.notionMapping); }
+
+async function syncAllNotionCampaigns() {
+  const list = notionLinkedCampaigns();
+  if (!list.length) { toast('No campaigns are linked to a Notion database yet'); return; }
+
+  toast(`Syncing ${list.length} campaign${list.length === 1 ? '' : 's'} from Notion…`);
+  const results = [];
+  for (const cp of list) {
+    /* sequential on purpose: Notion rate-limits, and a half-applied
+       parallel run is far harder to reason about than a slower clean one */
+    try {
+      await healNotionMapping(cp);
+      results.push(await runNotionSync(cp, { batch: true }));
+    } catch (err) {
+      results.push({ campaign: cp, error: err.message });
+    }
+  }
+
+  const dedupe = mergeDuplicateCreators();
+  const ok = results.filter((r) => r && !r.error);
+  const failed = results.filter((r) => r && r.error);
+  const sum = (k) => ok.reduce((n, r) => n + (r[k] || 0), 0);
+  render();
+
+  const summary = `Synced ${ok.length} of ${list.length} campaigns — ` +
+    `${sum('newRows')} new, ${sum('updated')} updated` +
+    (sum('moved') ? `, ${sum('moved')} moved stage` : '') +
+    (sum('reslotted') ? `, ${sum('reslotted')} visit dates` : '') +
+    (sum('newCreators') ? `, ${sum('newCreators')} new creators` : '') +
+    (dedupe.mergedCreators ? `, ${dedupe.mergedCreators} duplicates merged` : '');
+  toast(summary);
+
+  /* name the campaigns that need attention — a per-campaign problem is
+     invisible in a total */
+  failed.forEach((r) => toast(`${r.campaign.brand}: sync failed — ${r.error}`));
+  ok.filter((r) => r.visitWarning).forEach((r) =>
+    toast(`${r.campaign.brand}: no visit dates — ${r.visitWarning}`));
+
   serverSave({ force: true, silent: true }).then(() =>
     toast(SERVER.status === 'idle' ? summary + ' — saved' : summary + ' — click Save to store it on the server'));
 }
