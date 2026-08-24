@@ -233,7 +233,29 @@ function extractNotionValue(prop) {
       if (f.type === "date") return f.date ? f.date.start || "" : "";
       return "";
     }
-    default: return "";
+    case "unique_id": {
+      const u = prop.unique_id || {};
+      return u.number == null ? "" : (u.prefix ? u.prefix + "-" : "") + u.number;
+    }
+    case "rollup": {
+      const r = prop.rollup || {};
+      if (r.type === "number") return r.number == null ? "" : r.number;
+      if (r.type === "date") return r.date ? r.date.start || "" : "";
+      if (r.type === "array") return (r.array || []).map(extractNotionValue).filter(Boolean).join(", ");
+      return "";
+    }
+    /* A property type this was never taught (Notion keeps adding them, and
+       form questions can land on any of them) still carries its value under
+       a key named after its own type. Read that generically rather than
+       dropping the answer on the floor. */
+    default: {
+      const v = prop[prop.type];
+      if (v == null) return "";
+      if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return v;
+      if (Array.isArray(v)) return v.map((x) => (x && (x.plain_text || x.name)) || "").filter(Boolean).join(", ");
+      if (typeof v === "object") return v.start || v.name || v.url || v.string || "";
+      return "";
+    }
   }
 }
 

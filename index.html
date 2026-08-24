@@ -2395,7 +2395,9 @@ function rosterTab(mount, cp) {
   $('#rosterCsv').addEventListener('click', () => exportRoster(cp));
   $('#notionSync').addEventListener('click', () => openNotionSync(cp));
   const notionCfg = $('#notionConfig');
-  if (notionCfg) notionCfg.addEventListener('click', () => openNotionLinkDrawer(cp));
+  /* straight to the field mapping — that's what needs fixing 9 times in 10;
+     the mapping drawer itself offers "use a different link" */
+  if (notionCfg) notionCfg.addEventListener('click', () => openNotionMappingDrawer(cp));
 }
 
 function renderBoard(mount, cp) {
@@ -4534,6 +4536,22 @@ async function openNotionMappingDrawer(cp) {
   }
 
   const props = schema.properties || [];
+
+  /* Show what each Notion property actually contains. Property names alone
+     are guesswork — one look at a real value makes the right pick obvious,
+     and makes a column that's empty in Notion immediately visible as such. */
+  let samples = {};
+  try {
+    const qr = await fetch('/api/notion/query?id=' + encodeURIComponent(cp.notionDatabaseId));
+    const qd = await qr.json();
+    if (qr.ok && qd.rows) {
+      props.forEach((p) => {
+        const hit = qd.rows.find((r) => r.properties[p.name] !== '' && r.properties[p.name] != null);
+        samples[p.name] = hit ? String(hit.properties[p.name]).slice(0, 40) : '';
+      });
+    }
+  } catch (e) { /* samples are a nicety — the mapping UI works without them */ }
+
   const used = new Set();
   const guesses = {};
   NOTION_FIELD_DEFS.forEach((f) => {
@@ -4558,7 +4576,10 @@ async function openNotionMappingDrawer(cp) {
         <label>${esc(f.label)}</label>
         <select id="nm_${f.key}">
           <option value="">— none —</option>
-          ${props.map((p) => `<option value="${esc(p.name)}" ${guesses[f.key] === p.name ? 'selected' : ''}>${esc(p.name)} (${esc(p.type)})</option>`).join('')}
+          ${props.map((p) => {
+            const s = samples[p.name];
+            return `<option value="${esc(p.name)}" ${guesses[f.key] === p.name ? 'selected' : ''}>${esc(p.name)} (${esc(p.type)})${s ? ' — e.g. ' + esc(s) : ' — empty in Notion'}</option>`;
+          }).join('')}
         </select>
       </div>`).join('')}
     <div style="display:flex;gap:8px;margin-top:6px">
@@ -4681,6 +4702,17 @@ async function runNotionSync(cp) {
   const dedupe = mergeDuplicateCreators();
   cp.notionSyncedAt = new Date().toISOString();
   render();
+
+  /* Say why no visit dates landed instead of leaving an empty calendar to
+     be interpreted. Three different causes, three different fixes. */
+  if (!reslotted && data.rows.length) {
+    const mappedTo = cp.notionMapping.visitAt;
+    if (!mappedTo) {
+      toast('No Notion field is mapped to “Visit date & time” — click ⚙ next to Sync to pick the column');
+    } else if (!data.rows.some((r) => r.properties[mappedTo])) {
+      toast(`“${mappedTo}” came back empty for every row — click ⚙ and pick the column holding the date`);
+    }
+  }
   const summary = `Synced ${data.rows.length} Notion submission${data.rows.length === 1 ? '' : 's'} — ${newRows} new, ${updated} updated` +
     (moved ? `, ${moved} moved stage` : '') +
     (reslotted ? `, ${reslotted} visit date${reslotted === 1 ? '' : 's'}` : '') +
@@ -4698,7 +4730,12 @@ async function runNotionSync(cp) {
    key the saved mapping has never seen by guessing it against the live
    schema, and say which ones were added rather than doing it invisibly. */
 async function healNotionMapping(cp) {
-  const missing = NOTION_FIELD_DEFS.filter((f) => !(f.key in cp.notionMapping));
+  /* Absent *or* null: a mapping saved by an older build can carry the key
+     with nothing in it, which is indistinguishable from "empty" at read
+     time and just as silently broken. Only a property whose name clearly
+     means this field is ever filled in, so a considered "none" for an
+     unrelated column stays none. */
+  const missing = NOTION_FIELD_DEFS.filter((f) => !cp.notionMapping[f.key]);
   if (!missing.length) return [];
   let props;
   try {
