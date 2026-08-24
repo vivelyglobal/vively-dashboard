@@ -4630,7 +4630,7 @@ async function runNotionSync(cp, opts) {
     return { campaign: cp, error: err.message };
   }
 
-  let newRows = 0, updated = 0, newCreators = 0, matched = 0, skipped = 0, moved = 0, reslotted = 0;
+  let newRows = 0, updated = 0, newCreators = 0, matched = 0, skipped = 0, moved = 0, reslotted = 0, adopted = 0;
   data.rows.forEach((row) => {
     const ap = notionRowToApplicant(row.properties, cp.notionMapping);
     if (!ap.handle) { skipped++; return; }
@@ -4661,9 +4661,24 @@ async function runNotionSync(cp, opts) {
       if (ap.nationality && !cr.nationality) cr.nationality = ap.nationality;
     }
 
-    const p = DB.participants.find((x) => x.notionPageId === row.pageId);
+    /* Match the submission to the roster row it belongs to. A row that
+       predates this Notion link — imported from an Excel sheet, added by
+       hand, or created before page IDs were recorded — carries no
+       notionPageId, so it never matches here; the campaign+creator guard
+       further down then reads the submission as a duplicate and drops it.
+       That withheld every stage change and booked slot from precisely the
+       campaigns whose roster did not originate in Notion, which is why one
+       campaign synced perfectly and the rest came back empty. Claim the
+       existing row for this submission instead of skipping it. */
+    let p = DB.participants.find((x) => x.notionPageId === row.pageId);
+    let adoptedRow = false;
+    if (!p) {
+      const orphan = DB.participants.find((x) =>
+        x.campaignId === cp.id && x.creatorId === cr.id && !x.notionPageId);
+      if (orphan) { orphan.notionPageId = row.pageId; p = orphan; adoptedRow = true; }
+    }
     if (p) {
-      updated++;
+      if (adoptedRow) adopted++; else updated++;
       p.fullName = ap.fullName || p.fullName;
       p.address = ap.address || p.address;
       p.contact = ap.contact || p.contact;
@@ -4694,6 +4709,8 @@ async function runNotionSync(cp, opts) {
         p.content.url = ap.contentUrl;
       }
     } else {
+      /* only rows already claimed by a *different* submission are duplicates
+         now — unclaimed ones were adopted above */
       if (DB.participants.some((x) => x.campaignId === cp.id && x.creatorId === cr.id)) { skipped++; return; }
       const np = {
         id: cp.id + '-' + cr.id, campaignId: cp.id, creatorId: cr.id, stage: ap.stage,
@@ -4728,12 +4745,13 @@ async function runNotionSync(cp, opts) {
     else if (!data.rows.some((r) => r.properties[mappedTo])) visitWarning = `“${mappedTo}” is empty for every row`;
   }
 
-  const stats = { campaign: cp, rows: data.rows.length, newRows, updated, moved, reslotted, skipped, newCreators, visitWarning };
+  const stats = { campaign: cp, rows: data.rows.length, newRows, updated, moved, reslotted, skipped, newCreators, adopted, visitWarning };
   if (batch) return stats;
 
   render();
   if (visitWarning) toast(`No visit dates — ${visitWarning}. Click ⚙ next to Sync to pick the column.`);
-  const summary = `Synced ${data.rows.length} Notion submission${data.rows.length === 1 ? '' : 's'} — ${newRows} new, ${updated} updated` +
+  const summary = `Synced ${data.rows.length} Notion submission${data.rows.length === 1 ? '' : 's'} — ${newRows} new, ${updated + adopted} updated` +
+    (adopted ? ` (${adopted} existing roster row${adopted === 1 ? '' : 's'} linked up)` : '') +
     (moved ? `, ${moved} moved stage` : '') +
     (reslotted ? `, ${reslotted} visit date${reslotted === 1 ? '' : 's'}` : '') +
     (skipped ? ', ' + skipped + ' skipped' : '') +
@@ -4774,7 +4792,8 @@ async function syncAllNotionCampaigns() {
   render();
 
   const summary = `Synced ${ok.length} of ${list.length} campaigns — ` +
-    `${sum('newRows')} new, ${sum('updated')} updated` +
+    `${sum('newRows')} new, ${sum('updated') + sum('adopted')} updated` +
+    (sum('adopted') ? ` (${sum('adopted')} existing roster rows linked up)` : '') +
     (sum('moved') ? `, ${sum('moved')} moved stage` : '') +
     (sum('reslotted') ? `, ${sum('reslotted')} visit dates` : '') +
     (sum('newCreators') ? `, ${sum('newCreators')} new creators` : '') +
