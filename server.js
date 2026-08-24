@@ -112,6 +112,57 @@ async function notionFetch(path, opts) {
   return body;
 }
 
+const notionRichText = (arr) => (arr || []).map((t) => t.plain_text || "").join("").trim();
+
+/* Pull the readable prose out of a Notion page — the campaign blurb that
+   sits above a form ("Enjoy a Complimentary Premium Omakase Experience…")
+   lives in blocks, not in a property, so it has to be walked block by
+   block. Headings/bullets/quotes are kept, everything else is skipped. */
+async function notionPageText(pageId, limit) {
+  const KEEP = new Set([
+    "paragraph", "heading_1", "heading_2", "heading_3",
+    "bulleted_list_item", "numbered_list_item", "quote", "callout", "toggle"
+  ]);
+  try {
+    const body = await notionFetch("/blocks/" + pageId + "/children?page_size=" + (limit || 60));
+    const lines = [];
+    (body.results || []).forEach((b) => {
+      if (!KEEP.has(b.type)) return;
+      const text = notionRichText((b[b.type] || {}).rich_text);
+      if (!text) return;
+      if (b.type.startsWith("heading_")) lines.push("\n" + text);
+      else if (b.type.endsWith("list_item")) lines.push("• " + text);
+      else lines.push(text);
+    });
+    return lines.join("\n").trim();
+  } catch (err) {
+    console.error("notionPageText failed for " + pageId + ":", err.message);
+    return "";
+  }
+}
+
+/* The campaign blurb, hunted down wherever Notion happens to keep it for
+   this database: the data source's own description, then the parent
+   database's, then the prose on the page the database lives on. */
+async function notionDescriptionFor(ds) {
+  const direct = notionRichText(ds.description);
+  if (direct) return direct;
+
+  const parent = ds.parent || {};
+  const dbId = parent.database_id || parent.data_source_id;
+  if (!dbId) return "";
+  try {
+    const db = await notionFetch("/databases/" + dbId);
+    const dbDesc = notionRichText(db.description);
+    if (dbDesc) return dbDesc;
+    const dbParent = db.parent || {};
+    if (dbParent.page_id) return await notionPageText(dbParent.page_id);
+  } catch (err) {
+    console.error("notionDescriptionFor failed:", err.message);
+  }
+  return "";
+}
+
 /* Whatever ID gets pasted in — a database link, a page link, a link to
    one submission, a data source link — resolve it down to the actual
    Notion "data source" ID that /data_sources/... reads from. Handles:
@@ -330,6 +381,7 @@ app.get("/api/notion/database", async (req, res) => {
       ok: true,
       id: dataSourceId, // a data-source ID now, not a database ID — store and reuse this as-is
       title: (ds.title || []).map((t) => t.plain_text).join("") || "Untitled database",
+      description: await notionDescriptionFor(ds),
       properties
     });
   } catch (err) {

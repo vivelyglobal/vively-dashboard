@@ -303,6 +303,26 @@ body.panel-closed .panel { border-right: 0; }
 .btn.xs { padding: 3px 9px; font-size: 11.5px; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 
+/* ---- visit calendar ---- */
+.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.cal-head { border-bottom: 1px solid var(--line); }
+.cal-dow { padding: 9px 10px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); }
+.cal-cell { min-height: 108px; padding: 7px 8px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.cal-cell:nth-child(7n) { border-right: 0; }
+.cal-empty { background: color-mix(in srgb, var(--text-3) 5%, transparent); }
+.cal-date { font-size: 12px; color: var(--text-3); margin-bottom: 5px; display: flex; align-items: center; gap: 6px; }
+.cal-today .cal-date { color: var(--accent, #4a8cf7); font-weight: 600; }
+.cal-count { margin-left: auto; font-size: 10.5px; padding: 1px 6px; border-radius: 9px; background: color-mix(in srgb, var(--text-3) 16%, transparent); color: var(--text-2); }
+.cal-item { display: flex; align-items: center; gap: 5px; padding: 2px 3px; border-radius: 5px; cursor: pointer; font-size: 11.5px; }
+.cal-item:hover { background: color-mix(in srgb, var(--text-3) 14%, transparent); }
+.cal-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.cal-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-more { font-size: 10.5px; color: var(--text-3); padding-left: 3px; margin-top: 2px; }
+@media (max-width: 820px) {
+  .cal-cell { min-height: 76px; padding: 5px; }
+  .cal-name { display: none; }
+  .cal-grid { font-size: 11px; }
+}
 .auth-actions { display: inline-flex; align-items: center; gap: 8px; }
 
 .auth-overlay {
@@ -1673,7 +1693,9 @@ const state = {
   boardMode: 'board',
   msgTone: 'friendly',
   msgLang: 'en',
-  panelQ: ''
+  panelQ: '',
+  calMonth: null,      /* which month the visit calendar is showing */
+  calCampaign: ''      /* '' = every campaign */
 };
 
 function activeCampaigns() { return DB.campaigns.filter((c) => c.status !== 'wrapped'); }
@@ -1939,8 +1961,103 @@ function renderCampaignSection(view, item, tab) {
   return renderCampaign(view, item, tab || 'roster');
 }
 
+/* ============================================================
+   VISIT CALENDAR
+   Store-visit and salon campaigns live or die on who is coming
+   in on which day. Every participant with a booked slot (from
+   their Notion form answer, an Excel import, or typed in by
+   hand) shows up here as a dot on that date.
+   ============================================================ */
+const dayKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+/* every participant who has a readable visit slot, grouped by day */
+function visitsByDay(campaignId) {
+  const map = {};
+  DB.participants.forEach((p) => {
+    if (!p.visitAt) return;
+    if (campaignId && p.campaignId !== campaignId) return;
+    const d = parseVisitSlot(p.visitAt);
+    if (!d) return;
+    const cr = byCreator[p.creatorId], cp = byCampaign[p.campaignId];
+    if (!cr || !cp) return;
+    const k = dayKey(d);
+    (map[k] = map[k] || []).push({ p, cr, cp, at: d });
+  });
+  Object.values(map).forEach((list) => list.sort((a, b) => a.at - b.at));
+  return map;
+}
+
+function renderCampaignCalendar(view) {
+  if (!state.calMonth) state.calMonth = new Date(TODAY.getFullYear(), TODAY.getMonth(), 1);
+  const cur = state.calMonth;
+  const map = visitsByDay(state.calCampaign);
+  const total = Object.values(map).reduce((n, l) => n + l.length, 0);
+
+  const first = new Date(cur.getFullYear(), cur.getMonth(), 1);
+  const startPad = first.getDay();                                     /* Sun = 0 */
+  const daysInMonth = new Date(cur.getFullYear(), cur.getMonth() + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < startPad; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(new Date(cur.getFullYear(), cur.getMonth(), d));
+  while (cells.length % 7) cells.push(null);
+
+  const monthLabel = cur.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  const inMonth = Object.entries(map).filter(([k]) => k.startsWith(`${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`));
+  const monthCount = inMonth.reduce((n, [, l]) => n + l.length, 0);
+  const todayKey = dayKey(TODAY);
+
+  view.innerHTML = `
+    <div class="card-head" style="margin-bottom:14px;">
+      <button class="icon-btn sm" id="calPrev" title="Previous month">&#8249;</button>
+      <span style="font-size:14px;font-weight:500;min-width:170px;text-align:center">${esc(monthLabel)}</span>
+      <button class="icon-btn sm" id="calNext" title="Next month">&#8250;</button>
+      <button class="btn sm" id="calToday">Today</button>
+      <div class="sp"></div>
+      <span style="font-size:12px;color:var(--text-3)">${monthCount} visit${monthCount === 1 ? '' : 's'} this month · ${total} booked overall</span>
+      <select id="calCampaign" style="padding:5px 8px;font-size:12px;max-width:220px">
+        <option value="">All campaigns</option>
+        ${DB.campaigns.map((c) => `<option value="${c.id}" ${state.calCampaign === c.id ? 'selected' : ''}>${esc(c.brand)} — ${esc(c.name)}</option>`).join('')}
+      </select>
+    </div>
+
+    ${!total ? `<div class="note" style="margin-bottom:14px">
+      No visit dates booked yet. They appear here as soon as a creator picks a slot in the campaign's Notion form
+      (map that question to <strong>Visit date &amp; time</strong> when you sync), or when you set one on a roster card.
+    </div>` : ''}
+
+    <div class="card" style="padding:0;overflow:hidden">
+      <div class="cal-grid cal-head">
+        ${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => `<div class="cal-dow">${d}</div>`).join('')}
+      </div>
+      <div class="cal-grid">
+        ${cells.map((d) => {
+          if (!d) return `<div class="cal-cell cal-empty"></div>`;
+          const k = dayKey(d);
+          const list = map[k] || [];
+          const isToday = k === todayKey;
+          return `<div class="cal-cell${isToday ? ' cal-today' : ''}${list.length ? ' cal-has' : ''}" data-day="${k}">
+            <div class="cal-date">${d.getDate()}${list.length ? `<span class="cal-count">${list.length}</span>` : ''}</div>
+            ${list.slice(0, 4).map((v) => `
+              <div class="cal-item" title="${esc(v.cr.handle)} · ${esc(v.cp.brand)} — ${esc(v.p.visitAt)}" data-pid="${esc(v.p.id)}">
+                <span class="cal-dot" style="background:${avColor(v.cr.handle)}"></span>
+                <span class="cal-name">${esc(v.cr.handle)}</span>
+              </div>`).join('')}
+            ${list.length > 4 ? `<div class="cal-more">+${list.length - 4} more</div>` : ''}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+
+  $('#calPrev').addEventListener('click', () => { state.calMonth = new Date(cur.getFullYear(), cur.getMonth() - 1, 1); render(); });
+  $('#calNext').addEventListener('click', () => { state.calMonth = new Date(cur.getFullYear(), cur.getMonth() + 1, 1); render(); });
+  $('#calToday').addEventListener('click', () => { state.calMonth = new Date(TODAY.getFullYear(), TODAY.getMonth(), 1); render(); });
+  $('#calCampaign').addEventListener('change', (e) => { state.calCampaign = e.target.value; render(); });
+  $$('.cal-item').forEach((el) => el.addEventListener('click', () => showParticipant(el.dataset.pid)));
+}
+
 /* ------------------------------ all campaigns ------------------------------ */
 function renderCampaignGrid(view, tab) {
+  if (tab === 'calendar') return renderCampaignCalendar(view);
   const list = DB.campaigns.filter((c) =>
     tab === 'all' ? true : tab === 'wrapped' ? c.status === 'wrapped' : c.status !== 'wrapped');
 
@@ -2239,6 +2356,7 @@ function renderBoard(mount, cp) {
         return `<div class="kb-card" draggable="true" data-pid="${p.id}">
           ${whoHtml(cr)}
           <div class="kb-meta"><span>ER ${cr.er}%</span><span>${esc(cr.country)}</span>${p.fee ? `<span>${wonK(p.fee)}</span>` : ''}</div>
+          ${p.visitAt ? `<div style="font-size:11px;color:var(--text-2);margin-top:5px">🗓 ${esc(p.visitAt)}</div>` : ''}
           ${p.dropReason ? `<div style="font-size:11px;color:var(--text-3);margin-top:5px">${esc(p.dropReason)}</div>` : ''}
           ${p.content && p.content.views ? `<div style="font-size:11px;color:var(--text-2);margin-top:5px">${kmb(p.content.views)} views</div>` : ''}
         </div>`;
@@ -2879,6 +2997,7 @@ const MSG_KINDS = [
   ['outreach',    'First outreach DM',      'sourced'],
   ['followup',    'Follow-up nudge',        'contacted'],
   ['confirm',     'Confirmation to participate', 'shortlisted'],
+  ['visitconfirm','Confirm visit date & time', 'confirmed'],
   ['address',     'Address / visit booking', 'confirmed'],
   ['shipped',     'Shipped + guidelines',   'shipped'],
   ['reminder',    'Posting reminder',       'shipped'],
@@ -2922,6 +3041,20 @@ function buildMessage(kind, cp, cr, tone, lang) {
     ? `I've been following your ${cr.categories[0].toLowerCase()} content — the way you shoot ${cr.platform === 'TikTok' ? 'your TikToks' : 'your reels'} is exactly the mood ${brand} is going for.`
     : `I've been following your content and it's exactly the mood ${brand} is going for.`;
 
+  /* the slot this creator picked on the form, so the confirmation can quote
+     it back at them instead of asking for a date they already gave */
+  const part = cr ? DB.participants.find((x) => x.campaignId === cp.id && x.creatorId === cr.id) : null;
+  const slotRaw = (part && part.visitAt) || '';
+  const slotDate = parseVisitSlot(slotRaw);
+  const hasSlotTime = /\d{1,2}:\d{2}/.test(slotRaw);
+  const slot = slotDate
+    ? slotDate.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }) +
+      (hasSlotTime ? ' at ' + slotDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '')
+    : (slotRaw || '{{visit date & time}}');
+  const slotKo = slotRaw || '{{방문 일시}}';
+  const venueLine = p.all.find((l) => /location|주소|address|store|venue/i.test(l)) || '';
+  const venue = venueLine.replace(/^[^:]*:\s*/, '') || brand;
+
   const EN = {
     outreach: `${t.hi(n)}
 
@@ -2962,6 +3095,25 @@ To lock it in, could you reply with:
 4. The date you expect to post
 
 Once I have those I'll get the parcel out the same day. Really excited to see what you make!
+
+${t.sign}`,
+
+    visitconfirm: `${t.hi(n)}
+
+You're confirmed for ${brand} — and I've got you down for:
+
+📅 ${slot}
+📍 ${venue}
+
+Could you just reply "confirmed" so I know the slot works? If you need a different day or time, tell me what suits you and I'll move it — no problem at all.
+
+A few things worth knowing before you come:
+• Please arrive within 10 minutes of the booked time — the seating is held for you
+• ${needs}
+• ${tagging}
+• Post ${win}
+${rules ? `• ${rules}\n` : ''}
+If anything changes on the day, message me here and I'll sort it out. See you then!
 
 ${t.sign}`,
 
@@ -3059,6 +3211,25 @@ ${rules ? `• 참고: ${rules}\n` : ''}${cr && cr.rate ? `• 원고료: ${wonK
 4. 예상 업로드 날짜
 
 감사합니다!
+
+VIVELY 드림`,
+
+    visitconfirm: `안녕하세요 ${n}님 :)
+
+${brand} 캠페인 참여가 확정되었습니다! 예약 내용 안내드릴게요.
+
+📅 ${slotKo}
+📍 ${venue}
+
+일정 확인하시고 "확인" 이라고 답장 주시면 됩니다. 혹시 다른 날짜나 시간이 편하시면 편하게 말씀해주세요, 조정 도와드리겠습니다.
+
+방문 전 안내사항입니다.
+• 예약 시간 10분 이내로 도착 부탁드립니다 (좌석이 준비되어 있습니다)
+• 콘텐츠: ${needs}
+• 태그: ${tagging}
+• 업로드: ${win}
+${rules ? `• ${rules}\n` : ''}
+당일 변동사항이 있으면 언제든 메시지 주세요. 그럼 그때 뵙겠습니다!
 
 VIVELY 드림`,
 
@@ -4156,6 +4327,7 @@ const NOTION_FIELD_DEFS = [
   { key: 'followers',   label: 'Follower count' },
   { key: 'otherSns',    label: 'Other SNS' },
   { key: 'contentUrl',  label: 'Content link' },
+  { key: 'visitAt',     label: 'Visit date & time (restaurant / salon booking)' },
   { key: 'status',      label: 'Status (maps to pipeline stage)' },
   { key: 'note',        label: 'Note / message' }
 ];
@@ -4166,8 +4338,42 @@ function guessNotionField(propName, propType) {
   if (g !== 'skip') return g;
   const h = normHeader(propName);
   if (/email|이메일/.test(h)) return 'email';
+  /* a form's date question is nearly always the booking slot */
+  if (propType === 'date' || /when|date|time|schedule|slot|booking|예약|일정/.test(h)) return 'visitAt';
   if (/note|message|comment|비고|메모/.test(h)) return 'note';
   return 'skip';
+}
+
+/* Notion hands dates back as ISO ("2026-09-04T19:00:00.000+09:00") or as
+   free text a creator typed into a form. Keep whatever we can read as the
+   dashboard's own "YYYY-MM-DD HH:MM", and keep unparseable text as-is so
+   nothing the creator wrote is silently dropped. */
+function notionVisitValue(raw) {
+  if (!raw) return '';
+  const s = String(raw).trim();
+  /* A booking is a wall-clock time at the venue: 7pm at the Jongno counter is
+     7pm whether you read this dashboard from Seoul or from London. So take the
+     date and time straight out of what Notion wrote and never let Date()
+     shift it into the reader's own timezone. (Going through Date() also turns
+     a bare "2026-09-04" into UTC midnight, i.e. the day before, west of UTC.) */
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/);
+  if (m) return m[4] ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` : `${m[1]}-${m[2]}-${m[3]}`;
+  /* something a creator typed by hand — keep it if it's a real date, else
+     keep their words rather than losing the answer */
+  const d = parseDateCell(s);
+  if (!d || isNaN(d)) return s;
+  const pad = (n) => String(n).padStart(2, '0');
+  const day = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return /\d{1,2}:\d{2}/.test(s) ? `${day} ${pad(d.getHours())}:${pad(d.getMinutes())}` : day;
+}
+
+/* Read a stored slot back as a local wall-clock Date, for the calendar and
+   the confirmation message. Built from parts, never parsed as an instant. */
+function parseVisitSlot(v) {
+  const m = String(v || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{1,2}):(\d{2}))?/);
+  if (!m) return null;
+  const d = new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0));
+  return isNaN(d) ? null : d;
 }
 
 /* one Notion page's properties, read through a saved field mapping,
@@ -4201,11 +4407,27 @@ function notionRowToApplicant(properties, mapping) {
     otherSns: String(get('otherSns') || '').trim(),
     contentUrl: String(get('contentUrl') || '').trim(),
     note: String(get('note') || '').trim(),
+    visitAt: notionVisitValue(get('visitAt')),
     followers: fol.value,
     statusRaw,
     stage,
     dropReason: (mapped || {}).reason || (stage === 'dropped' ? 'Rejected' : null)
   };
+}
+
+/* Keep a participant's stage timestamps consistent with the stage it just
+   moved to — the funnel, "Delivered", and the campaign stats all read
+   these, so a stage change alone (without them) shows up as a card that
+   moved but numbers that didn't. */
+function applyStageDates(p, stage, cp) {
+  const at = STAGE_IDX[stage];
+  const when = (cp && cp.start) || iso(TODAY);
+  const dropped = stage === 'dropped';
+  p.stage = stage;
+  if (at >= 1 && !p.contactedAt) p.contactedAt = when;
+  if (at >= 2 && !dropped && !p.repliedAt) p.repliedAt = when;
+  if (at >= 4 && !dropped && !p.confirmedAt) p.confirmedAt = when;
+  if (at >= 5 && !dropped && !p.shippedAt) p.shippedAt = p.arrivingDate || when;
 }
 
 function openNotionLinkDrawer(cp) {
@@ -4240,6 +4462,12 @@ async function openNotionMappingDrawer(cp) {
     /* the server may have resolved a page link down to the database it
        contains — store that clean ID so later syncs skip the extra hop */
     cp.notionDatabaseId = out.id;
+    /* the blurb above the Notion form describes the campaign — it's what the
+       message generator writes from, so adopt it when there's no note yet */
+    if (out.description) {
+      cp.notionDescription = out.description;
+      if (!String(cp.note || '').trim()) cp.note = out.description;
+    }
   } catch (err) {
     $('#drawerBody').innerHTML = `
       <div class="note warn"><strong>Could not read that database.</strong> ${esc(err.message)}</div>
@@ -4306,7 +4534,7 @@ async function runNotionSync(cp) {
     return;
   }
 
-  let newRows = 0, updated = 0, newCreators = 0, matched = 0, skipped = 0;
+  let newRows = 0, updated = 0, newCreators = 0, matched = 0, skipped = 0, moved = 0, reslotted = 0;
   data.rows.forEach((row) => {
     const ap = notionRowToApplicant(row.properties, cp.notionMapping);
     if (!ap.handle) { skipped++; return; }
@@ -4346,6 +4574,20 @@ async function runNotionSync(cp) {
       p.nationality = ap.nationality || p.nationality;
       p.otherSns = ap.otherSns || p.otherSns;
       p.importedStatus = ap.statusRaw || p.importedStatus;
+      if (ap.visitAt && ap.visitAt !== p.visitAt) { p.visitAt = ap.visitAt; reslotted++; }
+      /* Notion is the source of truth for the pipeline stage: when someone
+         is marked accepted / visited / uploaded over there, the card has to
+         move here too. Only a *forward* move is applied automatically, so a
+         stage someone advanced by hand in the dashboard isn't yanked back by
+         a Notion row that simply hasn't been updated yet. Dropped always
+         wins — a rejection in Notion should always land. */
+      const wasIdx = STAGE_IDX[p.stage], nowIdx = STAGE_IDX[ap.stage];
+      if (ap.stage !== p.stage && (ap.stage === 'dropped' || p.stage === 'dropped' || nowIdx > wasIdx)) {
+        applyStageDates(p, ap.stage, cp);
+        if (ap.stage === 'dropped') p.dropReason = ap.dropReason || p.dropReason;
+        else if (p.dropReason) p.dropReason = null;
+        moved++;
+      }
       if (ap.contentUrl && (!p.content || !p.content.url)) {
         p.content = p.content || {
           url: '', platform: ap.platform, format: 'Reel', postedAt: iso(TODAY), submittedAt: iso(TODAY),
@@ -4362,9 +4604,11 @@ async function runNotionSync(cp) {
         source: 'Notion form', fee: 0, contactedAt: null, repliedAt: null, confirmedAt: null, shippedAt: null,
         dropReason: ap.dropReason, revisions: 0, note: ap.note,
         fullName: ap.fullName, address: ap.address, contact: ap.contact, nationality: ap.nationality,
-        visitAt: '', arrivingDate: '', otherSns: ap.otherSns, importedStatus: ap.statusRaw,
+        visitAt: ap.visitAt, arrivingDate: '', otherSns: ap.otherSns, importedStatus: ap.statusRaw,
         notionPageId: row.pageId, content: null
       };
+      applyStageDates(np, ap.stage, cp);
+      if (ap.visitAt) reslotted++;
       if (ap.contentUrl) {
         np.content = {
           url: ap.contentUrl, platform: ap.platform, format: 'Reel', postedAt: iso(TODAY), submittedAt: iso(TODAY),
@@ -4380,7 +4624,11 @@ async function runNotionSync(cp) {
   const dedupe = mergeDuplicateCreators();
   cp.notionSyncedAt = new Date().toISOString();
   render();
-  const summary = `Synced ${data.rows.length} Notion submission${data.rows.length === 1 ? '' : 's'} — ${newRows} new, ${updated} updated${skipped ? ', ' + skipped + ' skipped' : ''}${newCreators ? ', ' + newCreators + ' new creators' : ''}` +
+  const summary = `Synced ${data.rows.length} Notion submission${data.rows.length === 1 ? '' : 's'} — ${newRows} new, ${updated} updated` +
+    (moved ? `, ${moved} moved stage` : '') +
+    (reslotted ? `, ${reslotted} visit date${reslotted === 1 ? '' : 's'}` : '') +
+    (skipped ? ', ' + skipped + ' skipped' : '') +
+    (newCreators ? ', ' + newCreators + ' new creators' : '') +
     (dedupe.mergedCreators ? `, ${dedupe.mergedCreators} duplicate${dedupe.mergedCreators === 1 ? '' : 's'} merged` : '');
   toast(summary);
   serverSave({ force: true, silent: true }).then(() =>
@@ -4546,8 +4794,8 @@ function renderNotionImportStep3() {
       <div class="field"><label>Product cost / creator (₩)</label><input type="number" id="niCost" value="45000"/></div>
       <div class="field full" style="grid-column:1/-1"><label>Deliverables</label><input type="text" id="niDeliv" value="1 Reel + 2 Stories"/></div>
     </div>
-    <div class="field"><label>Campaign note — the message generator writes from this</label>
-      <textarea id="niNote" style="min-height:120px" placeholder="What the creator gets: …&#10;What we need back: …&#10;Posting window: …&#10;Must tag @…"></textarea></div>
+    <div class="field"><label>Campaign note — the message generator writes from this${st.schema.description ? ' <span style="text-transform:none;letter-spacing:0;color:var(--text-3)">— prefilled from the Notion form</span>' : ''}</label>
+      <textarea id="niNote" style="min-height:${st.schema.description ? '200px' : '120px'}" placeholder="What the creator gets: …&#10;What we need back: …&#10;Posting window: …&#10;Must tag @…">${esc(st.schema.description || '')}</textarea></div>
 
     <div class="sec-title">2 · Preview <span style="text-transform:none;letter-spacing:0;color:var(--text-3)">— ${Object.entries(byStage).map(([s, n]) => `${n} ${stageOf(s).label}`).join(' · ')}</span></div>
     ${withIssues.length ? `<div class="note warn" style="margin-bottom:12px"><strong>${withIssues.length} rows need a look.</strong> They will still import — issues are listed in the table.</div>` : ''}
@@ -4606,6 +4854,7 @@ function commitNotionImport() {
        campaign current later, without asking for the link/mapping again */
     notionDatabaseId: st.databaseId,
     notionMapping: st.mapping,
+    notionDescription: st.schema.description || '',
     notionSyncedAt: new Date().toISOString()
   };
 
@@ -4651,7 +4900,7 @@ function commitNotionImport() {
       dropReason: r.dropReason, revisions: 0, note: r.note || '',
       fullName: r.fullName, address: r.address, contact: r.contact,
       nationality: r.nationality, otherSns: r.otherSns,
-      visitAt: '', arrivingDate: '', importedStatus: r.statusRaw,
+      visitAt: r.visitAt || '', arrivingDate: '', importedStatus: r.statusRaw,
       notionPageId: r.notionPageId, content: null
     };
     if (r.contentUrl) {
@@ -5026,7 +5275,8 @@ const SHEET_SCHEMA = {
     ['id','s'],['brand','s'],['name','s'],['kind','s'],['category','s'],['market','s'],['status','s'],
     ['start','s'],['end','s'],['targetCreators','n'],['minFollowers','n'],['platforms','a'],
     ['deliverables','s'],['budget','n'],['productCostPer','n'],['adSpend','n'],['hashtags','a'],
-    ['owner','s'],['note','s'],['createdAt','s'],['fulfilment','s'],['importedFrom','s']
+    ['owner','s'],['note','s'],['createdAt','s'],['fulfilment','s'],['importedFrom','s'],
+    ['notionDatabaseId','s'],['notionSyncedAt','s'],['notionDescription','s']
   ],
   creators: [
     ['id','s'],['handle','s'],['name','s'],['platform','s'],['followers','n'],['er','n'],['avgViews','n'],
@@ -5038,7 +5288,7 @@ const SHEET_SCHEMA = {
     ['id','s'],['campaignId','s'],['creatorId','s'],['stage','s'],['source','s'],['fee','n'],
     ['contactedAt','s'],['repliedAt','s'],['confirmedAt','s'],['shippedAt','s'],['dropReason','s'],
     ['revisions','n'],['note','s'],['fullName','s'],['address','s'],['contact','s'],['nationality','s'],
-    ['visitAt','s'],['arrivingDate','s'],['otherSns','s'],['importedStatus','s'],
+    ['visitAt','s'],['arrivingDate','s'],['otherSns','s'],['importedStatus','s'],['notionPageId','s'],
     ['content.url','s'],['content.platform','s'],['content.format','s'],['content.postedAt','s'],
     ['content.submittedAt','s'],['content.views','n'],['content.paidViews','n'],['content.organicViews','n'],
     ['content.likes','n'],['content.comments','n'],['content.shares','n'],['content.saves','n'],
@@ -6556,7 +6806,7 @@ function tabsFor(section, item) {
   if (section === 'contracts') return CONTRACT_TABS;
   if (section === 'messages')  return MSG_KINDS.map(([k, l]) => [k, l]);
   if (section === 'campaigns') return (!item || item === 'all')
-    ? [['active', 'Active'], ['all', 'All'], ['wrapped', 'Wrapped']]
+    ? [['active', 'Active'], ['all', 'All'], ['wrapped', 'Wrapped'], ['calendar', 'Calendar']]
     : CAMPAIGN_TABS;
   return [];
 }
