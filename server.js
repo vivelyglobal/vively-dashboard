@@ -32,10 +32,21 @@ function getMongoClient() {
   if (!MONGODB_URI) return null;
   if (!mongoClientPromise) {
     const client = new MongoClient(MONGODB_URI, { serverSelectionTimeoutMS: 8000 });
-    mongoClientPromise = client.connect().catch((err) => {
-      mongoClientPromise = null; // let the next request try to reconnect
-      throw err;
-    });
+    mongoClientPromise = client
+      .connect()
+      .then(async (c) => {
+        // enforce one account per email at the DB level too, not just in app code
+        try {
+          await c.db(MONGODB_DB).collection("users").createIndex({ email: 1 }, { unique: true });
+        } catch (e) {
+          console.error("Could not ensure users email index:", e.message);
+        }
+        return c;
+      })
+      .catch((err) => {
+        mongoClientPromise = null; // let the next request try to reconnect
+        throw err;
+      });
   }
   return mongoClientPromise;
 }
@@ -44,6 +55,12 @@ async function getWorkspaceCollection() {
   const client = await getMongoClient();
   if (!client) return null;
   return client.db(MONGODB_DB).collection("workspace");
+}
+
+async function getUsersCollection() {
+  const client = await getMongoClient();
+  if (!client) return null;
+  return client.db(MONGODB_DB).collection("users");
 }
 
 /* ------------------------------------------------------------------
@@ -121,6 +138,14 @@ function extractNotionValue(prop) {
   }
 }
 
+/* ------------------------------------------------------------------
+   Accounts (signup/login) live in MongoDB now, same as the workspace
+   data — the flat file below is kept ONLY as a fallback for when
+   MONGODB_URI isn't set (e.g. running this locally without Atlas).
+   On Render, that file lived on the ephemeral disk, so every restart
+   or redeploy silently wiped every signed-up account, which is why
+   logins stopped "sticking" — this fixes that.
+   ------------------------------------------------------------------ */
 function ensureDataFile() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, "[]", "utf8");
@@ -296,7 +321,7 @@ app.get("/api/notion/query", async (req, res) => {
   }
 });
 
-app.post("/api/signup", (req, res) => {
+app.post("/api/signup", async (req, res) => {
   const name = String(req.body?.name || "").trim();
   const email = normalizeEmail(req.body?.email);
   const password = String(req.body?.password || "");
@@ -304,11 +329,6 @@ app.post("/api/signup", (req, res) => {
   if (!name) return res.status(400).json({ error: "Nama wajib diisi" });
   if (!email || !email.includes("@")) return res.status(400).json({ error: "Email tidak valid" });
   if (password.length < 8) return res.status(400).json({ error: "Password minimal 8 karakter" });
-
-  const users = readUsers();
-  if (users.some((u) => u.email === email)) {
-    return res.status(409).json({ error: "Email sudah terdaftar" });
-  }
 
   const user = {
     id: crypto.randomUUID(),
@@ -318,13 +338,34 @@ app.post("/api/signup", (req, res) => {
     createdAt: new Date().toISOString()
   };
 
-  users.push(user);
-  writeUsers(users);
-
-  return res.status(201).json({ ok: true, user: publicUser(user) });
+  try {
+    const col = await getUsersCollection();
+    if (col) {
+      try {
+        await col.insertOne(user);
+      } catch (err) {
+        if (err && err.code === 11000) {
+          return res.status(409).json({ error: "Email sudah terdaftar" });
+        }
+        throw err;
+      }
+    } else {
+      // no MONGODB_URI configured — fall back to the local (ephemeral) file
+      const users = readUsers();
+      if (users.some((u) => u.email === email)) {
+        return res.status(409).json({ error: "Email sudah terdaftar" });
+      }
+      users.push(user);
+      writeUsers(users);
+    }
+    return res.status(201).json({ ok: true, user: publicUser(user) });
+  } catch (err) {
+    console.error("POST /api/signup failed:", err.message);
+    return res.status(502).json({ error: "Could not reach the database." });
+  }
 });
 
-app.post("/api/login", (req, res) => {
+app.post("/api/login", async (req, res) => {
   const email = normalizeEmail(req.body?.email);
   const password = String(req.body?.password || "");
 
@@ -332,13 +373,17 @@ app.post("/api/login", (req, res) => {
     return res.status(400).json({ error: "Email dan password wajib diisi" });
   }
 
-  const users = readUsers();
-  const user = users.find((u) => u.email === email);
-  if (!user || !verifyPassword(password, user.passwordHash)) {
-    return res.status(401).json({ error: "Email atau password salah" });
+  try {
+    const col = await getUsersCollection();
+    const user = col ? await col.findOne({ email }) : readUsers().find((u) => u.email === email);
+    if (!user || !verifyPassword(password, user.passwordHash)) {
+      return res.status(401).json({ error: "Email atau password salah" });
+    }
+    return res.json({ ok: true, user: publicUser(user) });
+  } catch (err) {
+    console.error("POST /api/login failed:", err.message);
+    return res.status(502).json({ error: "Could not reach the database." });
   }
-
-  return res.json({ ok: true, user: publicUser(user) });
 });
 
 app.get("*", (req, res) => {
