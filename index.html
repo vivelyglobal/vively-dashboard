@@ -4400,18 +4400,36 @@ const NOTION_FIELD_DEFS = [
   { key: 'nationality', label: 'Nationality / country' },
   { key: 'followers',   label: 'Follower count' },
   { key: 'otherSns',    label: 'Other SNS' },
-  { key: 'contentUrl',  label: 'Content link' },
+  { key: 'contentUrl',  label: 'Content link (video URL)' },
+  { key: 'views',       label: 'Views' },
+  { key: 'likes',       label: 'Likes' },
+  { key: 'comments',    label: 'Comments' },
+  { key: 'shares',      label: 'Shares' },
   { key: 'visitAt',     label: 'Visit date & time (restaurant / salon booking)' },
   { key: 'status',      label: 'Status (maps to pipeline stage)' },
   { key: 'note',        label: 'Note / message' }
 ];
 
+/* the performance columns, kept together so the sync and the mapping UI
+   cannot drift apart as more get added */
+const NOTION_METRIC_KEYS = ['views', 'likes', 'comments', 'shares'];
+
 function guessNotionField(propName, propType) {
-  if (propType === 'email') return 'email';
+  const h = normHeader(propName);
+  /* Settled before the generic alias table, which mis-reads both of these:
+     "Email Address" contains "address" so it gets claimed as the shipping
+     address, and "Instagram Follower" contains "instagram" so it gets
+     claimed as the profile link. */
+  if (propType === 'email' || /email|이메일/.test(h)) return 'email';
+  if (/follower|팔로워/.test(h)) return 'followers';
   const g = guessField(propName, 0, []);
   if (g !== 'skip') return g;
-  const h = normHeader(propName);
-  if (/email|이메일/.test(h)) return 'email';
+  /* Performance columns first: "Comments" is a metric here, and the
+     note/message test further down would otherwise swallow it. */
+  if (/^views?$|view count|play count|^plays?$|조회/.test(h)) return 'views';
+  if (/^likes?$|like count|좋아요/.test(h)) return 'likes';
+  if (/^comments?$|comment count|댓글/.test(h)) return 'comments';
+  if (/^shares?$|share count|공유/.test(h)) return 'shares';
   /* A form's date question is nearly always the booking slot — but Notion
      adds its own bookkeeping timestamps to every database, and those must
      not be mistaken for the slot the creator picked. */
@@ -4453,6 +4471,23 @@ function parseVisitSlot(v) {
   return isNaN(d) ? null : d;
 }
 
+/* Metrics come back as a Notion number, or as text a human typed ("12.3K",
+   "1.2만", "4,530"). Returns null when the cell is empty so an untouched
+   column never overwrites a figure already recorded. NOT parseFollowers —
+   that reads a bare 45 as 45,000, which is right for follower counts and
+   very wrong for 45 comments. */
+function notionMetricValue(v) {
+  if (v === '' || v == null) return null;
+  if (typeof v === 'number') return Math.round(v);
+  const s = String(v).trim().replace(/[, ]/g, '').toLowerCase();
+  if (!s) return null;
+  let m = s.match(/^([\d.]+)만$/); if (m) return Math.round(parseFloat(m[1]) * 10000);
+  m = s.match(/^([\d.]+)k$/);      if (m) return Math.round(parseFloat(m[1]) * 1000);
+  m = s.match(/^([\d.]+)m$/);      if (m) return Math.round(parseFloat(m[1]) * 1e6);
+  const n = parseFloat(s);
+  return isNaN(n) ? null : Math.round(n);
+}
+
 /* one Notion page's properties, read through a saved field mapping,
    shaped exactly like one row out of parseImportRows() above */
 function notionRowToApplicant(properties, mapping) {
@@ -4485,6 +4520,11 @@ function notionRowToApplicant(properties, mapping) {
     contentUrl: String(get('contentUrl') || '').trim(),
     note: String(get('note') || '').trim(),
     visitAt: notionVisitValue(get('visitAt')),
+    metrics: NOTION_METRIC_KEYS.reduce((acc, k) => {
+      const n = notionMetricValue(get(k));
+      if (n != null) acc[k] = n;
+      return acc;
+    }, {}),
     followers: fol.value,
     statusRaw,
     stage,
@@ -4620,6 +4660,35 @@ async function openNotionMappingDrawer(cp) {
 
 /* opts.batch: caller is syncing several campaigns, so skip the per-campaign
    toast / render / save and hand the numbers back to be totalled instead. */
+/* Put the video link and its numbers onto a participant. The old code only
+   ever set content when there wasn't one — fine for a link, wrong for
+   metrics, which are the whole point of re-syncing: views on day 14 are not
+   views on day 7. Link is written once; numbers refresh every sync. */
+function applyNotionContent(p, ap, cr) {
+  const hasMetrics = Object.keys(ap.metrics || {}).length > 0;
+  if (!ap.contentUrl && !hasMetrics) return 0;
+  if (!p.content) {
+    p.content = {
+      url: '', platform: ap.platform, format: 'Reel', postedAt: iso(TODAY), submittedAt: iso(TODAY),
+      views: 0, paidViews: 0, organicViews: 0, likes: 0, comments: 0, shares: 0, saves: 0,
+      reach: 0, profileVisits: 0, followsGained: 0, linkClicks: 0,
+      curve: [], boosted: false, viral: false, topCountries: [], thumbTint: avColor(cr.handle)
+    };
+  }
+  let touched = 0;
+  if (ap.contentUrl && p.content.url !== ap.contentUrl) { p.content.url = ap.contentUrl; touched++; }
+  NOTION_METRIC_KEYS.forEach((k) => {
+    if (ap.metrics[k] == null) return;
+    if (p.content[k] !== ap.metrics[k]) { p.content[k] = ap.metrics[k]; touched++; }
+  });
+  /* views recorded but nothing split out — treat it all as organic so the
+     performance tab's paid/organic maths doesn't read as 100% paid */
+  if (p.content.views && !p.content.paidViews && !p.content.organicViews) {
+    p.content.organicViews = p.content.views;
+  }
+  return touched;
+}
+
 async function runNotionSync(cp, opts) {
   const batch = opts && opts.batch;
   if (!batch) toast('Syncing from Notion…');
@@ -4633,7 +4702,7 @@ async function runNotionSync(cp, opts) {
     return { campaign: cp, error: err.message };
   }
 
-  let newRows = 0, updated = 0, newCreators = 0, matched = 0, skipped = 0, moved = 0, reslotted = 0, adopted = 0;
+  let newRows = 0, updated = 0, newCreators = 0, matched = 0, skipped = 0, moved = 0, reslotted = 0, adopted = 0, metricsUpdated = 0;
   data.rows.forEach((row) => {
     const ap = notionRowToApplicant(row.properties, cp.notionMapping);
     if (!ap.handle) { skipped++; return; }
@@ -4702,15 +4771,7 @@ async function runNotionSync(cp, opts) {
         else if (p.dropReason) p.dropReason = null;
         moved++;
       }
-      if (ap.contentUrl && (!p.content || !p.content.url)) {
-        p.content = p.content || {
-          url: '', platform: ap.platform, format: 'Reel', postedAt: iso(TODAY), submittedAt: iso(TODAY),
-          views: 0, paidViews: 0, organicViews: 0, likes: 0, comments: 0, shares: 0, saves: 0,
-          reach: 0, profileVisits: 0, followsGained: 0, linkClicks: 0,
-          curve: [], boosted: false, viral: false, topCountries: [], thumbTint: avColor(cr.handle)
-        };
-        p.content.url = ap.contentUrl;
-      }
+      if (applyNotionContent(p, ap, cr)) metricsUpdated++;
     } else {
       /* only rows already claimed by a *different* submission are duplicates
          now — unclaimed ones were adopted above */
@@ -4725,14 +4786,7 @@ async function runNotionSync(cp, opts) {
       };
       applyStageDates(np, ap.stage, cp);
       if (ap.visitAt) reslotted++;
-      if (ap.contentUrl) {
-        np.content = {
-          url: ap.contentUrl, platform: ap.platform, format: 'Reel', postedAt: iso(TODAY), submittedAt: iso(TODAY),
-          views: 0, paidViews: 0, organicViews: 0, likes: 0, comments: 0, shares: 0, saves: 0,
-          reach: 0, profileVisits: 0, followsGained: 0, linkClicks: 0,
-          curve: [], boosted: false, viral: false, topCountries: [], thumbTint: avColor(cr.handle)
-        };
-      }
+      if (applyNotionContent(np, ap, cr)) metricsUpdated++;
       DB.participants.push(np); newRows++;
     }
   });
@@ -4748,7 +4802,7 @@ async function runNotionSync(cp, opts) {
     else if (!data.rows.some((r) => r.properties[mappedTo])) visitWarning = `“${mappedTo}” is empty for every row`;
   }
 
-  const stats = { campaign: cp, rows: data.rows.length, newRows, updated, moved, reslotted, skipped, newCreators, adopted, visitWarning };
+  const stats = { campaign: cp, rows: data.rows.length, newRows, updated, moved, reslotted, skipped, newCreators, adopted, metricsUpdated, visitWarning };
   if (batch) return stats;
 
   render();
@@ -4757,6 +4811,7 @@ async function runNotionSync(cp, opts) {
     (adopted ? ` (${adopted} existing roster row${adopted === 1 ? '' : 's'} linked up)` : '') +
     (moved ? `, ${moved} moved stage` : '') +
     (reslotted ? `, ${reslotted} visit date${reslotted === 1 ? '' : 's'}` : '') +
+    (metricsUpdated ? `, ${metricsUpdated} content/metrics` : '') +
     (skipped ? ', ' + skipped + ' skipped' : '') +
     (newCreators ? ', ' + newCreators + ' new creators' : '') +
     (dedupe.mergedCreators ? `, ${dedupe.mergedCreators} duplicate${dedupe.mergedCreators === 1 ? '' : 's'} merged` : '');
@@ -4799,6 +4854,7 @@ async function syncAllNotionCampaigns() {
     (sum('adopted') ? ` (${sum('adopted')} existing roster rows linked up)` : '') +
     (sum('moved') ? `, ${sum('moved')} moved stage` : '') +
     (sum('reslotted') ? `, ${sum('reslotted')} visit dates` : '') +
+    (sum('metricsUpdated') ? `, ${sum('metricsUpdated')} content/metrics` : '') +
     (sum('newCreators') ? `, ${sum('newCreators')} new creators` : '') +
     (dedupe.mergedCreators ? `, ${dedupe.mergedCreators} duplicates merged` : '');
   toast(summary);
