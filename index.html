@@ -313,7 +313,8 @@ body.panel-closed .panel { border-right: 0; }
 .cal-date { font-size: 12px; color: var(--text-3); margin-bottom: 5px; display: flex; align-items: center; gap: 6px; }
 .cal-today .cal-date { color: var(--accent, #4a8cf7); font-weight: 600; }
 .cal-count { margin-left: auto; font-size: 10.5px; padding: 1px 6px; border-radius: 9px; background: color-mix(in srgb, var(--text-3) 16%, transparent); color: var(--text-2); }
-.cal-item { display: flex; align-items: center; gap: 5px; padding: 2px 3px; border-radius: 5px; cursor: pointer; font-size: 11.5px; }
+.cal-item { display: inline-flex; width: 100%; align-items: center; gap: 5px; padding: 2px 3px; border-radius: 5px; cursor: pointer; font-size: 11.5px; }
+.cal-time { color: var(--text-3); font-variant-numeric: tabular-nums; }
 .cal-item:hover { background: color-mix(in srgb, var(--text-3) 14%, transparent); }
 .cal-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .cal-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1695,7 +1696,8 @@ const state = {
   msgLang: 'en',
   panelQ: '',
   calMonth: null,      /* which month the visit calendar is showing */
-  calCampaign: ''      /* '' = every campaign */
+  calCampaign: '',     /* '' = every campaign */
+  calSeededFor: null   /* scope the month was auto-picked for */
 };
 
 function activeCampaigns() { return DB.campaigns.filter((c) => c.status !== 'wrapped'); }
@@ -1952,8 +1954,9 @@ function ovContent(view, tab) {
    layer 2 = the campaign list · layer 3 = tabs on one campaign
    ============================================================ */
 const CAMPAIGN_TABS = [
-  ['roster', 'Roster & pipeline'], ['content', 'Content review'], ['performance', 'Performance'],
-  ['creators', 'Creator results'], ['messages', 'Messages'], ['brief', 'Brief'], ['report', 'Report']
+  ['roster', 'Roster & pipeline'], ['calendar', 'Visit calendar'], ['content', 'Content review'],
+  ['performance', 'Performance'], ['creators', 'Creator results'], ['messages', 'Messages'],
+  ['brief', 'Brief'], ['report', 'Report']
 ];
 
 function renderCampaignSection(view, item, tab) {
@@ -1987,11 +1990,24 @@ function visitsByDay(campaignId) {
   return map;
 }
 
-function renderCampaignCalendar(view) {
-  if (!state.calMonth) state.calMonth = new Date(TODAY.getFullYear(), TODAY.getMonth(), 1);
-  const cur = state.calMonth;
-  const map = visitsByDay(state.calCampaign);
+/* `scope` = a campaign to lock the calendar to (the per-campaign tab).
+   Left out, it's the cross-campaign view with its own campaign filter. */
+function renderCampaignCalendar(view, scope) {
+  const map = visitsByDay(scope ? scope.id : state.calCampaign);
   const total = Object.values(map).reduce((n, l) => n + l.length, 0);
+  /* Open on the month the visits are actually in — landing on an empty
+     "this month" and making someone page around to find their bookings is
+     the wrong first impression. Reseed whenever the scope changes, but
+     leave the month alone while they're paging within one scope. */
+  const seedFor = scope ? scope.id : 'all:' + state.calCampaign;
+  if (!state.calMonth || state.calSeededFor !== seedFor) {
+    const days = Object.keys(map).sort();
+    const soon = days.find((k) => k >= dayKey(TODAY)) || days[days.length - 1];
+    const seed = (soon && parseVisitSlot(soon)) || TODAY;
+    state.calMonth = new Date(seed.getFullYear(), seed.getMonth(), 1);
+    state.calSeededFor = seedFor;
+  }
+  const cur = state.calMonth;
 
   const first = new Date(cur.getFullYear(), cur.getMonth(), 1);
   const startPad = first.getDay();                                     /* Sun = 0 */
@@ -2013,16 +2029,17 @@ function renderCampaignCalendar(view) {
       <button class="icon-btn sm" id="calNext" title="Next month">&#8250;</button>
       <button class="btn sm" id="calToday">Today</button>
       <div class="sp"></div>
-      <span style="font-size:12px;color:var(--text-3)">${monthCount} visit${monthCount === 1 ? '' : 's'} this month · ${total} booked overall</span>
-      <select id="calCampaign" style="padding:5px 8px;font-size:12px;max-width:220px">
+      <span style="font-size:12px;color:var(--text-3)">${monthCount} visit${monthCount === 1 ? '' : 's'} this month · ${total} booked${scope ? '' : ' overall'}</span>
+      ${scope ? '' : `<select id="calCampaign" style="padding:5px 8px;font-size:12px;max-width:220px">
         <option value="">All campaigns</option>
         ${DB.campaigns.map((c) => `<option value="${c.id}" ${state.calCampaign === c.id ? 'selected' : ''}>${esc(c.brand)} — ${esc(c.name)}</option>`).join('')}
-      </select>
+      </select>`}
     </div>
 
     ${!total ? `<div class="note" style="margin-bottom:14px">
-      No visit dates booked yet. They appear here as soon as a creator picks a slot in the campaign's Notion form
-      (map that question to <strong>Visit date &amp; time</strong> when you sync), or when you set one on a roster card.
+      <strong>No visit dates booked yet.</strong> They appear here as soon as a creator picks a slot in the
+      campaign's Notion form. If your form has a “Date &amp; Time Availability” question and nothing is showing,
+      open <em>Sync from Notion</em> — the field is matched automatically on the next sync.
     </div>` : ''}
 
     <div class="card" style="padding:0;overflow:hidden">
@@ -2037,11 +2054,13 @@ function renderCampaignCalendar(view) {
           const isToday = k === todayKey;
           return `<div class="cal-cell${isToday ? ' cal-today' : ''}${list.length ? ' cal-has' : ''}" data-day="${k}">
             <div class="cal-date">${d.getDate()}${list.length ? `<span class="cal-count">${list.length}</span>` : ''}</div>
-            ${list.slice(0, 4).map((v) => `
-              <div class="cal-item" title="${esc(v.cr.handle)} · ${esc(v.cp.brand)} — ${esc(v.p.visitAt)}" data-pid="${esc(v.p.id)}">
+            ${list.slice(0, 4).map((v) => {
+              const time = /\d{1,2}:\d{2}/.test(v.p.visitAt) ? v.p.visitAt.slice(-5) : '';
+              return `<div class="cal-item" title="${esc(v.cr.handle)} · ${esc(v.cp.brand)} — ${esc(v.p.visitAt)}" data-pid="${esc(v.p.id)}">
                 <span class="cal-dot" style="background:${avColor(v.cr.handle)}"></span>
-                <span class="cal-name">${esc(v.cr.handle)}</span>
-              </div>`).join('')}
+                <span class="cal-name">${time ? `<span class="cal-time">${time}</span> ` : ''}${esc(v.cr.handle)}</span>
+              </div>`;
+            }).join('')}
             ${list.length > 4 ? `<div class="cal-more">+${list.length - 4} more</div>` : ''}
           </div>`;
         }).join('')}
@@ -2051,8 +2070,41 @@ function renderCampaignCalendar(view) {
   $('#calPrev').addEventListener('click', () => { state.calMonth = new Date(cur.getFullYear(), cur.getMonth() - 1, 1); render(); });
   $('#calNext').addEventListener('click', () => { state.calMonth = new Date(cur.getFullYear(), cur.getMonth() + 1, 1); render(); });
   $('#calToday').addEventListener('click', () => { state.calMonth = new Date(TODAY.getFullYear(), TODAY.getMonth(), 1); render(); });
-  $('#calCampaign').addEventListener('change', (e) => { state.calCampaign = e.target.value; render(); });
-  $$('.cal-item').forEach((el) => el.addEventListener('click', () => showParticipant(el.dataset.pid)));
+  const calSel = $('#calCampaign');
+  if (calSel) calSel.addEventListener('change', (e) => { state.calCampaign = e.target.value; render(); });
+  $$('.cal-item', view).forEach((el) => el.addEventListener('click', () => showParticipant(el.dataset.pid)));
+}
+
+/* the same calendar, locked to one campaign */
+function campaignCalendarTab(mount, cp) { renderCampaignCalendar(mount, cp); }
+
+/* the next few visits, shown above the board so the roster answers
+   "who's coming in and when" without leaving the tab */
+function upcomingVisitsStrip(cp) {
+  const map = visitsByDay(cp.id);
+  const rows = Object.keys(map).sort().flatMap((k) => map[k]);
+  if (!rows.length) return '';
+  const todayK = dayKey(TODAY);
+  const ahead = rows.filter((v) => dayKey(v.at) >= todayK);
+  const show = (ahead.length ? ahead : rows.slice(-6)).slice(0, 6);
+  const label = ahead.length ? 'Upcoming visits' : 'Past visits';
+  return `<div class="card" style="margin-bottom:12px;padding:11px 14px">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-3)">${label}</span>
+      ${show.map((v) => {
+        const time = /\d{1,2}:\d{2}/.test(v.p.visitAt) ? ' ' + v.p.visitAt.slice(-5) : '';
+        const day = v.at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+        return `<span class="cal-item" data-pid="${esc(v.p.id)}" style="width:auto;padding:3px 9px;border:1px solid var(--line);border-radius:20px">
+          <span class="cal-dot" style="background:${avColor(v.cr.handle)}"></span>
+          <span>${esc(v.cr.handle)}</span>
+          <span style="color:var(--text-3)">${esc(day + time)}</span>
+        </span>`;
+      }).join('')}
+      ${rows.length > show.length ? `<span style="font-size:11.5px;color:var(--text-3)">+${rows.length - show.length} more</span>` : ''}
+      <div class="sp"></div>
+      <a class="btn xs" href="#/campaigns/${cp.id}/calendar">Open calendar</a>
+    </div>
+  </div>`;
 }
 
 /* ------------------------------ all campaigns ------------------------------ */
@@ -2194,8 +2246,8 @@ function renderCampaign(view, id, tab) {
   $('#cpDelete').addEventListener('click', () => confirmDeleteCampaign(cp));
 
   const mount = $('#cpTab');
-  ({ roster: rosterTab, content: contentTab, performance: campaignPerformanceTab, creators: campaignCreatorsTab,
-     messages: messagesTab, brief: briefTab, report: reportTab }[tab] || rosterTab)(mount, cp);
+  ({ roster: rosterTab, calendar: campaignCalendarTab, content: contentTab, performance: campaignPerformanceTab,
+     creators: campaignCreatorsTab, messages: messagesTab, brief: briefTab, report: reportTab }[tab] || rosterTab)(mount, cp);
 }
 
 /* ------------------------------ edit & delete ------------------------------ */
@@ -2328,10 +2380,12 @@ function rosterTab(mount, cp) {
       ${cp.notionDatabaseId ? `<button class="icon-btn sm" id="notionConfig" title="Change Notion database or field mapping">&#9881;</button>` : ''}
       <button class="btn primary sm" id="addCreators">+ Add creators</button>
     </div>
+    ${upcomingVisitsStrip(cp)}
     <div id="rosterBody"></div>`;
 
   const body = $('#rosterBody');
   if (state.boardMode === 'board') renderBoard(body, cp); else renderRosterTable(body, cp);
+  $$('.cal-item', mount).forEach((el) => el.addEventListener('click', () => showParticipant(el.dataset.pid)));
 
   $('#boardSeg').addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
@@ -4338,8 +4392,11 @@ function guessNotionField(propName, propType) {
   if (g !== 'skip') return g;
   const h = normHeader(propName);
   if (/email|이메일/.test(h)) return 'email';
-  /* a form's date question is nearly always the booking slot */
-  if (propType === 'date' || /when|date|time|schedule|slot|booking|예약|일정/.test(h)) return 'visitAt';
+  /* A form's date question is nearly always the booking slot — but Notion
+     adds its own bookkeeping timestamps to every database, and those must
+     not be mistaken for the slot the creator picked. */
+  const bookkeeping = /created|submitted|last edited|last_edited|updated|timestamp|생성|수정/.test(h);
+  if (!bookkeeping && (propType === 'date' || /when|date|time|schedule|slot|booking|visit|avail|예약|일정|방문/.test(h))) return 'visitAt';
   if (/note|message|comment|비고|메모/.test(h)) return 'note';
   return 'skip';
 }
@@ -4635,9 +4692,44 @@ async function runNotionSync(cp) {
     toast(SERVER.status === 'idle' ? summary + ' — saved' : summary + ' — click Save to store it on the server'));
 }
 
-function openNotionSync(cp) {
+/* A mapping saved before a field existed simply has no entry for it, and
+   because *a* mapping is present the sync skips the mapping screen and
+   never asks — so the new field silently stays empty forever. Fill in any
+   key the saved mapping has never seen by guessing it against the live
+   schema, and say which ones were added rather than doing it invisibly. */
+async function healNotionMapping(cp) {
+  const missing = NOTION_FIELD_DEFS.filter((f) => !(f.key in cp.notionMapping));
+  if (!missing.length) return [];
+  let props;
+  try {
+    const res = await fetch('/api/notion/database?id=' + encodeURIComponent(cp.notionDatabaseId));
+    const out = await res.json();
+    if (!res.ok) throw new Error(out.error || ('Server responded ' + res.status));
+    props = out.properties || [];
+    if (out.description && !String(cp.note || '').trim()) {
+      cp.notionDescription = out.description;
+      cp.note = out.description;
+    }
+  } catch (err) {
+    /* can't reach the schema — leave the mapping alone and let the sync
+       itself surface the failure rather than guessing blind */
+    return [];
+  }
+  const taken = new Set(Object.values(cp.notionMapping).filter(Boolean));
+  const added = [];
+  missing.forEach((f) => {
+    const hit = props.find((p) => !taken.has(p.name) && guessNotionField(p.name, p.type) === f.key);
+    cp.notionMapping[f.key] = hit ? hit.name : null;
+    if (hit) { taken.add(hit.name); added.push(`${f.label} → “${hit.name}”`); }
+  });
+  return added;
+}
+
+async function openNotionSync(cp) {
   if (!cp.notionDatabaseId) return openNotionLinkDrawer(cp);
   if (!cp.notionMapping) return openNotionMappingDrawer(cp);
+  const added = await healNotionMapping(cp);
+  if (added.length) toast('Mapped new field' + (added.length === 1 ? '' : 's') + ': ' + added.join(', '));
   runNotionSync(cp);
 }
 
