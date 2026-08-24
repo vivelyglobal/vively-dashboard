@@ -4237,6 +4237,9 @@ async function openNotionMappingDrawer(cp) {
     const out = await res.json();
     if (!res.ok) throw new Error(out.error || ('Server responded ' + res.status));
     schema = out;
+    /* the server may have resolved a page link down to the database it
+       contains — store that clean ID so later syncs skip the extra hop */
+    cp.notionDatabaseId = out.id;
   } catch (err) {
     $('#drawerBody').innerHTML = `
       <div class="note warn"><strong>Could not read that database.</strong> ${esc(err.message)}</div>
@@ -4439,6 +4442,7 @@ async function loadNotionImportSchema() {
     const out = await r.json();
     if (!r.ok) throw new Error(out.error || ('Server responded ' + r.status));
     notionImportState.schema = out;
+    notionImportState.databaseId = out.id; // resolved ID, in case a page link was pasted
     renderNotionImportStep2();
   } catch (err) {
     res.innerHTML = `<div class="note warn"><strong>Could not read that database.</strong> ${esc(err.message)}</div>`;

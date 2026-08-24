@@ -107,6 +107,30 @@ async function notionFetch(path, opts) {
   return body;
 }
 
+/* Notion's "Copy link" gives you a *page* link almost as often as the
+   database link itself — from inside one submission, from a column
+   header, from the database's own "view as page" — and pages 404 when
+   asked for as a database (with a message telling you so). Rather than
+   sending the user back to Notion to hunt for the exact right link,
+   try the ID as a database first and, if it turns out to be a page,
+   look inside that page for the database it holds. */
+async function resolveDatabaseId(id) {
+  try {
+    await notionFetch("/databases/" + id);
+    return id;
+  } catch (err) {
+    if (!/is a page, not a database/i.test(err.message || "")) throw err;
+  }
+  const children = await notionFetch("/blocks/" + id + "/children?page_size=100");
+  const dbBlock = (children.results || []).find((b) => b.type === "child_database");
+  if (!dbBlock) {
+    throw new Error(
+      "That link points to a page that doesn't contain a database. Open the actual submissions table in Notion (not one entry, and not the form itself) and copy its link from there."
+    );
+  }
+  return dbBlock.id;
+}
+
 function extractNotionValue(prop) {
   if (!prop) return "";
   switch (prop.type) {
@@ -272,14 +296,15 @@ app.get("/api/notion/database", async (req, res) => {
   if (!NOTION_TOKEN) {
     return res.status(503).json({ error: "Notion is not configured on the server yet — set NOTION_TOKEN." });
   }
-  const id = normalizeNotionId(req.query.id);
-  if (!id) return res.status(400).json({ error: "That doesn't look like a Notion database link or ID." });
+  const rawId = normalizeNotionId(req.query.id);
+  if (!rawId) return res.status(400).json({ error: "That doesn't look like a Notion database link or ID." });
   try {
+    const id = await resolveDatabaseId(rawId);
     const db = await notionFetch("/databases/" + id);
     const properties = Object.entries(db.properties || {}).map(([name, def]) => ({ name, type: def.type }));
     return res.json({
       ok: true,
-      id,
+      id, // the resolved database ID — may differ from what was pasted, e.g. a page link that held the database
       title: (db.title || []).map((t) => t.plain_text).join("") || "Untitled database",
       properties
     });
@@ -293,9 +318,10 @@ app.get("/api/notion/query", async (req, res) => {
   if (!NOTION_TOKEN) {
     return res.status(503).json({ error: "Notion is not configured on the server yet — set NOTION_TOKEN." });
   }
-  const id = normalizeNotionId(req.query.id);
-  if (!id) return res.status(400).json({ error: "That doesn't look like a Notion database link or ID." });
+  const rawId = normalizeNotionId(req.query.id);
+  if (!rawId) return res.status(400).json({ error: "That doesn't look like a Notion database link or ID." });
   try {
+    const id = await resolveDatabaseId(rawId);
     const rows = [];
     let cursor = null;
     let guard = 0;
