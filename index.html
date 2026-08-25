@@ -2432,7 +2432,7 @@ function renderBoard(mount, cp) {
           <div class="kb-meta"><span>ER ${cr.er}%</span><span>${esc(cr.country)}</span>${p.fee ? `<span>${wonK(p.fee)}</span>` : ''}</div>
           ${p.visitAt ? `<div style="font-size:11px;color:var(--text-2);margin-top:5px">🗓 ${esc(p.visitAt)}</div>` : ''}
           ${p.dropReason ? `<div style="font-size:11px;color:var(--text-3);margin-top:5px">${esc(p.dropReason)}</div>` : ''}
-          ${p.content && p.content.views ? `<div style="font-size:11px;color:var(--text-2);margin-top:5px">${kmb(p.content.views)} views</div>` : ''}
+          ${p.content && p.content.views ? `<div style="font-size:11px;color:var(--text-2);margin-top:5px">${kmb(p.content.views)} views${p.content.metricsAt ? ` <span style="color:var(--text-3)">as of ${esc(String(p.content.metricsAt).slice(0, 10))}</span>` : ''}</div>` : ''}
         </div>`;
       }).join('') || '<div style="font-size:12px;color:var(--text-3);padding:8px 2px">—</div>'}</div>
     </div>`;
@@ -4405,6 +4405,7 @@ const NOTION_FIELD_DEFS = [
   { key: 'likes',       label: 'Likes' },
   { key: 'comments',    label: 'Comments' },
   { key: 'shares',      label: 'Shares' },
+  { key: 'metricsAt',   label: 'Metrics updated (date the numbers were read)' },
   { key: 'visitAt',     label: 'Visit date & time (restaurant / salon booking)' },
   { key: 'status',      label: 'Status (maps to pipeline stage)' },
   { key: 'note',        label: 'Note / message' }
@@ -4430,6 +4431,7 @@ function guessNotionField(propName, propType) {
   if (/^likes?$|like count|좋아요/.test(h)) return 'likes';
   if (/^comments?$|comment count|댓글/.test(h)) return 'comments';
   if (/^shares?$|share count|공유/.test(h)) return 'shares';
+  if (/metrics updated|metric date|stats updated|측정일/.test(h)) return 'metricsAt';
   /* A form's date question is nearly always the booking slot — but Notion
      adds its own bookkeeping timestamps to every database, and those must
      not be mistaken for the slot the creator picked. */
@@ -4520,6 +4522,7 @@ function notionRowToApplicant(properties, mapping) {
     contentUrl: String(get('contentUrl') || '').trim(),
     note: String(get('note') || '').trim(),
     visitAt: notionVisitValue(get('visitAt')),
+    metricsAt: notionVisitValue(get('metricsAt')),
     metrics: NOTION_METRIC_KEYS.reduce((acc, k) => {
       const n = notionMetricValue(get(k));
       if (n != null) acc[k] = n;
@@ -4681,6 +4684,12 @@ function applyNotionContent(p, ap, cr) {
     if (ap.metrics[k] == null) return;
     if (p.content[k] !== ap.metrics[k]) { p.content[k] = ap.metrics[k]; touched++; }
   });
+  /* When the numbers were read. Views are a rolling figure, so a bare
+     count means little without the date it was taken — record Notion's
+     own "Metrics Updated" when set, else stamp today so a refreshed
+     figure is never left looking as old as the one it replaced. */
+  if (ap.metricsAt && p.content.metricsAt !== ap.metricsAt) { p.content.metricsAt = ap.metricsAt; touched++; }
+  else if (hasMetrics && touched && !ap.metricsAt) p.content.metricsAt = iso(TODAY);
   /* views recorded but nothing split out — treat it all as organic so the
      performance tab's paid/organic maths doesn't read as 100% paid */
   if (p.content.views && !p.content.paidViews && !p.content.organicViews) {
@@ -5658,7 +5667,7 @@ const SHEET_SCHEMA = {
     ['content.submittedAt','s'],['content.views','n'],['content.paidViews','n'],['content.organicViews','n'],
     ['content.likes','n'],['content.comments','n'],['content.shares','n'],['content.saves','n'],
     ['content.reach','n'],['content.profileVisits','n'],['content.followsGained','n'],['content.linkClicks','n'],
-    ['content.boosted','b'],['content.topCountries','a'],['content.curve','c']
+    ['content.boosted','b'],['content.topCountries','a'],['content.curve','c'],['content.metricsAt','s']
   ]
 };
 
