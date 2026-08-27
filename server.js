@@ -315,6 +315,17 @@ function publicUser(user) {
 }
 
 app.use(express.json({ limit: "10mb" }));
+
+/* The React build, served alongside the original single-file dashboard.
+   "/" still serves index.html exactly as before, so nothing anyone is
+   using today changes; "/next" serves the converted app while the two
+   are brought to parity. When they match, "/" points here instead. */
+const NEXT_DIR = path.join(__dirname, "dist", "next");
+if (fs.existsSync(NEXT_DIR)) {
+  app.use("/next", express.static(NEXT_DIR));
+  app.get("/next/*", (req, res) => res.sendFile(path.join(NEXT_DIR, "index.html")));
+}
+
 app.use(express.static(__dirname));
 
 app.get("/api/health", (req, res) => {
