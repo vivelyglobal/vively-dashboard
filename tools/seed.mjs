@@ -56,5 +56,21 @@ CPS.forEach((c, ci) => {
     });
   }
 });
+/* two creators deliberately share one slot, so the double-booking check
+   has something real to find */
+participants.filter((p) => p.campaignId === 'cp1' && p.visitAt).slice(0, 2)
+  .forEach((p) => { p.visitAt = `${mk(3)} 19:00`; });
+/* and one unreadable slot */
+const junk = participants.find((p) => p.campaignId === 'cp2' && p.visitAt);
+if (junk) junk.visitAt = 'next tuesday-ish';
+
+campaigns.forEach((c) => { if (c.fulfilment === 'visit') { c.venue = c.brand + ', Seoul'; c.timezone = 'Asia/Seoul'; } });
+
+const appointments = [{
+  id: 'ap-shoot', title: 'Sushikoji — filming day', date: mk(5), endDate: '', startTime: '10:00',
+  endTime: '16:00', timezone: 'Asia/Seoul', location: 'https://meet.google.com/abc-defg-hij',
+  description: 'Full day shoot', campaignId: 'cp1', createdAt: new Date().toISOString()
+}];
+
 console.log(JSON.stringify({ savedAt: new Date().toISOString(),
-  db: { creators, campaigns, participants }, settings: { hideBlocked: true } }));
+  db: { creators, campaigns, participants, appointments }, settings: { hideBlocked: true } }));

@@ -3,7 +3,7 @@
 import { chromium } from 'playwright';
 import fs from 'fs';
 const seed = fs.readFileSync((process.env.VIVELY_SEED || 'tmp/seed.json'), 'utf8');
-const base = process.argv[2] || 'http://localhost:3111/next/';
+const base = process.argv[2] || 'http://localhost:3120/next/';
 
 const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
 const ctx = await b.newContext();

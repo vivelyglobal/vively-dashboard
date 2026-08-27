@@ -9,6 +9,7 @@ import { SETTINGS, isBlocked, selectable } from '../model/settings.js';
 import { campaignStats, dailySeries, liveOf, partsOf, viralScore } from '../model/stats.js';
 import { suggestScore } from '../model/suggest.js';
 import { CAMPAIGN_STATUS, CATEGORIES, COUNTRIES, STAGES, STAGE_IDX, stageOf, viewCurve } from '../model/vocab.js';
+import { GCAL_PREFS } from '../sync/gcal.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { FLAGS, avatarHtml, copyText, daysAgo, downloadFile, emptyState, flagPill, stagePill, statCard, statusPill, tierPill, toCsv, whoHtml } from '../ui/html.js';
 import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';
@@ -208,6 +209,8 @@ export function campaignFormHtml(cp) {
       <div class="field"><label>Ad spend (₩)</label><input type="number" id="ecAd" value="${cp.adSpend || 0}"/></div>
       <div class="field"><label>Budget (₩)</label><input type="number" id="ecBudget" value="${cp.budget || 0}"/></div>
       <div class="field"><label>Owner</label><input type="text" id="ecOwner" value="${esc(cp.owner || '')}"/></div>
+      <div class="field"><label>Venue address</label><input type="text" id="ecVenue" placeholder="서울 종로구 …" value="${esc(cp.venue || '')}"/></div>
+      <div class="field"><label>Timezone</label><input type="text" id="ecTz" placeholder="${esc(GCAL_PREFS.defaultTz)}" value="${esc(cp.timezone || '')}"/></div>
     </div>
     <div class="field"><label>Deliverables</label><input type="text" id="ecDeliv" value="${esc(cp.deliverables || '')}"/></div>
     <div class="field"><label>Platforms (comma separated)</label><input type="text" id="ecPlatforms" value="${esc((cp.platforms || []).join(', '))}"/></div>
@@ -232,6 +235,10 @@ export function readCampaignForm(cp) {
   cp.adSpend = +$('#ecAd').value || 0;
   cp.budget = +$('#ecBudget').value || 0;
   cp.owner = $('#ecOwner').value.trim();
+  /* the address a creator is actually going to, and the clock that address
+     runs on — both go straight onto the calendar event */
+  cp.venue = $('#ecVenue').value.trim();
+  cp.timezone = $('#ecTz').value.trim();
   cp.deliverables = $('#ecDeliv').value.trim();
   cp.platforms = list($('#ecPlatforms').value);
   cp.hashtags = list($('#ecHashtags').value);

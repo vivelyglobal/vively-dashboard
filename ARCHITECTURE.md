@@ -51,9 +51,28 @@ components, and disappears when it is empty.
 npm run check:modules   # every name resolves, every import is really exported,
                         # and every module still matches index.html byte for byte
 npm test                # the logic that earned a bug this year, pinned down
-npm run check:browser   # walks 38 routes through both versions and diffs the
+npm run check:browser   # walks the routes through both versions and diffs the
                         # words on screen  (needs: npx playwright install chromium)
+npm run check:calendar  # drives the Google Calendar sync against a stand-in
+                        # Google and counts what lands on the calendar
 ```
+
+### After editing index.html
+
+`src/` is derived from `index.html`, so an edit there leaves the two out of
+step. To bring them back:
+
+```bash
+python3 tools/reanchor.py <(git show HEAD:index.html)   # move the line ranges
+node tools/rebuild-split.mjs                            # rewrite src/
+node tools/autoimport.mjs <changed-module.js> ...       # refresh import headers
+npm run check:modules
+```
+
+`tools/reanchor.py` maps each range through a diff rather than matching line
+text — half the boundaries in this file are a bare `}`, and anchoring on that
+silently lets one module swallow its neighbour. It checks for exactly that
+and refuses.
 
 `tools/split.mjs` is the record of the extraction: for each module, the exact
 line ranges of `index.html` it came from and a checksum of the result. It is

@@ -4,6 +4,7 @@ import { dayKey, visitsByDay } from '../model/calendar.js';
 import { DB, notify } from '../model/db.js';
 import { avColor } from '../model/vocab.js';
 import { $, $$, esc } from '../ui/dom.js';
+import { appointmentsPanel, calendarGoogleStrip, wireAppointmentsPanel, wireCalendarGoogleStrip } from './calendar.js';
 import { showParticipant } from './campaigns.js';
 import { state } from './overview.js';
 
@@ -40,6 +41,7 @@ export function renderCampaignCalendar(view, scope) {
   const todayKey = dayKey(TODAY);
 
   view.innerHTML = `
+    ${calendarGoogleStrip()}
     <div class="card-head" style="margin-bottom:14px;">
       <button class="icon-btn sm" id="calPrev" title="Previous month">&#8249;</button>
       <span style="font-size:14px;font-weight:500;min-width:170px;text-align:center">${esc(monthLabel)}</span>
@@ -83,7 +85,11 @@ export function renderCampaignCalendar(view, scope) {
           </div>`;
         }).join('')}
       </div>
-    </div>`;
+    </div>
+    ${appointmentsPanel(scope)}`;
+
+  wireCalendarGoogleStrip();
+  wireAppointmentsPanel();
 
   $('#calPrev').addEventListener('click', () => { state.calMonth = new Date(cur.getFullYear(), cur.getMonth() - 1, 1); notify(); });
   $('#calNext').addEventListener('click', () => { state.calMonth = new Date(cur.getFullYear(), cur.getMonth() + 1, 1); notify(); });

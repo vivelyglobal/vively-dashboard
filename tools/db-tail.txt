@@ -1,0 +1,20 @@
+
+/* ------------------------------------------------------------------
+   Change notification. The single-file version called render() and
+   updateSaveBadge() from the middle of the data layer; the app
+   subscribes here instead, so the data layer no longer has to know
+   what is on screen.
+   ------------------------------------------------------------------ */
+const dataListeners = new Set();
+const statusListeners = new Set();
+const fire = (set) => set.forEach((fn) => { try { fn(); } catch (e) { console.error(e); } });
+
+/* the workspace itself changed — whatever is on screen has to be rebuilt */
+export function subscribe(fn) { dataListeners.add(fn); return () => dataListeners.delete(fn); }
+export function notify() { fire(dataListeners); fire(statusListeners); }
+
+/* only where the workspace is saved changed. This used to repaint one
+   badge, and it must stay that cheap: a full rebuild here would tear down
+   any drawer or form the person had open a moment ago. */
+export function subscribeStatus(fn) { statusListeners.add(fn); return () => statusListeners.delete(fn); }
+export function notifyStatus() { fire(statusListeners); }

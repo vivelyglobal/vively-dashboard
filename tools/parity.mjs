@@ -17,7 +17,7 @@ const ROUTES = [
   '#/analytics/trend', '#/analytics/cost', '#/analytics/breakdown', '#/analytics/viral',
   '#/messages/cp1/outreach', '#/contracts/msa/draft', '#/contracts/msa/clauses', '#/contracts/msa/preview',
   '#/contracts/sow/draft', '#/contracts/short/draft',
-  '#/settings/templates', '#/settings/blacklist', '#/settings/sheet', '#/settings/integrations',
+  '#/settings/templates', '#/settings/blacklist', '#/settings/sheet', '#/settings/calendar', '#/settings/integrations',
   '#/settings/sources', '#/settings/report', '#/settings/definitions'
 ];
 
@@ -52,8 +52,8 @@ async function walk(base) {
   return { out, errs };
 }
 
-const legacy = await walk('http://localhost:3111/');
-const next   = await walk('http://localhost:3111/next/');
+const legacy = await walk('http://localhost:3120/');
+const next   = await walk('http://localhost:3120/next/');
 if (legacy.errs.length) console.log('legacy page errors:', legacy.errs);
 if (next.errs.length)   console.log('react page errors :', next.errs);
 

@@ -3,7 +3,7 @@ import { toast } from '../ui/overlay.js';
 import { scheduleSheetPush } from '../sync/sheets.js';
 
 /* ---------------- the workspace ---------------- */
-export const DB = { creators: [], campaigns: [], participants: [] };
+export const DB = { creators: [], campaigns: [], participants: [], appointments: [] };
 export const byCreator = {};
 export const byCampaign = {};
 
@@ -63,7 +63,8 @@ export let lastServerJson = '';
 export let serverSaveTimer = null;
 
 export function workspacePayload() {
-  return { creators: DB.creators, campaigns: DB.campaigns, participants: DB.participants };
+  return { creators: DB.creators, campaigns: DB.campaigns, participants: DB.participants,
+           appointments: DB.appointments };
 }
 
 export async function serverLoad() {
@@ -80,6 +81,7 @@ export async function serverLoad() {
     DB.creators = db.creators || [];
     DB.campaigns = db.campaigns || [];
     DB.participants = db.participants || [];
+    DB.appointments = db.appointments || [];
     DB.creators.forEach((c) => (byCreator[c.id] = c));
     DB.campaigns.forEach((c) => (byCampaign[c.id] = c));
     if (settings && typeof settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = settings.hideBlocked;
@@ -163,6 +165,7 @@ export function loadPersisted() {
     DB.creators = db.creators || [];
     DB.campaigns = db.campaigns || [];
     DB.participants = db.participants || [];
+    DB.appointments = db.appointments || [];
     DB.creators.forEach((c) => (byCreator[c.id] = c));
     DB.campaigns.forEach((c) => (byCampaign[c.id] = c));
     if (saved.settings && typeof saved.settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = saved.settings.hideBlocked;

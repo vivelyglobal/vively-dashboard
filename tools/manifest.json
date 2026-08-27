@@ -1,0 +1,654 @@
+[
+ {
+  "file": "lib/rng.js",
+  "ranges": [
+   [
+    779,
+    800
+   ]
+  ],
+  "imports": [],
+  "sha256": "055bb64b9824dcced3bbcf8174b52f7b555984b863403151d8b63a47918b5838"
+ },
+ {
+  "file": "lib/dates.js",
+  "ranges": [
+   [
+    801,
+    806
+   ]
+  ],
+  "imports": [],
+  "sha256": "02b91e57174acbcf3bfc8bec7a964c22bd0b5a5a06fa63260fed2bfbe9e4d85f"
+ },
+ {
+  "file": "lib/format.js",
+  "ranges": [
+   [
+    1164,
+    1187
+   ]
+  ],
+  "imports": [],
+  "sha256": "d225f3c53931ea7f60d905a58bc260f044a5ed0dc4f1b10136a7fc48826eec41"
+ },
+ {
+  "file": "lib/csv.js",
+  "ranges": [
+   [
+    5577,
+    5595
+   ]
+  ],
+  "imports": [],
+  "sha256": "ef6d38377afa64f2cc6d8843bb3088b439330bbccbe377aa6e788e0a54466917"
+ },
+ {
+  "file": "model/vocab.js",
+  "ranges": [
+   [
+    807,
+    866
+   ]
+  ],
+  "imports": [],
+  "sha256": "fde6aa7698ed449079f212a0d3c6b1beb8bd388d5a84dea7541fdbe47b499536"
+ },
+ {
+  "file": "model/settings.js",
+  "ranges": [
+   [
+    1289,
+    1292
+   ]
+  ],
+  "imports": [],
+  "sha256": "78e25bd5b99bd043d39d25299b7dbc4c770d70ea8db5d2ff8bd8d9c8b2538f0f"
+ },
+ {
+  "file": "ui/dom.js",
+  "ranges": [
+   [
+    1552,
+    1557
+   ]
+  ],
+  "imports": [],
+  "sha256": "d75e6b2fd306a04e9b48e3652f44ba11e5b09bba33664fe024ec7486b649ca13"
+ },
+ {
+  "file": "ui/overlay.js",
+  "ranges": [
+   [
+    1558,
+    1583
+   ]
+  ],
+  "imports": [
+   "import { $ } from './dom.js';"
+  ],
+  "sha256": "36b13beedc50d734028139ebd3b3a543ffeafe6595215ab7acbc1a8f6136a307"
+ },
+ {
+  "file": "ui/html.js",
+  "ranges": [
+   [
+    1584,
+    1690
+   ]
+  ],
+  "imports": [
+   "import { $, esc } from './dom.js';",
+   "import { toast } from './overlay.js';",
+   "import { TODAY, DAY } from '../lib/dates.js';",
+   "import { kmb } from '../lib/format.js';",
+   "import { stageOf, CAMPAIGN_STATUS, avColor, initials } from '../model/vocab.js';",
+   "import { DB } from '../model/db.js';",
+   "import { selectable } from '../model/settings.js';"
+  ],
+  "sha256": "f1bd83e0370fb26fb5511c021d795a6fb19a4a693f185f303a2a9ffe26aadfc5"
+ },
+ {
+  "file": "model/db.js",
+  "ranges": [
+   [
+    867,
+    1046
+   ]
+  ],
+  "imports": [
+   "import { SETTINGS } from './settings.js';",
+   "import { toast } from '../ui/overlay.js';",
+   "import { scheduleSheetPush } from '../sync/sheets.js';"
+  ],
+  "sha256": "1624d2289d4a1615fe304e1a19658cf3f3922250d2a3ab633181a7c238273990"
+ },
+ {
+  "file": "model/creators.js",
+  "ranges": [
+   [
+    1047,
+    1163
+   ]
+  ],
+  "imports": [
+   "import { STAGE_IDX, tierOf } from './vocab.js';",
+   "import { DB, byCreator } from './db.js';"
+  ],
+  "sha256": "171e71cf0bd596f3b777d0ee8c589fd60b335988e94bb6912e47831244278ee6"
+ },
+ {
+  "file": "model/stats.js",
+  "ranges": [
+   [
+    1188,
+    1288
+   ]
+  ],
+  "imports": [
+   "import { TODAY, DAY, addDays, iso } from '../lib/dates.js';",
+   "import { engagementsOf } from '../lib/format.js';",
+   "import { STAGES, STAGE_IDX } from './vocab.js';",
+   "import { DB, byCreator } from './db.js';"
+  ],
+  "sha256": "7988abd79e2500f6fb419d0bf2c0bbc3e601ffebf27e02018ca5e171f8f2be4c"
+ },
+ {
+  "file": "model/suggest.js",
+  "ranges": [
+   [
+    1293,
+    1312
+   ]
+  ],
+  "imports": [
+   "import { TODAY, DAY } from '../lib/dates.js';"
+  ],
+  "sha256": "9f2aa0fd21957355c0ea21d82f34dddcdccae4a6e50fb3b2c3c74b37c66195b6"
+ },
+ {
+  "file": "model/calendar.js",
+  "ranges": [
+   [
+    1970,
+    1994
+   ]
+  ],
+  "imports": [
+   "import { DB, byCreator, byCampaign } from './db.js';",
+   "import { parseVisitSlot } from '../import/notion.js';"
+  ],
+  "sha256": "74ffb2723477db8d033e29aae4f7a8489672e596587118631c08592b17a5824e"
+ },
+ {
+  "file": "charts/index.js",
+  "ranges": [
+   [
+    1313,
+    1551
+   ]
+  ],
+  "imports": [
+   "import { $ } from '../ui/dom.js';",
+   "import { dLabel } from '../lib/dates.js';",
+   "import { num, kmb, pct } from '../lib/format.js';"
+  ],
+  "sha256": "d236eb0ee5cfdc181a95c4b08bc801cf5e27070a9cee845dd538d276b8ca1078"
+ },
+ {
+  "file": "lib/xlsx.js",
+  "ranges": [
+   [
+    3905,
+    4176
+   ]
+  ],
+  "imports": [
+   "import { toast } from '../ui/overlay.js';"
+  ],
+  "sha256": "ed0bc7864d5ca17790630cc399f45907a0b08c578811d121d79df6057f44cc00"
+ },
+ {
+  "file": "import/excel.js",
+  "ranges": [
+   [
+    4177,
+    4398
+   ]
+  ],
+  "imports": [],
+  "sha256": "cc18387c9c818bc67ce69986c63ff5a80fb6ec521007150d757e987935ffc3b9"
+ },
+ {
+  "file": "import/notion.js",
+  "ranges": [
+   [
+    4399,
+    4934
+   ]
+  ],
+  "imports": [
+   "import { rnd } from '../lib/rng.js';",
+   "import { TODAY, iso } from '../lib/dates.js';",
+   "import { won } from '../lib/format.js';",
+   "import { STAGE_IDX, tierOf, avColor } from '../model/vocab.js';",
+   "import { DB, byCreator, SERVER, serverSave, notify } from '../model/db.js';",
+   "import { findCreatorByHandle, mergeDuplicateCreators } from '../model/creators.js';",
+   "import { $, $$, esc } from '../ui/dom.js';",
+   "import { toast, openDrawer, closeDrawer } from '../ui/overlay.js';",
+   "import { STATUS_MAP, normHeader, guessField, handleFromUrl, parseFollowers, parseDateCell, countryOf } from './excel.js';"
+  ],
+  "sha256": "caf4341ec9f3d0c83555243715d8d34d74488348c1064fb2403601f450c174f3"
+ },
+ {
+  "file": "import/metrics.js",
+  "ranges": [
+   [
+    4935,
+    5131
+   ]
+  ],
+  "imports": [
+   "import { iso } from '../lib/dates.js';",
+   "import { parseCsvText } from '../lib/csv.js';",
+   "import { num } from '../lib/format.js';",
+   "import { readXlsx } from '../lib/xlsx.js';",
+   "import { byCreator, SERVER, serverSave, notify } from '../model/db.js';",
+   "import { partsOf } from '../model/stats.js';",
+   "import { $, $$, esc } from '../ui/dom.js';",
+   "import { toast, openDrawer, closeDrawer } from '../ui/overlay.js';",
+   "import { statCard } from '../ui/html.js';",
+   "import { normHeader, handleFromUrl } from './excel.js';",
+   "import { notionVisitValue, notionMetricValue, applyNotionContent } from './notion.js';"
+  ],
+  "sha256": "b3316228722e86ac2bd5b2a4c684624f58a953091ef525ea3c0b5eadb01bc566"
+ },
+ {
+  "file": "sync/sheets.js",
+  "ranges": [
+   [
+    5825,
+    6069
+   ]
+  ],
+  "imports": [
+   "import { TODAY, iso } from '../lib/dates.js';",
+   "import { avColor } from '../model/vocab.js';",
+   "import { DB, byCreator, byCampaign, persist, notify } from '../model/db.js';",
+   "import { $, esc } from '../ui/dom.js';",
+   "import { toast } from '../ui/overlay.js';"
+  ],
+  "sha256": "182cb504e32495b3f0942322de14d325e47142f2f0a2c410a60c188300483158"
+ },
+ {
+  "file": "docs/docx.js",
+  "ranges": [
+   [
+    6160,
+    6290
+   ]
+  ],
+  "imports": [
+   "import { makeZip, xmlEsc } from '../lib/xlsx.js';",
+   "import { esc } from '../ui/dom.js';",
+   "import { toast } from '../ui/overlay.js';"
+  ],
+  "sha256": "e1430a47db5e26338a27d7f3654866dcbd1cfcbf6d2eeab4dee9ab881da36860"
+ },
+ {
+  "file": "docs/contracts.js",
+  "ranges": [
+   [
+    6291,
+    6762
+   ]
+  ],
+  "imports": [
+   "import { TODAY, iso } from '../lib/dates.js';",
+   "import { nf } from '../lib/format.js';",
+   "import { $ } from '../ui/dom.js';"
+  ],
+  "sha256": "4a2bca4eb40613471b343deda9a11018016e06e7f9addc07574b9b70f6a3ac07"
+ },
+ {
+  "file": "views/overview.js",
+  "ranges": [
+   [
+    1691,
+    1954
+   ]
+  ],
+  "imports": [
+   "import { fitHeight, funnelView, lineChart, splitBar } from '../charts/index.js';",
+   "import { DAY, TODAY } from '../lib/dates.js';",
+   "import { engagementsOf, kmb, money2, num, pct, wonK } from '../lib/format.js';",
+   "import { DB, byCampaign, byCreator, notify } from '../model/db.js';",
+   "import { campaignStats, dailySeries, funnelOf, partsOf, portfolioStats, viralScore } from '../model/stats.js';",
+   "import { STAGE_IDX } from '../model/vocab.js';",
+   "import { $, esc } from '../ui/dom.js';",
+   "import { emptyState, statCard, statusPill, whoHtml } from '../ui/html.js';"
+  ],
+  "sha256": "1b3ef013c07818bde50737c7165e2006ae3eba076a3a88cec2c4ce5377d031e1"
+ },
+ {
+  "file": "views/calendarView.js",
+  "ranges": [
+   [
+    1995,
+    2125
+   ]
+  ],
+  "imports": [
+   "import { notionLinkedCampaigns, parseVisitSlot, syncAllNotionCampaigns } from '../import/notion.js';",
+   "import { TODAY } from '../lib/dates.js';",
+   "import { dayKey, visitsByDay } from '../model/calendar.js';",
+   "import { DB, notify } from '../model/db.js';",
+   "import { avColor } from '../model/vocab.js';",
+   "import { $, $$, esc } from '../ui/dom.js';",
+   "import { appointmentsPanel, calendarGoogleStrip, wireAppointmentsPanel, wireCalendarGoogleStrip } from './calendar.js';",
+   "import { showParticipant } from './campaigns.js';",
+   "import { state } from './overview.js';"
+  ],
+  "sha256": "6396032548ddcf365fe101465d9808f639fc3b950caeaef578ffc524a705d299"
+ },
+ {
+  "file": "views/campaigns.js",
+  "ranges": [
+   [
+    1955,
+    1969
+   ],
+   [
+    2126,
+    2864
+   ]
+  ],
+  "imports": [
+   "import { SERIES_HEX, barsH, fitHeight, lineChart, sparkSvg, splitBar } from '../charts/index.js';",
+   "import { openMetricsImport } from '../import/metrics.js';",
+   "import { notionLinkedCampaigns, openNotionMappingDrawer, syncAllNotionCampaigns } from '../import/notion.js';",
+   "import { DAY, TODAY, addDays, dLabel, iso } from '../lib/dates.js';",
+   "import { engagementsOf, kmb, money2, num, pct, won, wonK } from '../lib/format.js';",
+   "import { recomputeCreatorStats } from '../model/creators.js';",
+   "import { DB, SERVER, byCampaign, byCreator, notify, persist, serverSave } from '../model/db.js';",
+   "import { SETTINGS, isBlocked, selectable } from '../model/settings.js';",
+   "import { campaignStats, dailySeries, liveOf, partsOf, viralScore } from '../model/stats.js';",
+   "import { suggestScore } from '../model/suggest.js';",
+   "import { CAMPAIGN_STATUS, CATEGORIES, COUNTRIES, STAGES, STAGE_IDX, stageOf, viewCurve } from '../model/vocab.js';",
+   "import { GCAL_PREFS } from '../sync/gcal.js';",
+   "import { $, $$, esc } from '../ui/dom.js';",
+   "import { FLAGS, avatarHtml, copyText, daysAgo, downloadFile, emptyState, flagPill, stagePill, statCard, statusPill, tierPill, toCsv, whoHtml } from '../ui/html.js';",
+   "import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';",
+   "import { campaignCalendarTab, renderCampaignCalendar, upcomingVisitsStrip } from './calendarView.js';",
+   "import { openImportWizard } from './excelImport.js';",
+   "import { briefTab, messagesTab } from './messages.js';",
+   "import { openNotionDiagnostic, openNotionSync } from './notionDiag.js';",
+   "import { openNotionImportWizard } from './notionImport.js';",
+   "import { state } from './overview.js';",
+   "import { reportTab } from './report.js';"
+  ],
+  "sha256": "97787f57434ec5c45575905e003b3ed83184ab9faf125e277e994f9442fa13c7"
+ },
+ {
+  "file": "views/analytics.js",
+  "ranges": [
+   [
+    2865,
+    3081
+   ]
+  ],
+  "imports": [
+   "import { SERIES_HEX, barsH, fitHeight, lineChart, splitBar } from '../charts/index.js';",
+   "import { engagementsOf, kmb, money2, num, pct, wonK } from '../lib/format.js';",
+   "import { DB, byCampaign, byCreator } from '../model/db.js';",
+   "import { campaignStats, dailySeries, portfolioStats, viralScore } from '../model/stats.js';",
+   "import { CONTENT_FORMATS, PLATFORMS, STAGE_IDX } from '../model/vocab.js';",
+   "import { $, esc } from '../ui/dom.js';",
+   "import { downloadFile, emptyState, statCard, toCsv, whoHtml } from '../ui/html.js';",
+   "import { costCards } from './campaigns.js';",
+   "import { rangeSeg, state, wireRange } from './overview.js';"
+  ],
+  "sha256": "d9ff40e4df78d3c5f845bbf951fcd7fc6da5153114aaeb82a3b6361e66515e3b"
+ },
+ {
+  "file": "views/messages.js",
+  "ranges": [
+   [
+    3082,
+    3503
+   ]
+  ],
+  "imports": [
+   "import { funnelView } from '../charts/index.js';",
+   "import { parseVisitSlot } from '../import/notion.js';",
+   "import { dLabel } from '../lib/dates.js';",
+   "import { num, pct, won, wonK } from '../lib/format.js';",
+   "import { DB, byCampaign, byCreator } from '../model/db.js';",
+   "import { campaignStats, funnelOf, partsOf } from '../model/stats.js';",
+   "import { stageOf } from '../model/vocab.js';",
+   "import { $, esc } from '../ui/dom.js';",
+   "import { copyText, downloadFile, emptyState, toCsv } from '../ui/html.js';",
+   "import { toast } from '../ui/overlay.js';",
+   "import { activeCampaigns, state } from './overview.js';"
+  ],
+  "sha256": "d05f99ed3fb74b58209b5f1b0c695415696b41d0e415716d79b980af9a29d1e5"
+ },
+ {
+  "file": "views/report.js",
+  "ranges": [
+   [
+    3504,
+    3643
+   ]
+  ],
+  "imports": [
+   "import { DAY, TODAY, dLabel } from '../lib/dates.js';",
+   "import { money2, num, pct, won, wonK } from '../lib/format.js';",
+   "import { byCreator } from '../model/db.js';",
+   "import { campaignStats, liveOf, partsOf, viralScore } from '../model/stats.js';",
+   "import { $, esc } from '../ui/dom.js';",
+   "import { copyText, downloadFile, toCsv } from '../ui/html.js';",
+   "import { toast } from '../ui/overlay.js';"
+  ],
+  "sha256": "2e2fc25ae9604e1110f948f6bcb23fb8cfe86ffe8379f321f54f786274998006"
+ },
+ {
+  "file": "views/creators.js",
+  "ranges": [
+   [
+    3644,
+    3904
+   ]
+  ],
+  "imports": [
+   "import { SERIES_HEX, barsH, splitBar } from '../charts/index.js';",
+   "import { TODAY, dLabel, iso } from '../lib/dates.js';",
+   "import { engagementsOf, kmb, num, pct, won } from '../lib/format.js';",
+   "import { DB, byCampaign, byCreator, notify } from '../model/db.js';",
+   "import { SETTINGS, isBlocked } from '../model/settings.js';",
+   "import { suggestScore } from '../model/suggest.js';",
+   "import { CATEGORIES, COUNTRIES, PLATFORMS } from '../model/vocab.js';",
+   "import { $, $$, esc } from '../ui/dom.js';",
+   "import { FLAGS, avatarHtml, daysAgo, downloadFile, emptyState, flagPill, sortTable, stagePill, statCard, tierPill, toCsv, whoHtml } from '../ui/html.js';",
+   "import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';",
+   "import { activeCampaigns, state } from './overview.js';"
+  ],
+  "sha256": "c08700e626734af96267f90e8a92eb2ded438a9235937990aaaa0a6ffdd6cf11"
+ },
+ {
+  "file": "views/notionDiag.js",
+  "ranges": [
+   [
+    5132,
+    5230
+   ]
+  ],
+  "imports": [
+   "import { NOTION_FIELD_DEFS, healNotionMapping, notionRowToApplicant, openNotionLinkDrawer, openNotionMappingDrawer, runNotionSync } from '../import/notion.js';",
+   "import { findCreatorByHandle } from '../model/creators.js';",
+   "import { DB } from '../model/db.js';",
+   "import { $, esc } from '../ui/dom.js';",
+   "import { copyText } from '../ui/html.js';",
+   "import { openDrawer, toast } from '../ui/overlay.js';"
+  ],
+  "sha256": "7ec58838629ee44f8b6bb0462ca03d82089a61b0fcc6741952cf376f04dc49ac"
+ },
+ {
+  "file": "views/notionImport.js",
+  "ranges": [
+   [
+    5231,
+    5517
+   ]
+  ],
+  "imports": [
+   "import { countryOf } from '../import/excel.js';",
+   "import { NOTION_FIELD_DEFS, guessNotionField, notionRowToApplicant } from '../import/notion.js';",
+   "import { TODAY, addDays, iso } from '../lib/dates.js';",
+   "import { num } from '../lib/format.js';",
+   "import { rnd } from '../lib/rng.js';",
+   "import { findCreatorByHandle, mergeDuplicateCreators } from '../model/creators.js';",
+   "import { DB, SERVER, byCampaign, byCreator, serverSave } from '../model/db.js';",
+   "import { CAMPAIGN_STATUS, CATEGORIES, COUNTRIES, STAGE_IDX, avColor, stageOf, tierOf } from '../model/vocab.js';",
+   "import { $, $$, esc } from '../ui/dom.js';",
+   "import { stagePill, statCard } from '../ui/html.js';",
+   "import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';"
+  ],
+  "sha256": "b6ee0c55e6e39c1bc8407f0e073a59988619813efbbd9f1583a480ba7ed1d7d8"
+ },
+ {
+  "file": "views/excelImport.js",
+  "ranges": [
+   [
+    5518,
+    5576
+   ],
+   [
+    5596,
+    5824
+   ]
+  ],
+  "imports": [
+   "import { IMPORT_FIELDS, TEMPLATES, countryOf, detectTemplate, guessField, parseImportRows } from '../import/excel.js';",
+   "import { parseCsvText } from '../lib/csv.js';",
+   "import { TODAY, addDays, iso } from '../lib/dates.js';",
+   "import { num } from '../lib/format.js';",
+   "import { rnd } from '../lib/rng.js';",
+   "import { downloadXlsx, readXlsx } from '../lib/xlsx.js';",
+   "import { findCreatorByHandle, mergeDuplicateCreators } from '../model/creators.js';",
+   "import { DB, SERVER, byCampaign, byCreator, serverSave } from '../model/db.js';",
+   "import { CAMPAIGN_STATUS, CATEGORIES, COUNTRIES, STAGE_IDX, avColor, stageOf, tierOf } from '../model/vocab.js';",
+   "import { $, $$, esc } from '../ui/dom.js';",
+   "import { stagePill, statCard } from '../ui/html.js';",
+   "import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';"
+  ],
+  "sha256": "f17fb809383983d23617f8835840a4e0c899ba85ce996f2ea2c44c97bf858bd4"
+ },
+ {
+  "file": "views/sheetsSettings.js",
+  "ranges": [
+   [
+    6070,
+    6159
+   ]
+  ],
+  "imports": [
+   "import { DB } from '../model/db.js';",
+   "import { SHEET_SCHEMA, SYNC, renderSyncUi, saveSyncConfig, sheetCall, sheetPull, sheetPush, syncBadgeHtml } from '../sync/sheets.js';",
+   "import { $, esc } from '../ui/dom.js';",
+   "import { toast } from '../ui/overlay.js';"
+  ],
+  "sha256": "c24014c05addb561898e4ced051f0cfaeb79d95f21f844742fd3a60354cc1f42"
+ },
+ {
+  "file": "views/contracts.js",
+  "ranges": [
+   [
+    6763,
+    7094
+   ]
+  ],
+  "imports": [
+   "import { BILLING_LABELS, CONTRACT, CONTRACT_DOCS, saveContractDefaults } from '../docs/contracts.js';",
+   "import { blocksToHtml, blocksToText, downloadDocx } from '../docs/docx.js';",
+   "import { DB, byCampaign, notify } from '../model/db.js';",
+   "import { $, $$, esc } from '../ui/dom.js';",
+   "import { copyText } from '../ui/html.js';",
+   "import { toast } from '../ui/overlay.js';"
+  ],
+  "sha256": "be422af34e73a0842501f2f17815a054bce0ad42267a5c41d50d1338c6a07b63"
+ },
+ {
+  "file": "views/settings.js",
+  "ranges": [
+   [
+    7095,
+    7373
+   ]
+  ],
+  "imports": [
+   "import { STATUS_MAP, TEMPLATES } from '../import/excel.js';",
+   "import { iso } from '../lib/dates.js';",
+   "import { num } from '../lib/format.js';",
+   "import { duplicateCreatorGroups, mergeDuplicateCreators } from '../model/creators.js';",
+   "import { DB, byCampaign, byCreator, clearPersisted, notify, persist, persistState } from '../model/db.js';",
+   "import { SETTINGS } from '../model/settings.js';",
+   "import { SOURCES, tierOf } from '../model/vocab.js';",
+   "import { $, esc } from '../ui/dom.js';",
+   "import { downloadFile, flagPill, stagePill, statCard, whoHtml } from '../ui/html.js';",
+   "import { toast } from '../ui/overlay.js';",
+   "import { settingsCalendar } from './calendar.js';",
+   "import { settingsSheets } from './sheetsSettings.js';"
+  ],
+  "sha256": "ca191daf6a16496c80743b54616adffc73d343a107ec8df419abb4d915633d21"
+ },
+ {
+  "file": "styles.css",
+  "ranges": [
+   [
+    11,
+    662
+   ]
+  ],
+  "raw": true,
+  "imports": [],
+  "sha256": "7a1b5cedf7f805d96c0b54f7bc2b4cc8be3f4784bfff0cda6a1e5a5b4a02ddc7"
+ },
+ {
+  "file": "sync/gcal.js",
+  "ranges": [
+   [
+    7374,
+    7722
+   ]
+  ],
+  "imports": [
+   "import { kmb } from '../lib/format.js';",
+   "import { DB, byCampaign, byCreator, notify, serverSave } from '../model/db.js';",
+   "import { $ } from '../ui/dom.js';",
+   "import { toast } from '../ui/overlay.js';"
+  ],
+  "sha256": "7a25480aba8fa2420a4ad397a6ed28f5dbdc1a1661978d0c5a473e9a18c9be75",
+  "current": true
+ },
+ {
+  "file": "views/calendar.js",
+  "ranges": [
+   [
+    7725,
+    7975
+   ]
+  ],
+  "imports": [
+   "import { TODAY, iso } from '../lib/dates.js';",
+   "import { num } from '../lib/format.js';",
+   "import { rnd } from '../lib/rng.js';",
+   "import { DB, byCampaign, notify } from '../model/db.js';",
+   "import { GCAL, GCAL_PREFS, calendarItems, gcalCall, removeCalendarEvent, runCalendarSync, saveGcalPrefs, testCalendarConnection, tzOffsetMinutes } from '../sync/gcal.js';",
+   "import { $, $$, esc } from '../ui/dom.js';",
+   "import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';"
+  ],
+  "sha256": "4aab5cddbd3469b086b057cd73da42856a1da89844329328f1d6a5e595b8d276",
+  "current": true
+ }
+]

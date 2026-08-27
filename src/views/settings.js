@@ -8,6 +8,7 @@ import { SOURCES, tierOf } from '../model/vocab.js';
 import { $, esc } from '../ui/dom.js';
 import { downloadFile, flagPill, stagePill, statCard, whoHtml } from '../ui/html.js';
 import { toast } from '../ui/overlay.js';
+import { settingsCalendar } from './calendar.js';
 import { settingsSheets } from './sheetsSettings.js';
 
 /* ============================================================
@@ -17,6 +18,7 @@ export const SETTINGS_ITEMS = [
   { id: 'templates',    label: 'Campaign templates',  sub: 'the two Excel sheets' },
   { id: 'blacklist',    label: 'Creator blacklist',   sub: 'blocked, flagged, preferred' },
   { id: 'sheet',        label: 'Google Sheet',        sub: 'shared store for the team' },
+  { id: 'calendar',     label: 'Google Calendar',     sub: 'push bookings to a calendar' },
   { id: 'integrations', label: 'Instagram & TikTok',  sub: 'what a connection can pull' },
   { id: 'sources',      label: 'Data sources',        sub: 'where creators come from' },
   { id: 'report',       label: 'Report hand-off',     sub: 'Vively Toolkit' },
@@ -27,6 +29,7 @@ export function renderSettings(view, item) {
   if (item === 'templates')  return settingsTemplates(view);
   if (item === 'blacklist')  return settingsBlacklist(view);
   if (item === 'sheet')      return settingsSheets(view);
+  if (item === 'calendar')   return settingsCalendar(view);
   if (item === 'sources') {
     const dupGroups = duplicateCreatorGroups();
     const dupExtra = dupGroups.reduce((a, g) => a + g.list.length - 1, 0);
@@ -250,6 +253,7 @@ export async function restoreBackup(e) {
     if (!db || !Array.isArray(db.creators) || !Array.isArray(db.campaigns)) throw new Error('That file is not a VIVELY workspace backup.');
     clearPersisted();
     DB.creators = db.creators; DB.campaigns = db.campaigns; DB.participants = db.participants || [];
+    DB.appointments = db.appointments || [];
     DB.creators.forEach((c) => (byCreator[c.id] = c));
     DB.campaigns.forEach((c) => (byCampaign[c.id] = c));
     if (saved.settings && typeof saved.settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = saved.settings.hideBlocked;

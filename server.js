@@ -260,6 +260,139 @@ function extractNotionValue(prop) {
 }
 
 /* ------------------------------------------------------------------
+   Google Calendar.
+
+   Setup on Google's side (one time):
+     1. Google Cloud console → new project → enable the Calendar API.
+     2. Create a service account. Add a key, type JSON, and download it.
+     3. Put the whole JSON into GOOGLE_SERVICE_ACCOUNT on Render.
+        Base64 is accepted too, for pasting into a one-line field.
+     4. In Google Calendar, make a calendar for this (e.g. "VIVELY
+        Creator Visits"), open its settings → Share with specific
+        people → add the service account's client_email → give it
+        "Make changes to events". Put that calendar's ID into
+        GOOGLE_CALENDAR_ID.
+
+   Step 4 is the one people miss, and its absence looks exactly like a
+   bad key: the API answers 404 for a calendar the service account has
+   not been invited to. Same trap as sharing a Notion database with an
+   integration.
+
+   A service account is its own account with its own (empty) calendar
+   list — it cannot see anything of yours until you share it. That is
+   also why events land on a dedicated calendar rather than a personal
+   one, and why nobody has to sign in through a consent screen.
+   ------------------------------------------------------------------ */
+const GOOGLE_SERVICE_ACCOUNT = process.env.GOOGLE_SERVICE_ACCOUNT || "";
+const GOOGLE_CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID || "";
+/* overridable so the test harness can point at a local stand-in; unset in
+   production, which is every deployment that does not say otherwise */
+const GCAL_API = process.env.GOOGLE_CALENDAR_API || "https://www.googleapis.com/calendar/v3";
+const GCAL_SCOPE = "https://www.googleapis.com/auth/calendar.events";
+
+function googleCredentials() {
+  if (!GOOGLE_SERVICE_ACCOUNT) return null;
+  let raw = GOOGLE_SERVICE_ACCOUNT.trim();
+  /* accept the raw JSON or a base64 copy of it — a private key is full of
+     newlines, and pasting it into a single-line env field mangles them */
+  if (!raw.startsWith("{")) {
+    try { raw = Buffer.from(raw, "base64").toString("utf8").trim(); } catch (e) { /* fall through */ }
+  }
+  let key;
+  try { key = JSON.parse(raw); } catch (e) {
+    throw new Error("GOOGLE_SERVICE_ACCOUNT is not valid JSON (or base64 of it).");
+  }
+  if (!key.client_email || !key.private_key) {
+    throw new Error("GOOGLE_SERVICE_ACCOUNT is missing client_email or private_key.");
+  }
+  /* some hosting UIs turn real newlines into the two characters \n */
+  key.private_key = String(key.private_key).replace(/\\n/g, "\n");
+  return key;
+}
+
+const b64url = (buf) => Buffer.from(buf).toString("base64")
+  .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+let gcalToken = null;   // { value, expiresAt }
+
+/* Service accounts authenticate by signing a short-lived assertion with
+   their private key and trading it for an access token. No library — it
+   is a signature and one POST, and this keeps the dependency list at
+   express + mongodb. */
+async function googleAccessToken() {
+  if (gcalToken && gcalToken.expiresAt > Date.now() + 60000) return gcalToken.value;
+  const key = googleCredentials();
+  if (!key) return null;
+
+  const now = Math.floor(Date.now() / 1000);
+  const header = b64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  const claim = b64url(JSON.stringify({
+    iss: key.client_email,
+    scope: GCAL_SCOPE,
+    aud: key.token_uri || "https://oauth2.googleapis.com/token",
+    iat: now,
+    exp: now + 3600
+  }));
+  const signer = crypto.createSign("RSA-SHA256");
+  signer.update(header + "." + claim);
+  const assertion = header + "." + claim + "." + b64url(signer.sign(key.private_key));
+
+  const res = await fetch(key.token_uri || "https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion
+    })
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body.access_token) {
+    const detail = body.error_description || body.error || `token endpoint responded ${res.status}`;
+    throw new Error("Google refused the service account key — " + detail);
+  }
+  gcalToken = { value: body.access_token, expiresAt: Date.now() + (body.expires_in || 3600) * 1000 };
+  return gcalToken.value;
+}
+
+async function gcalFetch(path, opts) {
+  const token = await googleAccessToken();
+  if (!token) throw new Error("Google Calendar is not configured on the server yet.");
+  const o = opts || {};
+  const res = await fetch(GCAL_API + path, {
+    method: o.method || "GET",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: o.body ? JSON.stringify(o.body) : undefined
+  });
+  if (res.status === 204) return {};
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = (body.error && (body.error.message || body.error.status)) || `Google responded ${res.status}`;
+    const err = new Error(res.status === 404
+      ? msg + " — check the calendar is shared with the service account's client_email."
+      : msg);
+    err.status = res.status;
+    throw err;
+  }
+  return body;
+}
+
+const calendarPath = (id) => "/calendars/" + encodeURIComponent(id || GOOGLE_CALENDAR_ID);
+
+/* Google event ids are base32hex: digits 0-9 and letters a-v ONLY. w, x, y
+   and z are not legal, which rules out readable ids — "vively-cp1" is
+   rejected twice over, for the y and the hyphen. So the id is a hash of the
+   thing it belongs to: deterministic, so the same booking always lands on
+   the same event however many times the sync runs, and hex digits are a
+   subset of the legal alphabet so it is valid by construction.
+
+   The readable identifiers live in extendedProperties instead, where they
+   can be searched on and are not constrained. */
+function gcalEventId(kind, key) {
+  const digest = crypto.createHash("sha256").update(String(kind) + ":" + String(key)).digest("hex");
+  return "v" + digest.slice(0, 30);          /* 31 chars, all within [0-9a-v] */
+}
+
+/* ------------------------------------------------------------------
    Accounts (signup/login) live in MongoDB now, same as the workspace
    data — the flat file below is kept ONLY as a fallback for when
    MONGODB_URI isn't set (e.g. running this locally without Atlas).
@@ -452,6 +585,146 @@ app.get("/api/notion/query", async (req, res) => {
     return res.json({ ok: true, count: rows.length, rows });
   } catch (err) {
     console.error("GET /api/notion/query failed:", err.message);
+    return res.status(502).json({ error: err.message });
+  }
+});
+
+/* ---------------------------- google calendar ---------------------------- */
+
+/* client_email is deliberately returned: it is not a secret, and it is the
+   exact string that has to be pasted into the calendar's sharing settings.
+   Showing it in the app saves digging the JSON key back out. */
+app.get("/api/calendar/status", async (req, res) => {
+  if (!GOOGLE_SERVICE_ACCOUNT || !GOOGLE_CALENDAR_ID) {
+    return res.json({
+      ok: true, configured: false,
+      missing: [!GOOGLE_SERVICE_ACCOUNT && "GOOGLE_SERVICE_ACCOUNT", !GOOGLE_CALENDAR_ID && "GOOGLE_CALENDAR_ID"].filter(Boolean)
+    });
+  }
+  let clientEmail = null;
+  try { clientEmail = googleCredentials().client_email; } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+  try {
+    const cal = await gcalFetch(calendarPath());
+    return res.json({
+      ok: true, configured: true, clientEmail,
+      calendarId: GOOGLE_CALENDAR_ID, summary: cal.summary || "", timeZone: cal.timeZone || ""
+    });
+  } catch (err) {
+    return res.status(err.status === 404 ? 404 : 502).json({ error: err.message, clientEmail });
+  }
+});
+
+app.get("/api/calendar/events", async (req, res) => {
+  try {
+    const q = new URLSearchParams({ maxResults: "2500", singleEvents: "true", showDeleted: "false" });
+    if (req.query.timeMin) q.set("timeMin", String(req.query.timeMin));
+    if (req.query.timeMax) q.set("timeMax", String(req.query.timeMax));
+    /* every event this dashboard writes carries a private tag, so the sync
+       can ask Google "what of mine is already here?" instead of trusting
+       local state — that is what survives a lost workspace */
+    if (req.query.tag) q.append("privateExtendedProperty", "vivelySource=" + String(req.query.tag));
+
+    const rows = [];
+    let pageToken = null, guard = 0;
+    do {
+      if (pageToken) q.set("pageToken", pageToken); else q.delete("pageToken");
+      const body = await gcalFetch(calendarPath() + "/events?" + q.toString());
+      (body.items || []).forEach((e) => rows.push({
+        id: e.id, summary: e.summary || "", description: e.description || "", location: e.location || "",
+        start: (e.start || {}).dateTime || (e.start || {}).date || "",
+        end: (e.end || {}).dateTime || (e.end || {}).date || "",
+        timeZone: (e.start || {}).timeZone || "",
+        status: e.status, updated: e.updated, htmlLink: e.htmlLink,
+        props: (e.extendedProperties && e.extendedProperties.private) || {}
+      }));
+      pageToken = body.nextPageToken || null;
+      guard++;
+    } while (pageToken && guard < 20);
+    return res.json({ ok: true, count: rows.length, events: rows });
+  } catch (err) {
+    console.error("GET /api/calendar/events failed:", err.message);
+    return res.status(502).json({ error: err.message });
+  }
+});
+
+/* Create-or-update, keyed on an id the dashboard chooses. Creating with a
+   known id is what makes a repeated sync land on the same event instead of
+   a second copy; if Google says that id is taken, this patches it rather
+   than failing, so re-running the sync is always safe. */
+app.post("/api/calendar/event", async (req, res) => {
+  const e = req.body || {};
+  if (!e.key || !e.summary || !e.start || !e.end) {
+    return res.status(400).json({ error: "key, summary, start and end are all required." });
+  }
+  /* derived here, not sent by the browser: one place decides what an event
+     is called, so a client that gets it wrong cannot create a duplicate */
+  const eventId = gcalEventId(e.kind || "visit", e.key);
+  const payload = {
+    id: eventId,
+    summary: e.summary,
+    description: e.description || "",
+    location: e.location || "",
+    start: { dateTime: e.start, timeZone: e.timeZone || undefined },
+    end:   { dateTime: e.end,   timeZone: e.timeZone || undefined },
+    extendedProperties: { private: Object.assign(
+      { vivelySource: "vively-dashboard", vivelyKind: e.kind || "visit", vivelyKey: String(e.key) },
+      e.props || {}) }
+  };
+  try {
+    const created = await gcalFetch(calendarPath() + "/events", { method: "POST", body: payload });
+    return res.json({ ok: true, action: "created", event: { id: created.id, htmlLink: created.htmlLink, updated: created.updated } });
+  } catch (err) {
+    if (err.status !== 409) {
+      console.error("POST /api/calendar/event failed:", err.message);
+      return res.status(502).json({ error: err.message });
+    }
+  }
+  try {
+    const { id, ...patch } = payload;
+    const updated = await gcalFetch(calendarPath() + "/events/" + encodeURIComponent(eventId), { method: "PATCH", body: patch });
+    return res.json({ ok: true, action: "updated", event: { id: updated.id, htmlLink: updated.htmlLink, updated: updated.updated } });
+  } catch (err) {
+    console.error("PATCH /api/calendar/event failed:", err.message);
+    return res.status(502).json({ error: err.message });
+  }
+});
+
+app.post("/api/calendar/event/delete", async (req, res) => {
+  const b = req.body || {};
+  const id = b.id ? String(b.id) : (b.key ? gcalEventId(b.kind || "visit", b.key) : "");
+  if (!id) return res.status(400).json({ error: "id, or kind and key, are required." });
+  try {
+    await gcalFetch(calendarPath() + "/events/" + encodeURIComponent(id), { method: "DELETE" });
+    return res.json({ ok: true, deleted: id });
+  } catch (err) {
+    /* already gone is the outcome we wanted anyway */
+    if (err.status === 404 || err.status === 410) return res.json({ ok: true, deleted: id, alreadyGone: true });
+    console.error("POST /api/calendar/event/delete failed:", err.message);
+    return res.status(502).json({ error: err.message });
+  }
+});
+
+/* Writes one probe event and removes it again, so "is this wired up
+   correctly?" has a real answer instead of a hopeful one. */
+app.post("/api/calendar/test", async (req, res) => {
+  const id = gcalEventId("test", Date.now());
+  const start = new Date(Date.now() + 86400000);
+  const iso = (d) => d.toISOString().replace(/\.\d+Z$/, "Z");
+  try {
+    const created = await gcalFetch(calendarPath() + "/events", { method: "POST", body: {
+      id,
+      summary: "VIVELY connection test — safe to ignore",
+      description: "Written by the dashboard to check its Google Calendar connection. It is removed again immediately.",
+      start: { dateTime: iso(start) },
+      end: { dateTime: iso(new Date(start.getTime() + 900000)) },
+      extendedProperties: { private: { vivelySource: "vively-dashboard", vivelyKind: "test" } }
+    } });
+    await gcalFetch(calendarPath() + "/events/" + encodeURIComponent(created.id), { method: "DELETE" });
+    return res.json({ ok: true, wrote: created.id, cleanedUp: true });
+  } catch (err) {
+    console.error("POST /api/calendar/test failed:", err.message);
     return res.status(502).json({ error: err.message });
   }
 });
