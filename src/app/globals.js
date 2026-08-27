@@ -9,11 +9,15 @@
 import { closeDrawer, toast } from '../ui/overlay.js';
 import { showParticipant, openNewCampaign } from '../views/campaigns.js';
 import { showCreator } from '../views/creators.js';
+import { clearFlag } from '../views/settings.js';
 import { downloadTemplate, openImportWizard } from '../views/excelImport.js';
 import { openNotionImportWizard } from '../views/notionImport.js';
 import { sheetPush, sheetPull } from '../sync/sheets.js';
 
 Object.assign(window, {
-  closeDrawer, toast, showParticipant, showCreator, downloadTemplate,
+  clearFlag, closeDrawer, toast, showParticipant, showCreator, downloadTemplate,
   openImportWizard, openNotionImportWizard, openNewCampaign, sheetPush, sheetPull
 });
+
+/* tools/check-inline-handlers.mjs fails the build if a view starts calling
+   something from an inline handler that is not on this list. */
