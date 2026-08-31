@@ -83,7 +83,6 @@ export function partnerRows(partner) {
       creator: p.fullName || cr.name || cr.handle || '',
       handle: cr.handle || '',
       igUrl: cr.handle ? 'https://www.instagram.com/' + String(cr.handle).replace(/^@/, '') + '/' : '',
-      acceptMessage: p.acceptMessage || '',
       visitDate: m ? m[1] : '',
       visitTime: m && m[2] ? m[2] : '',
       email: cr.email || '',
@@ -91,7 +90,6 @@ export function partnerRows(partner) {
       gender: cr.gender || '',
       followers: cr.followers || 0,
       remark: p.remark || '',
-      kakao: p.contact || cr.contact || '',
       contentUrl: (p.content && p.content.url) || '',
       nationality: p.nationality || cr.nationality || cr.country || '',
       /* the creator's own answer to the form's Notes question. p.note is a

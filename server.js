@@ -812,7 +812,6 @@ function buildPartnerRows(db, partner) {
       creator: p.fullName || cr.name || handle,
       handle,
       igUrl: handle ? "https://www.instagram.com/" + String(handle).replace(/^@/, "") + "/" : "",
-      acceptMessage: p.acceptMessage || "",
       visitDate: m ? m[1] : "",
       visitTime: m && m[2] ? m[2] : "",
       email: cr.email || "",
@@ -820,13 +819,13 @@ function buildPartnerRows(db, partner) {
       gender: cr.gender || "",
       followers: cr.followers || 0,
       remark: p.remark || "",
-      kakao: p.contact || cr.contact || "",
       contentUrl: (p.content && p.content.url) || "",
       nationality: p.nationality || cr.nationality || cr.country || "",
       notes: p.formNotes || "",
       otherSns: p.otherSns || ""
-      /* deliberately absent: cr.payout, p.note, p.fee, p.address, and every
-         campaign that is not this partner's */
+      /* deliberately absent: cr.payout, p.note, p.fee, p.address, the Kakao
+         ID, the accept/reject message, and every campaign that is not this
+         partner's */
     };
   });
 

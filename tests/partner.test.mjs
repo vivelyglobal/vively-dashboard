@@ -106,18 +106,26 @@ test('every column the partner asked for is present', () => {
   const r = buildPartnerRows(db, 'SPLABAB').rows.find((x) => x.pid === 'a-c1');
   assert.equal(r.creator, 'One');
   assert.equal(r.igUrl, 'https://www.instagram.com/one/');
-  assert.equal(r.acceptMessage, '승인되었습니다');
   assert.equal(r.visitDate, '2026-09-04');
   assert.equal(r.visitTime, '19:00');
   assert.equal(r.email, 'one@x.com');
   assert.equal(r.gender, 'F');
   assert.equal(r.followers, 12000);
   assert.equal(r.remark, '2명 방문 예정');
-  assert.equal(r.kakao, 'kakao-one');
   assert.equal(r.contentUrl, 'https://instagram.com/reel/xyz');
   assert.equal(r.nationality, 'Korean');
   assert.equal(r.notes, '채식주의자입니다');
   assert.equal(r.otherSns, 'https://tiktok.com/@one');
+});
+
+test('the Kakao ID and the accept/reject message are not sent at all', () => {
+  const out = buildPartnerRows(db, 'SPLABAB');
+  const json = JSON.stringify(out);
+  assert.ok(!json.includes('kakao-one'), 'the Kakao ID reached the partner payload');
+  assert.ok(!json.includes('승인되었습니다'), 'the accept/reject message reached the partner payload');
+  const row = out.rows[0];
+  assert.equal(row.kakao, undefined);
+  assert.equal(row.acceptMessage, undefined);
 });
 
 test('the creator form note and the internal note are different fields', () => {

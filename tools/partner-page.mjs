@@ -71,8 +71,18 @@ await step('nothing sensitive is anywhere in the delivered page', async () => {
 
 await step('the columns the POC asked for are all there', async () => {
   const heads = await p.$$eval('th', (n) => n.map((x) => x.textContent.replace(/\s+/g, ' ').trim()));
-  for (const want of ['크리에이터', '방문 일정', '예약 시간', 'Email', 'IG 팔로워수', '성별', '국적', 'Kakao ID', '참고', 'Notes'])
+  for (const want of ['크리에이터', '방문 일정', '예약 시간', 'Email', 'IG 팔로워수', '성별', '국적', '참고', 'Notes'])
     if (!heads.some((h) => h.includes(want))) throw new Error('missing column: ' + want + ' | ' + heads.join(' / '));
+  for (const gone of ['Kakao', 'Message'])
+    if (heads.some((h) => h.includes(gone))) throw new Error(gone + ' should have been removed');
+});
+
+await step('the table is not skewed by the removed columns', async () => {
+  const heads = await p.$$eval('thead th', (n) => n.length);
+  const cells = await p.$$eval('tbody tr:not(.thread)', (rows) =>
+    [...new Set(rows.map((r) => r.querySelectorAll('td').length))]);
+  if (cells.length !== 1 || cells[0] !== heads)
+    throw new Error(`${heads} headers vs ${JSON.stringify(cells)} cells per row`);
 });
 
 await step('no creator awaiting approval appears anywhere', async () => {

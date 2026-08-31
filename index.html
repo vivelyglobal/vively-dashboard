@@ -4567,7 +4567,6 @@ const NOTION_FIELD_DEFS = [
   { key: 'gender',      label: '성별 · Gender' },
   { key: 'formNotes',   label: 'Notes (what the creator wrote)' },
   { key: 'remark',      label: '참고 · Remark (shown to the partner)' },
-  { key: 'acceptMessage', label: 'Accepted / Rejected message' },
   { key: 'visitAt',     label: 'Visit date & time (restaurant / salon booking)' },
   { key: 'status',      label: 'Status (maps to pipeline stage)' },
   { key: 'note',        label: 'Note / message' }
@@ -4591,6 +4590,12 @@ function guessNotionField(propName, propType) {
      reads, so getting it wrong is not cosmetic. */
   if (/^notes?$|^비고$/.test(h)) return 'formNotes';
   if (/^remarks?$|^참고$|^특이사항$/.test(h)) return 'remark';
+  /* The forms carry a formula column that composes the accept/reject wording
+     from Status. Nothing here uses it, and without an explicit rule it falls
+     into the note/message catch-all below and lands in the internal note. */
+  if (/accepted.*rejected|rejected.*accepted|승인.*메시지/.test(h)) return 'skip';
+  /* likewise the reminder formulas, which are Notion-side workflow prompts */
+  if (/^reminder/.test(h)) return 'skip';
   if (/number of people|people visiting|인원/.test(h)) return 'skip';
   /* Deliberately never mapped. A form that collects bank details is holding
      the most sensitive thing in this whole system in plain text, and pulling
@@ -4598,7 +4603,6 @@ function guessNotionField(propName, propType) {
      export and — one mistake later — a partner link. Payout details are
      entered in the dashboard, where stripPayout keeps them from travelling. */
   if (/bank|account number|계좌|은행/.test(h)) return 'skip';
-  if (/accepted.*rejected|rejected.*accepted|승인.*메시지/.test(h)) return 'acceptMessage';
   if (/^성별$|^gender$|^sex$/.test(h)) return 'gender';
 
   const g = guessField(propName, 0, []);
@@ -4705,8 +4709,6 @@ function notionRowToApplicant(properties, mapping) {
        note — this one is shown to the partner */
     formNotes: String(get('formNotes') || '').trim(),
     remark: String(get('remark') || '').trim(),
-    /* a Notion formula that composes the accept/reject wording from Status */
-    acceptMessage: String(get('acceptMessage') || '').trim(),
     gender: String(get('gender') || '').trim(),
     visitAt: notionVisitValue(get('visitAt')),
     metricsAt: notionVisitValue(get('metricsAt')),
@@ -4947,17 +4949,28 @@ async function runNotionSync(cp, opts) {
     }
     if (p) {
       if (adoptedRow) adopted++; else updated++;
-      p.fullName = ap.fullName || p.fullName;
-      p.address = ap.address || p.address;
-      p.contact = ap.contact || p.contact;
-      p.nationality = ap.nationality || p.nationality;
-      p.otherSns = ap.otherSns || p.otherSns;
-      p.formNotes = ap.formNotes || p.formNotes;
-      p.remark = ap.remark || p.remark;
-      p.acceptMessage = ap.acceptMessage || p.acceptMessage;
+      /* A mapped column is authoritative, and that has to include an answer
+         someone has cleared. The old "ap.x || p.x" kept the previous value
+         whenever the new one was empty, so a field emptied in Notion stayed
+         filled here forever - which is what made the roster look stuck.
+         A field with no column mapped to it is still left alone, so this
+         cannot wipe something Notion was never asked about. */
+      const mapped = new Set(Object.values(cp.notionMapping || {}).filter((v) => v && v !== 'skip'));
+      const merge = (key, cur) => (mapped.has(key) ? (ap[key] || '') : (ap[key] || cur));
+
+      p.fullName = merge('fullName', p.fullName);
+      p.address = merge('address', p.address);
+      p.contact = merge('contact', p.contact);
+      p.nationality = merge('nationality', p.nationality);
+      p.otherSns = merge('otherSns', p.otherSns);
+      p.formNotes = merge('formNotes', p.formNotes);
+      p.remark = merge('remark', p.remark);
       if (ap.gender && cr) cr.gender = ap.gender;
       p.importedStatus = ap.statusRaw || p.importedStatus;
-      if (ap.visitAt && ap.visitAt !== p.visitAt) { p.visitAt = ap.visitAt; reslotted++; }
+      /* a booking removed in Notion has to clear here too, or the calendar
+         keeps an event for a visit that is no longer happening */
+      const nextVisit = merge('visitAt', p.visitAt);
+      if (nextVisit !== p.visitAt) { p.visitAt = nextVisit; reslotted++; }
       /* Notion is the source of truth for the pipeline stage: when someone
          is marked accepted / visited / uploaded over there, the card has to
          move here too. Only a *forward* move is applied automatically, so a
@@ -4982,7 +4995,7 @@ async function runNotionSync(cp, opts) {
         dropReason: ap.dropReason, revisions: 0, note: ap.note,
         fullName: ap.fullName, address: ap.address, contact: ap.contact, nationality: ap.nationality,
         visitAt: ap.visitAt, arrivingDate: '', otherSns: ap.otherSns, importedStatus: ap.statusRaw,
-        formNotes: ap.formNotes, acceptMessage: ap.acceptMessage, remark: ap.remark || '',
+        formNotes: ap.formNotes, remark: ap.remark || '',
         notionPageId: row.pageId, content: null
       };
       applyStageDates(np, ap.stage, cp);
@@ -7634,7 +7647,6 @@ function partnerRows(partner) {
       creator: p.fullName || cr.name || cr.handle || '',
       handle: cr.handle || '',
       igUrl: cr.handle ? 'https://www.instagram.com/' + String(cr.handle).replace(/^@/, '') + '/' : '',
-      acceptMessage: p.acceptMessage || '',
       visitDate: m ? m[1] : '',
       visitTime: m && m[2] ? m[2] : '',
       email: cr.email || '',
@@ -7642,7 +7654,6 @@ function partnerRows(partner) {
       gender: cr.gender || '',
       followers: cr.followers || 0,
       remark: p.remark || '',
-      kakao: p.contact || cr.contact || '',
       contentUrl: (p.content && p.content.url) || '',
       nationality: p.nationality || cr.nationality || cr.country || '',
       /* the creator's own answer to the form's Notes question. p.note is a

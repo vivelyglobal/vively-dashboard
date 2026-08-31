@@ -134,5 +134,20 @@ test('Notion bookkeeping columns are not read as a booking slot', () => {
 test('the columns added for the partner view map correctly', () => {
   assert.equal(guessNotionField('성별', 'select'), 'gender');
   assert.equal(guessNotionField('Gender', 'select'), 'gender');
-  assert.equal(guessNotionField('Accepted/Rejected Message', 'formula'), 'acceptMessage');
+  assert.equal(guessNotionField('Remark', 'rich_text'), 'remark');
+  assert.equal(guessNotionField('참고', 'rich_text'), 'remark');
+});
+
+test("Notion's own workflow formulas are skipped, not filed as notes", () => {
+  /* each of these would otherwise hit the note/message catch-all and land in
+     the internal note, which is where private remarks are kept */
+  assert.equal(guessNotionField('Accepted/Rejected Message', 'formula'), 'skip');
+  assert.equal(guessNotionField('Reminder for Brand', 'formula'), 'skip');
+  assert.equal(guessNotionField('Reminder to Creator', 'formula'), 'skip');
+});
+
+test('bank details are refused by a rule, not by accident', () => {
+  assert.equal(guessNotionField('Bank Details', 'rich_text'), 'skip');
+  assert.equal(guessNotionField('계좌번호', 'rich_text'), 'skip');
+  assert.equal(guessNotionField('Account Number', 'rich_text'), 'skip');
 });

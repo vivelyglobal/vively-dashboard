@@ -69,8 +69,8 @@ const kmb = (v) => !v ? '—' : v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v >= 100
 const COLS = [
   ['크리에이터', 'Creator'], ['상태', '초대 확인'], ['방문 일정', 'Visit'], ['예약 시간', 'Time'],
   ['IG 팔로워수', 'Followers'], ['성별', 'Gender'], ['국적', 'Nationality'],
-  ['IG 프로필', 'Profile'], ['Email', ''], ['Kakao ID', ''], ['Other SNS', ''],
-  ['콘텐츠 링크', 'Content'], ['참고', 'Remark'], ['Notes', ''], ['Message', ''], ['', '']
+  ['IG 프로필', 'Profile'], ['Email', ''], ['Other SNS', ''],
+  ['콘텐츠 링크', 'Content'], ['참고', 'Remark'], ['Notes', ''], ['', '']
 ];
 
 let DATA = null, filter = 'all', open = new Set();
@@ -121,12 +121,10 @@ function render() {
           <td>${esc(r.nationality || '—')}</td>
           <td>${r.igUrl ? `<a href="${esc(r.igUrl)}" target="_blank" rel="noopener">열기</a>` : '—'}</td>
           <td>${esc(r.email || '—')}</td>
-          <td>${esc(r.kakao || '—')}</td>
           <td>${r.otherSns ? `<a href="${esc(r.otherSns)}" target="_blank" rel="noopener">열기</a>` : '—'}</td>
           <td>${r.contentUrl ? `<a href="${esc(r.contentUrl)}" target="_blank" rel="noopener">보기</a>` : '—'}</td>
           <td class="wide">${esc(r.remark || '—')}</td>
           <td class="wide">${esc(r.notes || '—')}</td>
-          <td class="wide">${esc(r.acceptMessage || '—')}</td>
           <td><button class="cbtn ${cs.length ? 'has' : ''}" data-c="${esc(r.pid)}">${cs.length ? '댓글 ' + cs.length : '댓글'}</button></td>
         </tr>
         ${open.has(r.pid) ? `<tr class="thread"><td colspan="${COLS.length}"><div class="inner">
