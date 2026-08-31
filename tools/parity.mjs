@@ -17,7 +17,7 @@ const ROUTES = [
   '#/analytics/trend', '#/analytics/cost', '#/analytics/breakdown', '#/analytics/viral',
   '#/messages/cp1/outreach', '#/contracts/msa/draft', '#/contracts/msa/clauses', '#/contracts/msa/preview',
   '#/contracts/sow/draft', '#/contracts/short/draft',
-  '#/settings/templates', '#/settings/blacklist', '#/settings/sheet', '#/settings/calendar', '#/settings/integrations',
+  '#/settings/templates', '#/settings/blacklist', '#/settings/sheet', '#/settings/calendar', '#/settings/partners', '#/settings/integrations',
   '#/settings/sources', '#/settings/report', '#/settings/definitions'
 ];
 

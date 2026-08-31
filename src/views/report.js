@@ -130,7 +130,11 @@ export function reportTab(mount, cp) {
     `vively-${cp.brand.toLowerCase().replace(/\W+/g, '-')}-report.csv`, 'text/csv;charset=utf-8'));
   $('#rpJson').addEventListener('click', () => downloadFile(JSON.stringify({
     campaign: cp, stats: s, summary: $('#rpSum').value,
-    participants: partsOf(cp.id).map((p) => ({ ...p, creator: byCreator[p.creatorId] }))
+    participants: partsOf(cp.id).map((p) => {
+      /* the hand-off goes to a brand or a partner — never with a bank account in it */
+      const { payout, ...creator } = byCreator[p.creatorId] || {};
+      return { ...p, creator };
+    })
   }, null, 2), `vively-${cp.id}-campaign.json`, 'application/json'));
   $('#rpProof').addEventListener('click', () => {
     const missing = partsOf(cp.id).filter((p) => p.content).filter((p) =>

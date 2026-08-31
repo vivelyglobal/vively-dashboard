@@ -8,7 +8,7 @@ import { DB, SERVER, byCampaign, byCreator, notify, persist, serverSave } from '
 import { SETTINGS, isBlocked, selectable } from '../model/settings.js';
 import { campaignStats, dailySeries, liveOf, partsOf, viralScore } from '../model/stats.js';
 import { suggestScore } from '../model/suggest.js';
-import { CAMPAIGN_STATUS, CATEGORIES, COUNTRIES, STAGES, STAGE_IDX, stageOf, viewCurve } from '../model/vocab.js';
+import { CAMPAIGN_STATUS, CATEGORIES, COUNTRIES, STAGES, STAGE_IDX, avColor, stageOf, viewCurve } from '../model/vocab.js';
 import { GCAL_PREFS } from '../sync/gcal.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { FLAGS, avatarHtml, copyText, daysAgo, downloadFile, emptyState, flagPill, stagePill, statCard, statusPill, tierPill, toCsv, whoHtml } from '../ui/html.js';
@@ -190,6 +190,9 @@ export function renderCampaign(view, id, tab) {
 export function campaignFormHtml(cp) {
   return `
     <div class="grid g2" style="gap:10px">
+      <div class="field"><label>Partner (who the work is for)</label>
+        <input type="text" id="ecPartner" list="partnerList" placeholder="e.g. SPLABAB — leave empty for your own work" value="${esc(cp.partner || '')}"/>
+        <datalist id="partnerList">${[...new Set(DB.campaigns.map((c) => c.partner).filter(Boolean))].map((x) => `<option value="${esc(x)}">`).join('')}</datalist></div>
       <div class="field"><label>Brand / client</label><input type="text" id="ecBrand" value="${esc(cp.brand)}"/></div>
       <div class="field"><label>Project name</label><input type="text" id="ecName" value="${esc(cp.name)}"/></div>
       <div class="field"><label>Type</label><select id="ecKind">${
@@ -221,6 +224,10 @@ export function campaignFormHtml(cp) {
 
 export function readCampaignForm(cp) {
   const list = (v) => v.split(',').map((x) => x.trim()).filter(Boolean);
+  /* who the work is for, above the brand it is for: SPLABAB -> Sushikoji ->
+     this campaign. Blank means it is your own, which is every campaign that
+     existed before this field did. */
+  cp.partner = $('#ecPartner').value.trim();
   cp.brand = $('#ecBrand').value.trim() || cp.brand;
   cp.name = $('#ecName').value.trim() || cp.name;
   cp.kind = $('#ecKind').value;
@@ -285,8 +292,10 @@ export function confirmDeleteCampaign(cp) {
       <button class="btn" onclick="closeDrawer()">Cancel</button>
       <button class="btn primary" id="dcGo" style="background:var(--critical);border-color:var(--critical);color:#fff">Delete campaign</button>
     </div>`);
+  /* a file in someone's Downloads folder is the widest exposure there is,
+     so payout details are left out of it — the server copy keeps them */
   $('#dcBackup').addEventListener('click', () => downloadFile(
-    JSON.stringify({ savedAt: new Date().toISOString(), db: DB, settings: SETTINGS }, null, 2),
+    JSON.stringify({ savedAt: new Date().toISOString(), db: stripPayout(DB), settings: SETTINGS }, null, 2),
     `vively-workspace-${iso(new Date())}.json`, 'application/json'));
   $('#dcGo').addEventListener('click', () => {
     deleteCampaign(cp.id);
@@ -522,6 +531,49 @@ export function openAddCreators(cp) {
 }
 
 /* --------------------------- participant drawer --------------------------- */
+/* ------------------------------------------------------------------
+   Payout details.
+
+   A creator's bank account is the most sensitive thing this dashboard
+   will ever hold, and the workspace object it would otherwise live in
+   travels a long way: MongoDB, this browser's local storage, the
+   Google Sheet if that sync is on, and every backup export. So it is
+   kept off all of those and masked on screen — see stripPayout, which
+   every outbound copy of the workspace goes through.
+   ------------------------------------------------------------------ */
+export function maskAccount(v) {
+  const s = String(v || '').trim();
+  if (!s) return '';
+  const tail = s.replace(/\s/g, '').slice(-4);
+  return '•••• •••• ' + tail;
+}
+
+/* the workspace with every payout removed — what leaves this browser
+   for the Sheet, for an export, or for the partner page */
+export function stripPayout(db) {
+  return Object.assign({}, db, {
+    creators: (db.creators || []).map((c) => {
+      if (!c.payout) return c;
+      const { payout, ...rest } = c;
+      return rest;
+    })
+  });
+}
+
+/* one place that writes a content URL, whether it came from Notion, a
+   spreadsheet, or someone typing it into the drawer */
+export function setContentUrl(p, cr, url) {
+  if (!p.content) {
+    p.content = { url: '', platform: cr.platform || 'Instagram', format: 'Reel',
+      postedAt: iso(TODAY), submittedAt: iso(TODAY),
+      views: 0, paidViews: 0, organicViews: 0, likes: 0, comments: 0, shares: 0, saves: 0,
+      reach: 0, profileVisits: 0, followsGained: 0, linkClicks: 0,
+      curve: [], boosted: false, viral: false, topCountries: [], thumbTint: avColor(cr.handle) };
+  }
+  p.content.url = url;
+  return p.content;
+}
+
 export function showParticipant(pid) {
   const p = DB.participants.find((x) => x.id === pid);
   if (!p) return;
@@ -550,8 +602,48 @@ export function showParticipant(pid) {
     </dl>
     <div class="field"><label>Move to stage</label>
       <select id="pdStage">${STAGES.map((s) => `<option value="${s.id}" ${p.stage === s.id ? 'selected' : ''}>${s.label}</option>`).join('')}</select></div>
-    <div class="field"><label>Internal note</label><textarea id="pdNote" style="min-height:70px">${esc(p.note)}</textarea></div>
-    <div style="display:flex;gap:8px;margin-bottom:20px;">
+    <div class="grid g2" style="gap:10px">
+      <div class="field"><label>성별 · Gender</label>
+        <select id="pdGender">${['', 'F', 'M', 'Other'].map((g) => `<option value="${g}" ${(cr.gender || '') === g ? 'selected' : ''}>${g === '' ? '—' : g === 'F' ? '여성 · Female' : g === 'M' ? '남성 · Male' : '기타 · Other'}</option>`).join('')}</select></div>
+      <div class="field"><label>Content link</label>
+        <input type="url" id="pdContentUrl" placeholder="https://www.instagram.com/reel/…" value="${esc((c && c.url) || '')}"/></div>
+    </div>
+    <div class="field"><label>참고 · Remark <span style="color:var(--text-3);font-weight:400">— shown to the partner</span></label>
+      <input type="text" id="pdRemark" placeholder="arriving with 2 guests · asked to move to evening" value="${esc(p.remark || '')}"/></div>
+    <div class="field"><label>Internal note <span style="color:var(--text-3);font-weight:400">— not shown to the partner</span></label>
+      <textarea id="pdNote" style="min-height:70px">${esc(p.note)}</textarea></div>
+
+    <div class="divider"></div>
+    <div class="lbl">Payment</div>
+    <div class="grid g2" style="gap:10px">
+      <div class="field"><label>Arrangement</label>
+        <select id="pdPayMode">${[['none', 'Gifted only'], ['paid', 'Paid'], ['reimburse', 'Reimbursement']]
+          .map(([v, l]) => `<option value="${v}" ${(p.payment && p.payment.mode || 'none') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="field"><label>Settled?</label>
+        <select id="pdPayStatus">${[['unpaid', 'Not yet'], ['paid', 'Paid']]
+          .map(([v, l]) => `<option value="${v}" ${(p.payment && p.payment.status || 'unpaid') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="field"><label>Amount (₩)</label>
+        <input type="number" id="pdPayAmount" min="0" step="1000" value="${(p.payment && p.payment.amount) || ''}"/></div>
+      <div class="field"><label>Paid on</label>
+        <input type="date" id="pdPaidAt" value="${esc((p.payment && p.payment.paidAt) || '')}"/></div>
+    </div>
+    <div id="pdBankWrap" style="display:${(p.payment && p.payment.mode && p.payment.mode !== 'none') ? '' : 'none'}">
+      <div class="note" style="margin:10px 0">
+        <strong>Bank details stay here.</strong> They are never sent to the partner page, never written to the Google Sheet,
+        and never included in a CSV export. Shown masked below — click Reveal to read them.
+      </div>
+      <div class="grid g2" style="gap:10px">
+        <div class="field"><label>Bank</label><input type="text" id="pdBank" value="${esc((cr.payout && cr.payout.bank) || '')}"/></div>
+        <div class="field"><label>Account holder</label><input type="text" id="pdAccName" value="${esc((cr.payout && cr.payout.name) || '')}"/></div>
+        <div class="field" style="grid-column:1/-1"><label>Account number</label>
+          <div style="display:flex;gap:8px">
+            <input type="text" id="pdAccNo" value="${esc(maskAccount((cr.payout && cr.payout.number) || ''))}" data-masked="1" style="flex:1;font-family:var(--mono)"/>
+            <button class="btn sm" id="pdReveal" type="button">Reveal</button>
+          </div></div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:8px;margin:16px 0 20px;">
       <button class="btn primary sm" id="pdSave">Save</button>
       <button class="btn sm" id="pdMsg">Generate message</button>
       <button class="btn sm" onclick="showCreator('${cr.id}')">Creator profile</button>
@@ -570,8 +662,52 @@ export function showParticipant(pid) {
         <dt>Top countries</dt><dd>${c.topCountries.map((x) => `<span class="tag">${x}</span>`).join(' ')}</dd>
       </dl>` : ''}
   `);
+  const bankWrap = $('#pdBankWrap');
+  $('#pdPayMode').addEventListener('change', () => {
+    bankWrap.style.display = $('#pdPayMode').value === 'none' ? 'none' : '';
+  });
+  /* the field holds a mask until someone asks for the real thing, so an
+     account number is not sitting on screen behind whoever walks past */
+  $('#pdReveal').addEventListener('click', () => {
+    const f = $('#pdAccNo');
+    if (f.dataset.masked === '1') {
+      f.value = (cr.payout && cr.payout.number) || '';
+      f.dataset.masked = '0';
+      $('#pdReveal').textContent = 'Hide';
+    } else {
+      f.value = maskAccount((cr.payout && cr.payout.number) || '');
+      f.dataset.masked = '1';
+      $('#pdReveal').textContent = 'Reveal';
+    }
+  });
+
   $('#pdSave').addEventListener('click', () => {
     p.note = $('#pdNote').value;
+    p.remark = $('#pdRemark').value.trim();
+    cr.gender = $('#pdGender').value;
+
+    const mode = $('#pdPayMode').value;
+    p.payment = {
+      mode,
+      status: $('#pdPayStatus').value,
+      amount: +$('#pdPayAmount').value || 0,
+      paidAt: $('#pdPaidAt').value || ''
+    };
+    if (mode !== 'none') {
+      const acc = $('#pdAccNo');
+      cr.payout = Object.assign({}, cr.payout, {
+        bank: $('#pdBank').value.trim(),
+        name: $('#pdAccName').value.trim()
+      });
+      /* only overwrite the number when it was actually revealed and edited —
+         saving while masked must not store the mask over the real value */
+      if (acc.dataset.masked === '0') cr.payout.number = acc.value.trim();
+    }
+
+    const url = $('#pdContentUrl').value.trim();
+    if (url) setContentUrl(p, cr, url);
+    else if (p.content && !p.content.views) p.content = null;
+
     if ($('#pdStage').value !== p.stage) moveStage(p, $('#pdStage').value);
     closeDrawer(); notify(); toast('Saved');
   });

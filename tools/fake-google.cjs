@@ -7,7 +7,22 @@ const express = require('express');
 const crypto = require('crypto');
 const fs = require('fs');
 
-const pub = fs.readFileSync(__dirname + '/../tmp/fake-sa.pub', 'utf8');
+/* Generates its own throwaway keypair on first run, so the harness works from
+   a clean checkout and a tidied tmp/ cannot quietly break it. */
+const KEY = __dirname + '/../tmp/fake-sa.json';
+const PUB = __dirname + '/../tmp/fake-sa.pub';
+if (!fs.existsSync(PUB) || !fs.existsSync(KEY)) {
+  fs.mkdirSync(__dirname + '/../tmp', { recursive: true });
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' } });
+  fs.writeFileSync(KEY, JSON.stringify({ type: 'service_account', project_id: 'vively-test',
+    client_email: 'vively-dashboard@vively-test.iam.gserviceaccount.com',
+    private_key: privateKey, token_uri: 'http://127.0.0.1:3455/token' }, null, 2));
+  fs.writeFileSync(PUB, publicKey);
+  console.log('generated a throwaway service-account key for testing');
+}
+const pub = fs.readFileSync(PUB, 'utf8');
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: false }));

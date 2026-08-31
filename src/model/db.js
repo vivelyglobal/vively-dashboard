@@ -3,7 +3,7 @@ import { toast } from '../ui/overlay.js';
 import { scheduleSheetPush } from '../sync/sheets.js';
 
 /* ---------------- the workspace ---------------- */
-export const DB = { creators: [], campaigns: [], participants: [], appointments: [] };
+export const DB = { creators: [], campaigns: [], participants: [], appointments: [], partnerLinks: [] };
 export const byCreator = {};
 export const byCampaign = {};
 
@@ -64,7 +64,7 @@ export let serverSaveTimer = null;
 
 export function workspacePayload() {
   return { creators: DB.creators, campaigns: DB.campaigns, participants: DB.participants,
-           appointments: DB.appointments };
+           appointments: DB.appointments, partnerLinks: DB.partnerLinks };
 }
 
 export async function serverLoad() {
@@ -82,6 +82,7 @@ export async function serverLoad() {
     DB.campaigns = db.campaigns || [];
     DB.participants = db.participants || [];
     DB.appointments = db.appointments || [];
+    DB.partnerLinks = db.partnerLinks || [];
     DB.creators.forEach((c) => (byCreator[c.id] = c));
     DB.campaigns.forEach((c) => (byCampaign[c.id] = c));
     if (settings && typeof settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = settings.hideBlocked;
@@ -166,6 +167,7 @@ export function loadPersisted() {
     DB.campaigns = db.campaigns || [];
     DB.participants = db.participants || [];
     DB.appointments = db.appointments || [];
+    DB.partnerLinks = db.partnerLinks || [];
     DB.creators.forEach((c) => (byCreator[c.id] = c));
     DB.campaigns.forEach((c) => (byCampaign[c.id] = c));
     if (saved.settings && typeof saved.settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = saved.settings.hideBlocked;

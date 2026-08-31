@@ -52,9 +52,11 @@ def correct(mapped, want, lo):
 
 moved = 0
 for m in man:
-    # entries added after the reference was taken are already in current
-    # coordinates, so there is nothing to map them through
-    if m.get('current'):
+    # A module added after the reference was taken is already in current
+    # coordinates, so there is nothing to map it through. The flag is true
+    # for exactly one run - the one that introduces it - and is cleared here
+    # so the next run treats it like every other module.
+    if m.pop('current', False):
         continue
     new = []
     for a, b in m['ranges']:

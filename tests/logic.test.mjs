@@ -112,12 +112,27 @@ test('nationalities resolve to the country the roster groups by', () => {
   assert.equal(countryOf('Vietnamese'), 'Vietnam');
 });
 
-/* --- known quirks carried over unchanged -----------------------------------
-   Recorded here so the refactor can be shown to change nothing, and so the
-   behaviour is visible rather than buried. Neither is a new problem. */
-test('KNOWN QUIRK: a column named exactly "Note" is read as the row number', () => {
-  /* the alias table matches on substrings, and "note" contains "no", which is
-     the alias for the row-number column, so the note itself never syncs.
-     Left as-is by the split; worth fixing separately. */
-  assert.equal(guessNotionField('Note', 'rich_text'), 'no');
+/* --- a quirk that was recorded, then fixed ---------------------------------
+   The alias table matches on substrings, and "no" is the alias for the
+   row-number column, so a column named exactly "Note" or "Notes" used to be
+   read as a row number and never synced. That stopped being cosmetic once
+   Notes became a column a partner reads. */
+test('a column named "Notes" is the creator\'s note, not a row number', () => {
+  assert.equal(guessNotionField('Notes', 'rich_text'), 'formNotes');
+  assert.equal(guessNotionField('Note', 'rich_text'), 'formNotes');
+  assert.equal(guessNotionField('비고', 'rich_text'), 'formNotes');
+});
+
+test('Notion bookkeeping columns are not read as a booking slot', () => {
+  /* both of these were being read as the visit slot, which would have set
+     every creator's booking to the moment they filled the form */
+  assert.equal(guessNotionField('Submission time', 'created_time'), 'skip');
+  assert.equal(guessNotionField('Posted Date', 'date'), 'skip');
+  assert.equal(guessNotionField('Number of people visiting ', 'rich_text'), 'skip');
+});
+
+test('the columns added for the partner view map correctly', () => {
+  assert.equal(guessNotionField('성별', 'select'), 'gender');
+  assert.equal(guessNotionField('Gender', 'select'), 'gender');
+  assert.equal(guessNotionField('Accepted/Rejected Message', 'formula'), 'acceptMessage');
 });

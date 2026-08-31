@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="robots" content="noindex, nofollow" />
+<title>VIVELY — 크리에이터 진행 현황</title>
+<style>
+:root{--bg:#f7f7f8;--card:#fff;--line:#e3e3e6;--text:#1a1a1c;--text-2:#55555c;--text-3:#8a8a93;
+ --green:#1e9e6a;--amber:#bd8300;--red:#d03b3b;--blue:#4e8ef7;--grey:#8a8a93;--accent:#1a1a1c}
+@media (prefers-color-scheme:dark){:root{--bg:#131315;--card:#1b1b1e;--line:#2c2c31;--text:#eeeef1;
+ --text-2:#b4b4bd;--text-3:#82828c;--accent:#eeeef1}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Malgun Gothic','Apple SD Gothic Neo',sans-serif}
+header{padding:22px 24px 14px;border-bottom:1px solid var(--line);background:var(--card)}
+h1{margin:0 0 4px;font-size:19px;font-weight:600;letter-spacing:-.01em}
+.sub{color:var(--text-3);font-size:12.5px}
+main{padding:18px 24px 60px;max-width:1600px;margin:0 auto}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.chip{border:1px solid var(--line);background:var(--card);border-radius:20px;padding:5px 12px;font-size:12.5px;cursor:pointer;color:var(--text-2)}
+.chip.on{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.count{color:var(--text-3);font-size:12.5px;margin-left:auto}
+.wrap{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:auto}
+table{border-collapse:collapse;width:100%;font-size:12.5px;white-space:nowrap}
+th{position:sticky;top:0;background:var(--card);text-align:left;font-weight:500;font-size:11px;letter-spacing:.04em;
+ text-transform:uppercase;color:var(--text-3);padding:10px 12px;border-bottom:1px solid var(--line);z-index:1}
+td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+.wide{white-space:normal;min-width:180px;max-width:280px}
+.pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11.5px;border:1px solid}
+.green{color:var(--green);border-color:color-mix(in srgb,var(--green) 35%,transparent)}
+.amber{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 40%,transparent);font-weight:500}
+.red{color:var(--red);border-color:color-mix(in srgb,var(--red) 35%,transparent)}
+.blue{color:var(--blue);border-color:color-mix(in srgb,var(--blue) 35%,transparent)}
+.grey{color:var(--text-3);border-color:var(--line)}
+a{color:inherit}
+.cbtn{border:1px solid var(--line);background:none;color:var(--text-3);border-radius:6px;font-size:11.5px;padding:3px 8px;cursor:pointer}
+.cbtn.has{color:var(--accent);border-color:var(--accent)}
+.thread{background:var(--bg);padding:0}
+.thread .inner{padding:12px 14px}
+.msg{border-left:2px solid var(--line);padding:2px 0 2px 10px;margin-bottom:8px;white-space:normal}
+.msg b{font-weight:500}.msg time{color:var(--text-3);font-size:11px;margin-left:6px}
+textarea{width:100%;min-height:56px;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text);font:inherit;font-size:12.5px}
+input[type=text]{padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text);font:inherit;font-size:12.5px}
+.send{background:var(--accent);color:var(--bg);border:0;border-radius:6px;padding:7px 14px;font-size:12.5px;cursor:pointer}
+.note{border:1px solid var(--line);border-radius:8px;padding:12px 14px;color:var(--text-2);background:var(--card);font-size:12.5px}
+footer{color:var(--text-3);font-size:11.5px;padding:16px 24px;text-align:center}
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">크리에이터 진행 현황</h1>
+  <div class="sub" id="sub">불러오는 중…</div>
+</header>
+<main>
+  <div class="bar" id="bar"></div>
+  <div id="body"></div>
+</main>
+<footer>보기 전용 · 변경은 VIVELY에서 이루어집니다 · View only — changes are made in VIVELY</footer>
+
+<script>
+/* Read-only by construction: this page has no write path except a comment,
+   and the server decided what it is allowed to see before sending it. */
+const TOKEN = location.pathname.split('/').filter(Boolean).pop();
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const kmb = (v) => !v ? '—' : v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v >= 1000 ? Math.round(v / 1000) + 'K' : String(v);
+
+const COLS = [
+  ['크리에이터', 'Creator'], ['상태', '초대 확인'], ['방문 일정', 'Visit'], ['예약 시간', 'Time'],
+  ['IG 팔로워수', 'Followers'], ['성별', 'Gender'], ['국적', 'Nationality'],
+  ['IG 프로필', 'Profile'], ['Email', ''], ['Kakao ID', ''], ['Other SNS', ''],
+  ['콘텐츠 링크', 'Content'], ['참고', 'Remark'], ['Notes', ''], ['Message', ''], ['', '']
+];
+
+let DATA = null, filter = 'all', open = new Set();
+
+async function load() {
+  const res = await fetch('/api/partner/' + encodeURIComponent(TOKEN));
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    document.getElementById('sub').textContent = '';
+    document.getElementById('body').innerHTML =
+      '<div class="note">' + esc(body.error || '이 링크를 열 수 없습니다.') + '</div>';
+    return;
+  }
+  DATA = body;
+  render();
+}
+
+function render() {
+  const rows = DATA.rows.filter((r) => filter === 'all' || r.campaign === filter);
+  const waiting = DATA.rows.filter((r) => r.status.theirs).length;
+  document.getElementById('title').textContent = DATA.partner + ' — 크리에이터 진행 현황';
+  document.getElementById('sub').innerHTML =
+    esc(DATA.campaigns.length + '개 프로젝트 · ' + DATA.rows.length + '명') +
+    (DATA.updatedAt ? ' · 마지막 업데이트 ' + esc(new Date(DATA.updatedAt).toLocaleString('ko-KR')) : '') +
+    (waiting ? ' · <b style="color:var(--amber)">승인 대기 ' + waiting + '건</b>' : '');
+
+  document.getElementById('bar').innerHTML =
+    ['all'].concat(DATA.campaigns.map((c) => c.brand)).map((c) =>
+      `<button class="chip ${filter === c ? 'on' : ''}" data-f="${esc(c)}">${c === 'all' ? '전체' : esc(c)}</button>`).join('') +
+    `<span class="count">${rows.length}명 표시</span>`;
+
+  const byPid = {};
+  (DATA.comments || []).forEach((c) => (byPid[c.pid] = byPid[c.pid] || []).push(c));
+
+  document.getElementById('body').innerHTML = !rows.length
+    ? '<div class="note">아직 등록된 크리에이터가 없습니다.</div>'
+    : `<div class="wrap"><table><thead><tr>${
+        COLS.map(([ko, en]) => `<th>${esc(ko)}${en ? `<br><span style="text-transform:none;letter-spacing:0">${esc(en)}</span>` : ''}</th>`).join('')
+      }</tr></thead><tbody>${rows.map((r) => {
+        const cs = byPid[r.pid] || [];
+        return `<tr>
+          <td><b>${esc(r.creator)}</b>${r.handle ? `<br><span style="color:var(--text-3)">${esc(r.handle)}</span>` : ''}
+              <br><span style="color:var(--text-3);font-size:11px">${esc(r.campaign)}</span></td>
+          <td><span class="pill ${r.status.tone}">${esc(r.status.ko)}</span><br>
+              <span style="color:var(--text-3);font-size:11px">${esc(r.status.en)}</span></td>
+          <td>${esc(r.visitDate || '—')}</td>
+          <td>${esc(r.visitTime || '—')}</td>
+          <td>${kmb(r.followers)}</td>
+          <td>${esc(r.gender || '—')}</td>
+          <td>${esc(r.nationality || '—')}</td>
+          <td>${r.igUrl ? `<a href="${esc(r.igUrl)}" target="_blank" rel="noopener">열기</a>` : '—'}</td>
+          <td>${esc(r.email || '—')}</td>
+          <td>${esc(r.kakao || '—')}</td>
+          <td>${r.otherSns ? `<a href="${esc(r.otherSns)}" target="_blank" rel="noopener">열기</a>` : '—'}</td>
+          <td>${r.contentUrl ? `<a href="${esc(r.contentUrl)}" target="_blank" rel="noopener">보기</a>` : '—'}</td>
+          <td class="wide">${esc(r.remark || '—')}</td>
+          <td class="wide">${esc(r.notes || '—')}</td>
+          <td class="wide">${esc(r.acceptMessage || '—')}</td>
+          <td><button class="cbtn ${cs.length ? 'has' : ''}" data-c="${esc(r.pid)}">${cs.length ? '댓글 ' + cs.length : '댓글'}</button></td>
+        </tr>
+        ${open.has(r.pid) ? `<tr class="thread"><td colspan="${COLS.length}"><div class="inner">
+          ${cs.map((c) => `<div class="msg"><b>${esc(c.author)}</b><time>${esc(new Date(c.at).toLocaleString('ko-KR'))}</time><br>${esc(c.text)}</div>`).join('')}
+          <div style="display:flex;gap:8px;align-items:flex-start;margin-top:8px">
+            <input type="text" placeholder="이름" data-name="${esc(r.pid)}" style="width:110px"/>
+            <textarea placeholder="의견을 남겨주세요" data-t="${esc(r.pid)}"></textarea>
+            <button class="send" data-s="${esc(r.pid)}">보내기</button>
+          </div></div></td></tr>` : ''}`;
+      }).join('')}</tbody></table></div>`;
+
+  document.querySelectorAll('[data-f]').forEach((b) =>
+    b.onclick = () => { filter = b.dataset.f; render(); });
+  document.querySelectorAll('[data-c]').forEach((b) =>
+    b.onclick = () => { const id = b.dataset.c; open.has(id) ? open.delete(id) : open.add(id); render(); });
+  document.querySelectorAll('[data-s]').forEach((b) => b.onclick = () => send(b.dataset.s, b));
+}
+
+async function send(pid, btn) {
+  const ta = document.querySelector(`[data-t="${CSS.escape(pid)}"]`);
+  const nameEl = document.querySelector(`[data-name="${CSS.escape(pid)}"]`);
+  const text = ta.value.trim();
+  if (!text) return;
+  btn.disabled = true; btn.textContent = '보내는 중…';
+  try {
+    const res = await fetch('/api/partner/' + encodeURIComponent(TOKEN) + '/comment', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pid, text, author: nameEl.value.trim() })
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || '실패');
+    (DATA.comments = DATA.comments || []).push(body.comment);
+    try { localStorage.setItem('vively-partner-name', nameEl.value.trim()); } catch (e) {}
+    render();
+  } catch (err) {
+    btn.disabled = false; btn.textContent = '보내기';
+    alert(err.message);
+  }
+}
+
+load();
+</script>
+</body>
+</html>

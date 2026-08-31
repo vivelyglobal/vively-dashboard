@@ -865,7 +865,7 @@ function viewCurve(total, days, boosted) {
 }
 
 /* ---------------- the workspace ---------------- */
-const DB = { creators: [], campaigns: [], participants: [], appointments: [] };
+const DB = { creators: [], campaigns: [], participants: [], appointments: [], partnerLinks: [] };
 const byCreator = {};
 const byCampaign = {};
 
@@ -926,7 +926,7 @@ let serverSaveTimer = null;
 
 function workspacePayload() {
   return { creators: DB.creators, campaigns: DB.campaigns, participants: DB.participants,
-           appointments: DB.appointments };
+           appointments: DB.appointments, partnerLinks: DB.partnerLinks };
 }
 
 async function serverLoad() {
@@ -944,6 +944,7 @@ async function serverLoad() {
     DB.campaigns = db.campaigns || [];
     DB.participants = db.participants || [];
     DB.appointments = db.appointments || [];
+    DB.partnerLinks = db.partnerLinks || [];
     DB.creators.forEach((c) => (byCreator[c.id] = c));
     DB.campaigns.forEach((c) => (byCampaign[c.id] = c));
     if (settings && typeof settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = settings.hideBlocked;
@@ -1028,6 +1029,7 @@ function loadPersisted() {
     DB.campaigns = db.campaigns || [];
     DB.participants = db.participants || [];
     DB.appointments = db.appointments || [];
+    DB.partnerLinks = db.partnerLinks || [];
     DB.creators.forEach((c) => (byCreator[c.id] = c));
     DB.campaigns.forEach((c) => (byCampaign[c.id] = c));
     if (saved.settings && typeof saved.settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = saved.settings.hideBlocked;
@@ -2277,6 +2279,9 @@ function renderCampaign(view, id, tab) {
 function campaignFormHtml(cp) {
   return `
     <div class="grid g2" style="gap:10px">
+      <div class="field"><label>Partner (who the work is for)</label>
+        <input type="text" id="ecPartner" list="partnerList" placeholder="e.g. SPLABAB — leave empty for your own work" value="${esc(cp.partner || '')}"/>
+        <datalist id="partnerList">${[...new Set(DB.campaigns.map((c) => c.partner).filter(Boolean))].map((x) => `<option value="${esc(x)}">`).join('')}</datalist></div>
       <div class="field"><label>Brand / client</label><input type="text" id="ecBrand" value="${esc(cp.brand)}"/></div>
       <div class="field"><label>Project name</label><input type="text" id="ecName" value="${esc(cp.name)}"/></div>
       <div class="field"><label>Type</label><select id="ecKind">${
@@ -2308,6 +2313,10 @@ function campaignFormHtml(cp) {
 
 function readCampaignForm(cp) {
   const list = (v) => v.split(',').map((x) => x.trim()).filter(Boolean);
+  /* who the work is for, above the brand it is for: SPLABAB -> Sushikoji ->
+     this campaign. Blank means it is your own, which is every campaign that
+     existed before this field did. */
+  cp.partner = $('#ecPartner').value.trim();
   cp.brand = $('#ecBrand').value.trim() || cp.brand;
   cp.name = $('#ecName').value.trim() || cp.name;
   cp.kind = $('#ecKind').value;
@@ -2372,8 +2381,10 @@ function confirmDeleteCampaign(cp) {
       <button class="btn" onclick="closeDrawer()">Cancel</button>
       <button class="btn primary" id="dcGo" style="background:var(--critical);border-color:var(--critical);color:#fff">Delete campaign</button>
     </div>`);
+  /* a file in someone's Downloads folder is the widest exposure there is,
+     so payout details are left out of it — the server copy keeps them */
   $('#dcBackup').addEventListener('click', () => downloadFile(
-    JSON.stringify({ savedAt: new Date().toISOString(), db: DB, settings: SETTINGS }, null, 2),
+    JSON.stringify({ savedAt: new Date().toISOString(), db: stripPayout(DB), settings: SETTINGS }, null, 2),
     `vively-workspace-${iso(new Date())}.json`, 'application/json'));
   $('#dcGo').addEventListener('click', () => {
     deleteCampaign(cp.id);
@@ -2609,6 +2620,49 @@ function openAddCreators(cp) {
 }
 
 /* --------------------------- participant drawer --------------------------- */
+/* ------------------------------------------------------------------
+   Payout details.
+
+   A creator's bank account is the most sensitive thing this dashboard
+   will ever hold, and the workspace object it would otherwise live in
+   travels a long way: MongoDB, this browser's local storage, the
+   Google Sheet if that sync is on, and every backup export. So it is
+   kept off all of those and masked on screen — see stripPayout, which
+   every outbound copy of the workspace goes through.
+   ------------------------------------------------------------------ */
+function maskAccount(v) {
+  const s = String(v || '').trim();
+  if (!s) return '';
+  const tail = s.replace(/\s/g, '').slice(-4);
+  return '•••• •••• ' + tail;
+}
+
+/* the workspace with every payout removed — what leaves this browser
+   for the Sheet, for an export, or for the partner page */
+function stripPayout(db) {
+  return Object.assign({}, db, {
+    creators: (db.creators || []).map((c) => {
+      if (!c.payout) return c;
+      const { payout, ...rest } = c;
+      return rest;
+    })
+  });
+}
+
+/* one place that writes a content URL, whether it came from Notion, a
+   spreadsheet, or someone typing it into the drawer */
+function setContentUrl(p, cr, url) {
+  if (!p.content) {
+    p.content = { url: '', platform: cr.platform || 'Instagram', format: 'Reel',
+      postedAt: iso(TODAY), submittedAt: iso(TODAY),
+      views: 0, paidViews: 0, organicViews: 0, likes: 0, comments: 0, shares: 0, saves: 0,
+      reach: 0, profileVisits: 0, followsGained: 0, linkClicks: 0,
+      curve: [], boosted: false, viral: false, topCountries: [], thumbTint: avColor(cr.handle) };
+  }
+  p.content.url = url;
+  return p.content;
+}
+
 function showParticipant(pid) {
   const p = DB.participants.find((x) => x.id === pid);
   if (!p) return;
@@ -2637,8 +2691,48 @@ function showParticipant(pid) {
     </dl>
     <div class="field"><label>Move to stage</label>
       <select id="pdStage">${STAGES.map((s) => `<option value="${s.id}" ${p.stage === s.id ? 'selected' : ''}>${s.label}</option>`).join('')}</select></div>
-    <div class="field"><label>Internal note</label><textarea id="pdNote" style="min-height:70px">${esc(p.note)}</textarea></div>
-    <div style="display:flex;gap:8px;margin-bottom:20px;">
+    <div class="grid g2" style="gap:10px">
+      <div class="field"><label>성별 · Gender</label>
+        <select id="pdGender">${['', 'F', 'M', 'Other'].map((g) => `<option value="${g}" ${(cr.gender || '') === g ? 'selected' : ''}>${g === '' ? '—' : g === 'F' ? '여성 · Female' : g === 'M' ? '남성 · Male' : '기타 · Other'}</option>`).join('')}</select></div>
+      <div class="field"><label>Content link</label>
+        <input type="url" id="pdContentUrl" placeholder="https://www.instagram.com/reel/…" value="${esc((c && c.url) || '')}"/></div>
+    </div>
+    <div class="field"><label>참고 · Remark <span style="color:var(--text-3);font-weight:400">— shown to the partner</span></label>
+      <input type="text" id="pdRemark" placeholder="arriving with 2 guests · asked to move to evening" value="${esc(p.remark || '')}"/></div>
+    <div class="field"><label>Internal note <span style="color:var(--text-3);font-weight:400">— not shown to the partner</span></label>
+      <textarea id="pdNote" style="min-height:70px">${esc(p.note)}</textarea></div>
+
+    <div class="divider"></div>
+    <div class="lbl">Payment</div>
+    <div class="grid g2" style="gap:10px">
+      <div class="field"><label>Arrangement</label>
+        <select id="pdPayMode">${[['none', 'Gifted only'], ['paid', 'Paid'], ['reimburse', 'Reimbursement']]
+          .map(([v, l]) => `<option value="${v}" ${(p.payment && p.payment.mode || 'none') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="field"><label>Settled?</label>
+        <select id="pdPayStatus">${[['unpaid', 'Not yet'], ['paid', 'Paid']]
+          .map(([v, l]) => `<option value="${v}" ${(p.payment && p.payment.status || 'unpaid') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="field"><label>Amount (₩)</label>
+        <input type="number" id="pdPayAmount" min="0" step="1000" value="${(p.payment && p.payment.amount) || ''}"/></div>
+      <div class="field"><label>Paid on</label>
+        <input type="date" id="pdPaidAt" value="${esc((p.payment && p.payment.paidAt) || '')}"/></div>
+    </div>
+    <div id="pdBankWrap" style="display:${(p.payment && p.payment.mode && p.payment.mode !== 'none') ? '' : 'none'}">
+      <div class="note" style="margin:10px 0">
+        <strong>Bank details stay here.</strong> They are never sent to the partner page, never written to the Google Sheet,
+        and never included in a CSV export. Shown masked below — click Reveal to read them.
+      </div>
+      <div class="grid g2" style="gap:10px">
+        <div class="field"><label>Bank</label><input type="text" id="pdBank" value="${esc((cr.payout && cr.payout.bank) || '')}"/></div>
+        <div class="field"><label>Account holder</label><input type="text" id="pdAccName" value="${esc((cr.payout && cr.payout.name) || '')}"/></div>
+        <div class="field" style="grid-column:1/-1"><label>Account number</label>
+          <div style="display:flex;gap:8px">
+            <input type="text" id="pdAccNo" value="${esc(maskAccount((cr.payout && cr.payout.number) || ''))}" data-masked="1" style="flex:1;font-family:var(--mono)"/>
+            <button class="btn sm" id="pdReveal" type="button">Reveal</button>
+          </div></div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:8px;margin:16px 0 20px;">
       <button class="btn primary sm" id="pdSave">Save</button>
       <button class="btn sm" id="pdMsg">Generate message</button>
       <button class="btn sm" onclick="showCreator('${cr.id}')">Creator profile</button>
@@ -2657,8 +2751,52 @@ function showParticipant(pid) {
         <dt>Top countries</dt><dd>${c.topCountries.map((x) => `<span class="tag">${x}</span>`).join(' ')}</dd>
       </dl>` : ''}
   `);
+  const bankWrap = $('#pdBankWrap');
+  $('#pdPayMode').addEventListener('change', () => {
+    bankWrap.style.display = $('#pdPayMode').value === 'none' ? 'none' : '';
+  });
+  /* the field holds a mask until someone asks for the real thing, so an
+     account number is not sitting on screen behind whoever walks past */
+  $('#pdReveal').addEventListener('click', () => {
+    const f = $('#pdAccNo');
+    if (f.dataset.masked === '1') {
+      f.value = (cr.payout && cr.payout.number) || '';
+      f.dataset.masked = '0';
+      $('#pdReveal').textContent = 'Hide';
+    } else {
+      f.value = maskAccount((cr.payout && cr.payout.number) || '');
+      f.dataset.masked = '1';
+      $('#pdReveal').textContent = 'Reveal';
+    }
+  });
+
   $('#pdSave').addEventListener('click', () => {
     p.note = $('#pdNote').value;
+    p.remark = $('#pdRemark').value.trim();
+    cr.gender = $('#pdGender').value;
+
+    const mode = $('#pdPayMode').value;
+    p.payment = {
+      mode,
+      status: $('#pdPayStatus').value,
+      amount: +$('#pdPayAmount').value || 0,
+      paidAt: $('#pdPaidAt').value || ''
+    };
+    if (mode !== 'none') {
+      const acc = $('#pdAccNo');
+      cr.payout = Object.assign({}, cr.payout, {
+        bank: $('#pdBank').value.trim(),
+        name: $('#pdAccName').value.trim()
+      });
+      /* only overwrite the number when it was actually revealed and edited —
+         saving while masked must not store the mask over the real value */
+      if (acc.dataset.masked === '0') cr.payout.number = acc.value.trim();
+    }
+
+    const url = $('#pdContentUrl').value.trim();
+    if (url) setContentUrl(p, cr, url);
+    else if (p.content && !p.content.views) p.content = null;
+
     if ($('#pdStage').value !== p.stage) moveStage(p, $('#pdStage').value);
     closeDrawer(); render(); toast('Saved');
   });
@@ -3625,7 +3763,11 @@ function reportTab(mount, cp) {
     `vively-${cp.brand.toLowerCase().replace(/\W+/g, '-')}-report.csv`, 'text/csv;charset=utf-8'));
   $('#rpJson').addEventListener('click', () => downloadFile(JSON.stringify({
     campaign: cp, stats: s, summary: $('#rpSum').value,
-    participants: partsOf(cp.id).map((p) => ({ ...p, creator: byCreator[p.creatorId] }))
+    participants: partsOf(cp.id).map((p) => {
+      /* the hand-off goes to a brand or a partner — never with a bank account in it */
+      const { payout, ...creator } = byCreator[p.creatorId] || {};
+      return { ...p, creator };
+    })
   }, null, 2), `vively-${cp.id}-campaign.json`, 'application/json'));
   $('#rpProof').addEventListener('click', () => {
     const missing = partsOf(cp.id).filter((p) => p.content).filter((p) =>
@@ -4422,6 +4564,9 @@ const NOTION_FIELD_DEFS = [
   { key: 'comments',    label: 'Comments' },
   { key: 'shares',      label: 'Shares' },
   { key: 'metricsAt',   label: 'Metrics updated (date the numbers were read)' },
+  { key: 'gender',      label: '성별 · Gender' },
+  { key: 'formNotes',   label: 'Notes (what the creator wrote)' },
+  { key: 'acceptMessage', label: 'Accepted / Rejected message' },
   { key: 'visitAt',     label: 'Visit date & time (restaurant / salon booking)' },
   { key: 'status',      label: 'Status (maps to pipeline stage)' },
   { key: 'note',        label: 'Note / message' }
@@ -4439,6 +4584,15 @@ function guessNotionField(propName, propType) {
      claimed as the profile link. */
   if (propType === 'email' || /email|이메일/.test(h)) return 'email';
   if (/follower|팔로워/.test(h)) return 'followers';
+  /* Settled before the alias table too. It matches on substrings, and "no"
+     is the alias for the row-number column, so "Notes" and "Number of people
+     visiting" both come back as a row number. Notes is a column the partner
+     reads, so getting it wrong is not cosmetic. */
+  if (/^notes?$|^비고$/.test(h)) return 'formNotes';
+  if (/number of people|people visiting|인원/.test(h)) return 'skip';
+  if (/accepted.*rejected|rejected.*accepted|승인.*메시지/.test(h)) return 'acceptMessage';
+  if (/^성별$|^gender$|^sex$/.test(h)) return 'gender';
+
   const g = guessField(propName, 0, []);
   if (g !== 'skip') return g;
   /* Performance columns first: "Comments" is a metric here, and the
@@ -4451,7 +4605,9 @@ function guessNotionField(propName, propType) {
   /* A form's date question is nearly always the booking slot — but Notion
      adds its own bookkeeping timestamps to every database, and those must
      not be mistaken for the slot the creator picked. */
-  const bookkeeping = /created|submitted|last edited|last_edited|updated|timestamp|생성|수정/.test(h);
+  const bookkeeping = /created|submitted|submission|last edited|last_edited|updated|timestamp|생성|수정/.test(h);
+  /* when the content went up is not when the creator is coming in */
+  if (/^posted|posting date|upload date|게시일/.test(h)) return 'skip';
   if (!bookkeeping && (propType === 'date' || /when|date|time|schedule|slot|booking|visit|avail|예약|일정|방문/.test(h))) return 'visitAt';
   if (/note|message|comment|비고|메모/.test(h)) return 'note';
   return 'skip';
@@ -4537,6 +4693,12 @@ function notionRowToApplicant(properties, mapping) {
     otherSns: String(get('otherSns') || '').trim(),
     contentUrl: String(get('contentUrl') || '').trim(),
     note: String(get('note') || '').trim(),
+    /* the creator's own Notes answer, kept apart from the private internal
+       note — this one is shown to the partner */
+    formNotes: String(get('formNotes') || '').trim(),
+    /* a Notion formula that composes the accept/reject wording from Status */
+    acceptMessage: String(get('acceptMessage') || '').trim(),
+    gender: String(get('gender') || '').trim(),
     visitAt: notionVisitValue(get('visitAt')),
     metricsAt: notionVisitValue(get('metricsAt')),
     metrics: NOTION_METRIC_KEYS.reduce((acc, k) => {
@@ -4781,6 +4943,9 @@ async function runNotionSync(cp, opts) {
       p.contact = ap.contact || p.contact;
       p.nationality = ap.nationality || p.nationality;
       p.otherSns = ap.otherSns || p.otherSns;
+      p.formNotes = ap.formNotes || p.formNotes;
+      p.acceptMessage = ap.acceptMessage || p.acceptMessage;
+      if (ap.gender && cr) cr.gender = ap.gender;
       p.importedStatus = ap.statusRaw || p.importedStatus;
       if (ap.visitAt && ap.visitAt !== p.visitAt) { p.visitAt = ap.visitAt; reslotted++; }
       /* Notion is the source of truth for the pipeline stage: when someone
@@ -4807,6 +4972,7 @@ async function runNotionSync(cp, opts) {
         dropReason: ap.dropReason, revisions: 0, note: ap.note,
         fullName: ap.fullName, address: ap.address, contact: ap.contact, nationality: ap.nationality,
         visitAt: ap.visitAt, arrivingDate: '', otherSns: ap.otherSns, importedStatus: ap.statusRaw,
+        formNotes: ap.formNotes, acceptMessage: ap.acceptMessage, remark: '',
         notionPageId: row.pageId, content: null
       };
       applyStageDates(np, ap.stage, cp);
@@ -7100,6 +7266,7 @@ const SETTINGS_ITEMS = [
   { id: 'blacklist',    label: 'Creator blacklist',   sub: 'blocked, flagged, preferred' },
   { id: 'sheet',        label: 'Google Sheet',        sub: 'shared store for the team' },
   { id: 'calendar',     label: 'Google Calendar',     sub: 'push bookings to a calendar' },
+  { id: 'partners',     label: 'Partners',            sub: 'share progress, read their comments' },
   { id: 'integrations', label: 'Instagram & TikTok',  sub: 'what a connection can pull' },
   { id: 'sources',      label: 'Data sources',        sub: 'where creators come from' },
   { id: 'report',       label: 'Report hand-off',     sub: 'Vively Toolkit' },
@@ -7111,6 +7278,7 @@ function renderSettings(view, item) {
   if (item === 'blacklist')  return settingsBlacklist(view);
   if (item === 'sheet')      return settingsSheets(view);
   if (item === 'calendar')   return settingsCalendar(view);
+  if (item === 'partners')   return settingsPartners(view);
   if (item === 'sources') {
     const dupGroups = duplicateCreatorGroups();
     const dupExtra = dupGroups.reduce((a, g) => a + g.list.length - 1, 0);
@@ -7335,6 +7503,7 @@ async function restoreBackup(e) {
     clearPersisted();
     DB.creators = db.creators; DB.campaigns = db.campaigns; DB.participants = db.participants || [];
     DB.appointments = db.appointments || [];
+    DB.partnerLinks = db.partnerLinks || [];
     DB.creators.forEach((c) => (byCreator[c.id] = c));
     DB.campaigns.forEach((c) => (byCampaign[c.id] = c));
     if (saved.settings && typeof saved.settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = saved.settings.hideBlocked;
@@ -7369,6 +7538,250 @@ async function importCreatorsCsv(e) {
   });
   mergeDuplicateCreators();
   toast(`${n} creators imported${dup ? `, ${dup} already in the database` : ''}`); render();
+}
+
+
+/* ============================================================
+   PARTNER VIEW
+
+   SPLABAB brings the brands; we deliver the seeding. Their point
+   of contact needs to see progress as it happens — who is coming,
+   when, and what went up — without a login, without a spreadsheet
+   anyone has to remember to re-send, and without being able to
+   change anything.
+
+   So: one unguessable link per partner, read from the same
+   database the dashboard reads, scoped to that partner's
+   campaigns. Live because it is the same data, not because
+   somebody exported it recently.
+
+   What deliberately never crosses to that page: bank details,
+   internal notes, fees, and every campaign that is not theirs.
+   ============================================================ */
+
+/* Their Notion form has nine statuses; a partner needs six, plus the
+   one that means "this is sitting with you". Waiting Approval is that
+   one — the creator has been sent for brand approval and nothing moves
+   until SPLABAB answers. Folding it into "Contacted" would hide the
+   only column the POC can actually act on. */
+const PARTNER_STATUS = {
+  'waiting approval': { key: 'waiting',   ko: '승인 대기',   en: 'Waiting Approval', tone: 'amber', theirs: true },
+  'brand accepted':   { key: 'confirmed', ko: '확정',        en: 'Confirmed',        tone: 'green' },
+  'confirmed':        { key: 'confirmed', ko: '확정',        en: 'Confirmed',        tone: 'green' },
+  'brand rejected':   { key: 'rejected',  ko: '브랜드 거절', en: 'Brand Rejected',   tone: 'red' },
+  'declined':         { key: 'refused',   ko: '거절',        en: 'Refused',          tone: 'grey' },
+  'cancelled':        { key: 'refused',   ko: '거절',        en: 'Refused',          tone: 'grey' },
+  'canceled':         { key: 'refused',   ko: '거절',        en: 'Refused',          tone: 'grey' },
+  're-schedule':      { key: 'waitupload',ko: '업로드 대기', en: 'Waiting For upload', tone: 'blue' },
+  'waiting upload':   { key: 'waitupload',ko: '업로드 대기', en: 'Waiting For upload', tone: 'blue' },
+  'uploaded':         { key: 'uploaded',  ko: '업로드 완료', en: 'Uploaded',         tone: 'green' }
+};
+
+/* Rows that never came from a Notion form still need a status, so the
+   pipeline stage maps onto the same six. */
+const STAGE_TO_PARTNER = {
+  sourced:     { key: 'contacted', ko: '컨택',        en: 'Contacted',          tone: 'grey' },
+  contacted:   { key: 'contacted', ko: '컨택',        en: 'Contacted',          tone: 'grey' },
+  replied:     { key: 'contacted', ko: '컨택',        en: 'Contacted',          tone: 'grey' },
+  shortlisted: { key: 'waiting',   ko: '승인 대기',   en: 'Waiting Approval',   tone: 'amber', theirs: true },
+  confirmed:   { key: 'confirmed', ko: '확정',        en: 'Confirmed',          tone: 'green' },
+  shipped:     { key: 'waitupload',ko: '업로드 대기', en: 'Waiting For upload', tone: 'blue' },
+  submitted:   { key: 'waitupload',ko: '업로드 대기', en: 'Waiting For upload', tone: 'blue' },
+  review:      { key: 'waitupload',ko: '업로드 대기', en: 'Waiting For upload', tone: 'blue' },
+  live:        { key: 'uploaded',  ko: '업로드 완료', en: 'Uploaded',           tone: 'green' },
+  dropped:     { key: 'refused',   ko: '거절',        en: 'Refused',            tone: 'grey' }
+};
+
+function partnerStatus(p) {
+  /* the exact word from their own Notion form wins where there is one —
+     no reason to show a partner a re-derived approximation */
+  const raw = String(p.importedStatus || '').trim().toLowerCase();
+  if (raw && PARTNER_STATUS[raw]) return PARTNER_STATUS[raw];
+  if (raw === 'brand rejected' || /brand.*reject/.test(raw)) return PARTNER_STATUS['brand rejected'];
+  if (p.stage === 'dropped' && /brand/i.test(p.dropReason || '')) return PARTNER_STATUS['brand rejected'];
+  return STAGE_TO_PARTNER[p.stage] || STAGE_TO_PARTNER.contacted;
+}
+
+const partnersInUse = () => [...new Set(DB.campaigns.map((c) => c.partner).filter(Boolean))].sort();
+
+/* the rows one partner is allowed to see, in the shape their POC asked for */
+function partnerRows(partner) {
+  const camps = DB.campaigns.filter((c) => (c.partner || '') === partner);
+  const ids = new Set(camps.map((c) => c.id));
+  return DB.participants.filter((p) => ids.has(p.campaignId)).map((p) => {
+    const cr = byCreator[p.creatorId] || {};
+    const cp = byCampaign[p.campaignId] || {};
+    const st = partnerStatus(p);
+    const slot = String(p.visitAt || '').trim();
+    const m = slot.match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{1,2}:\d{2}))?/);
+    return {
+      pid: p.id,
+      campaign: cp.brand || '',
+      campaignId: cp.id,
+      creator: p.fullName || cr.name || cr.handle || '',
+      handle: cr.handle || '',
+      igUrl: cr.handle ? 'https://www.instagram.com/' + String(cr.handle).replace(/^@/, '') + '/' : '',
+      acceptMessage: p.acceptMessage || '',
+      visitDate: m ? m[1] : '',
+      visitTime: m && m[2] ? m[2] : '',
+      email: cr.email || '',
+      status: st,
+      gender: cr.gender || '',
+      followers: cr.followers || 0,
+      remark: p.remark || '',
+      kakao: p.contact || cr.contact || '',
+      contentUrl: (p.content && p.content.url) || '',
+      nationality: p.nationality || cr.nationality || cr.country || '',
+      /* the creator's own answer to the form's Notes question. p.note is a
+         DIFFERENT field — the private one the drawer calls "Internal note",
+         which people have been typing private things into for months and
+         which must never appear here. */
+      notes: p.formNotes || '',
+      otherSns: p.otherSns || ''
+    };
+  }).sort((a, b) => (a.visitDate || '9999').localeCompare(b.visitDate || '9999') ||
+                    (a.visitTime || '').localeCompare(b.visitTime || '') ||
+                    a.creator.localeCompare(b.creator));
+}
+
+
+/* ------------------------------------------------------------------
+   Setup → Partners. Where a link is made, revoked, and where the
+   comments a partner leaves come back to.
+   ------------------------------------------------------------------ */
+const PARTNER_COMMENTS = { list: [], at: null, error: null };
+
+async function loadPartnerComments() {
+  try {
+    const res = await fetch('/api/partner-comments');
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || 'failed');
+    PARTNER_COMMENTS.list = body.comments || [];
+    PARTNER_COMMENTS.at = new Date();
+    PARTNER_COMMENTS.error = null;
+  } catch (err) {
+    PARTNER_COMMENTS.error = err.message;
+  }
+  return PARTNER_COMMENTS;
+}
+
+/* 32 random bytes of URL-safe text. Nobody guesses one, and it can be
+   turned off without touching the others. */
+function newPartnerToken() {
+  const b = new Uint8Array(24);
+  crypto.getRandomValues(b);
+  return btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function partnerLinkFor(partner) {
+  DB.partnerLinks = DB.partnerLinks || [];
+  return DB.partnerLinks.find((l) => l.partner === partner && !l.revokedAt) || null;
+}
+
+function settingsPartners(view) {
+  DB.partnerLinks = DB.partnerLinks || [];
+  const partners = partnersInUse();
+  const unread = PARTNER_COMMENTS.list.filter((c) => !c.read);
+
+  view.innerHTML = `<div class="grid g2">
+    <div class="card">
+      <div class="card-head"><h3>Partner links</h3><div class="sp"></div>
+        <span style="font-size:12px;color:var(--text-3)">${partners.length} partner${partners.length === 1 ? '' : 's'}</span></div>
+      ${!partners.length ? `<div class="note" style="margin-top:12px">
+        No campaigns have a partner yet. Open a campaign → Edit → <strong>Partner</strong> and type the name
+        (e.g. SPLABAB). Campaigns with the field left empty stay private and never appear on any partner link.
+      </div>` : `
+      <p class="card-sub" style="margin-top:10px">Each link is read-only and shows only that partner's campaigns.
+        Anyone holding the link can open it, so send it to the person who needs it and revoke it when they no longer do.</p>
+      <div class="tbl-wrap" style="margin-top:10px"><table class="tbl">
+        <thead><tr><th>Partner</th><th class="num">Campaigns</th><th class="num">Creators</th><th>Link</th><th></th></tr></thead>
+        <tbody>${partners.map((name) => {
+          const link = partnerLinkFor(name);
+          const camps = DB.campaigns.filter((c) => c.partner === name);
+          const ids = new Set(camps.map((c) => c.id));
+          const people = DB.participants.filter((p) => ids.has(p.campaignId)).length;
+          return `<tr>
+            <td><strong>${esc(name)}</strong></td>
+            <td class="num">${num(camps.length)}</td>
+            <td class="num">${num(people)}</td>
+            <td>${link
+              ? `<code style="font-size:11px">/partner/${esc(link.token.slice(0, 10))}…</code>`
+              : '<span style="color:var(--text-3)">not created</span>'}</td>
+            <td style="text-align:right;white-space:nowrap">
+              ${link
+                ? `<button class="btn xs" data-copy="${esc(name)}">Copy link</button>
+                   <button class="btn xs" data-revoke="${esc(name)}">Revoke</button>`
+                : `<button class="btn xs primary" data-make="${esc(name)}">Create link</button>`}
+            </td></tr>`;
+        }).join('')}</tbody>
+      </table></div>`}
+      <div class="note" style="margin-top:12px">
+        <strong>What a partner never sees:</strong> bank details, internal notes, fees, shipping addresses,
+        and any campaign that is not theirs. The list is assembled on the server, so those fields are not in
+        the page at all rather than merely hidden from it.
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Comments from partners</h3><div class="sp"></div>
+        ${unread.length ? `<span class="pill amber">${unread.length} new</span>` : ''}
+        <button class="btn xs" id="pcRefresh">Refresh</button></div>
+      ${PARTNER_COMMENTS.error ? `<div class="note bad" style="margin-top:10px">${esc(PARTNER_COMMENTS.error)}</div>` : ''}
+      ${!PARTNER_COMMENTS.list.length
+        ? `<p class="card-sub" style="margin-top:10px">Nothing yet. A partner can comment on any creator row, but cannot change anything.</p>`
+        : `<div style="margin-top:10px;display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow:auto">
+            ${PARTNER_COMMENTS.list.slice(0, 60).map((c) => {
+              const p = DB.participants.find((x) => x.id === c.pid);
+              const cr = p ? byCreator[p.creatorId] : null;
+              return `<div class="note" style="margin:0${c.read ? '' : ';border-color:var(--warning)'}">
+                <div style="display:flex;gap:8px;align-items:baseline">
+                  <strong>${esc(c.author)}</strong>
+                  <span style="color:var(--text-3);font-size:11.5px">${esc(c.partner)}</span>
+                  <div style="flex:1"></div>
+                  <span style="color:var(--text-3);font-size:11.5px">${esc(new Date(c.at).toLocaleString())}</span>
+                </div>
+                <div style="margin:5px 0">${esc(c.text)}</div>
+                ${cr ? `<button class="btn xs" data-goto="${esc(c.pid)}">${esc(cr.handle)}</button>`
+                     : `<span style="color:var(--text-3);font-size:11.5px">row no longer exists</span>`}
+              </div>`;
+            }).join('')}
+          </div>
+          ${unread.length ? `<button class="btn sm" id="pcRead" style="margin-top:10px">Mark all as read</button>` : ''}`}
+    </div>
+  </div>`;
+
+  $$('[data-make]').forEach((b) => b.addEventListener('click', () => {
+    DB.partnerLinks.push({ partner: b.dataset.make, token: newPartnerToken(), createdAt: new Date().toISOString(), revokedAt: null });
+    /* the link only works once the server has the token, so save immediately
+       rather than waiting for the debounce */
+    serverSave({ silent: true }).then(() => toast('Link created — copy it once it says Saved'));
+    render();
+  }));
+
+  $$('[data-copy]').forEach((b) => b.addEventListener('click', () => {
+    const link = partnerLinkFor(b.dataset.copy);
+    if (link) copyText(location.origin + '/partner/' + link.token, 'Partner link');
+  }));
+
+  $$('[data-revoke]').forEach((b) => b.addEventListener('click', () => {
+    const link = partnerLinkFor(b.dataset.revoke);
+    if (!link) return;
+    if (!confirm(`Turn off ${b.dataset.revoke}'s link? Anyone holding it stops being able to open the page.`)) return;
+    link.revokedAt = new Date().toISOString();
+    serverSave({ silent: true });
+    render();
+    toast('Link revoked');
+  }));
+
+  $$('[data-goto]').forEach((b) => b.addEventListener('click', () => showParticipant(b.dataset.goto)));
+
+  $('#pcRefresh').addEventListener('click', () => loadPartnerComments().then(() => render()));
+  const pcRead = $('#pcRead');
+  if (pcRead) pcRead.addEventListener('click', async () => {
+    await fetch('/api/partner-comments/read', { method: 'POST' });
+    await loadPartnerComments();
+    render();
+  });
 }
 
 /* ============================================================
@@ -8437,6 +8850,7 @@ loadPersisted();
 loadSyncConfig();
 loadContractDefaults();
 loadGcalPrefs();
+loadPartnerComments();
 lastPushedJson = JSON.stringify(DB);
 wireSearch();
 if (window.innerWidth <= 1080) togglePanel(false);

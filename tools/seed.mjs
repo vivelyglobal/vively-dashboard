@@ -66,6 +66,34 @@ if (junk) junk.visitAt = 'next tuesday-ish';
 
 campaigns.forEach((c) => { if (c.fulfilment === 'visit') { c.venue = c.brand + ', Seoul'; c.timezone = 'Asia/Seoul'; } });
 
+/* two partners and one campaign belonging to neither, so the scoping can be
+   shown to actually scope rather than merely be intended to */
+campaigns[0].partner = 'SPLABAB';
+campaigns[1].partner = 'SPLABAB';
+campaigns[2].partner = 'OTHERCO';
+
+/* things a partner must never be handed */
+creators.forEach((c, i) => {
+  if (i % 3 === 0) c.payout = { bank: 'KB국민', name: c.name, number: '110-234-5678' + i };
+  if (i % 4 === 0) c.gender = i % 8 === 0 ? 'M' : 'F';
+});
+participants.forEach((p, i) => {
+  p.note = 'INTERNAL ONLY — do not show a partner ' + i;
+  p.formNotes = i % 3 === 0 ? '채식주의자입니다' : '';
+  p.remark = i % 5 === 0 ? '2명 방문 예정' : '';
+  p.fee = 50000 + i * 1000;
+  p.address = '서울시 강남구 비밀주소 ' + i;
+  if (i % 6 === 0) { p.importedStatus = 'Waiting Approval'; p.stage = 'shortlisted'; }
+  if (i % 7 === 0) { p.importedStatus = 'Brand Rejected'; p.stage = 'dropped'; p.dropReason = 'Brand rejected'; }
+  p.acceptMessage = i % 6 === 0 ? '안녕하세요! 승인 대기 중입니다.' : '';
+});
+
+const partnerLinks = [
+  { partner: 'SPLABAB', token: 'tok-splabab-test', createdAt: new Date().toISOString(), revokedAt: null },
+  { partner: 'OTHERCO', token: 'tok-otherco-test', createdAt: new Date().toISOString(), revokedAt: null },
+  { partner: 'GONE',    token: 'tok-revoked-test', createdAt: new Date().toISOString(), revokedAt: new Date().toISOString() }
+];
+
 const appointments = [{
   id: 'ap-shoot', title: 'Sushikoji — filming day', date: mk(5), endDate: '', startTime: '10:00',
   endTime: '16:00', timezone: 'Asia/Seoul', location: 'https://meet.google.com/abc-defg-hij',
@@ -73,4 +101,4 @@ const appointments = [{
 }];
 
 console.log(JSON.stringify({ savedAt: new Date().toISOString(),
-  db: { creators, campaigns, participants, appointments }, settings: { hideBlocked: true } }));
+  db: { creators, campaigns, participants, appointments, partnerLinks }, settings: { hideBlocked: true } }));

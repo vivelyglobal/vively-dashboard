@@ -729,6 +729,187 @@ app.post("/api/calendar/test", async (req, res) => {
   }
 });
 
+/* ---------------------------- partner view ----------------------------
+   A partner's point of contact gets one unguessable link and no login.
+   The link resolves to a partner name, and the rows are assembled HERE,
+   from the same database the dashboard reads — so the page is current
+   because it is the same data, not because somebody exported it lately.
+
+   Shaping the rows on the server is the point. Bank details, internal
+   notes, fees and every campaign belonging to someone else are removed
+   before the response is written, so they are never in a payload that
+   reaches the browser, whatever the page does with it.
+   ---------------------------------------------------------------------- */
+
+/* Their Notion form has nine statuses; the partner view has seven. Waiting
+   Approval keeps its own label because it is the one that sits with THEM. */
+const PARTNER_STATUS = {
+  "waiting approval": { ko: "승인 대기", en: "Waiting Approval", tone: "amber", theirs: true },
+  "brand accepted":   { ko: "확정", en: "Confirmed", tone: "green" },
+  "confirmed":        { ko: "확정", en: "Confirmed", tone: "green" },
+  "brand rejected":   { ko: "브랜드 거절", en: "Brand Rejected", tone: "red" },
+  "declined":         { ko: "거절", en: "Refused", tone: "grey" },
+  "cancelled":        { ko: "거절", en: "Refused", tone: "grey" },
+  "canceled":         { ko: "거절", en: "Refused", tone: "grey" },
+  "re-schedule":      { ko: "업로드 대기", en: "Waiting For upload", tone: "blue" },
+  "waiting upload":   { ko: "업로드 대기", en: "Waiting For upload", tone: "blue" },
+  "uploaded":         { ko: "업로드 완료", en: "Uploaded", tone: "green" }
+};
+const STAGE_TO_PARTNER = {
+  sourced:     { ko: "컨택", en: "Contacted", tone: "grey" },
+  contacted:   { ko: "컨택", en: "Contacted", tone: "grey" },
+  replied:     { ko: "컨택", en: "Contacted", tone: "grey" },
+  shortlisted: { ko: "승인 대기", en: "Waiting Approval", tone: "amber", theirs: true },
+  confirmed:   { ko: "확정", en: "Confirmed", tone: "green" },
+  shipped:     { ko: "업로드 대기", en: "Waiting For upload", tone: "blue" },
+  submitted:   { ko: "업로드 대기", en: "Waiting For upload", tone: "blue" },
+  review:      { ko: "업로드 대기", en: "Waiting For upload", tone: "blue" },
+  live:        { ko: "업로드 완료", en: "Uploaded", tone: "green" },
+  dropped:     { ko: "거절", en: "Refused", tone: "grey" }
+};
+
+function partnerStatusOf(p) {
+  const raw = String(p.importedStatus || "").trim().toLowerCase();
+  if (raw && PARTNER_STATUS[raw]) return PARTNER_STATUS[raw];
+  if (/brand.*reject/.test(raw)) return PARTNER_STATUS["brand rejected"];
+  if (p.stage === "dropped" && /brand/i.test(p.dropReason || "")) return PARTNER_STATUS["brand rejected"];
+  return STAGE_TO_PARTNER[p.stage] || STAGE_TO_PARTNER.contacted;
+}
+
+async function loadWorkspaceDoc() {
+  const col = await getWorkspaceCollection();
+  if (!col) return null;
+  return col.findOne({ _id: WORKSPACE_ID });
+}
+
+function resolvePartnerToken(doc, token) {
+  const links = (doc && doc.db && doc.db.partnerLinks) || [];
+  const hit = links.find((l) => l.token === token && !l.revokedAt);
+  return hit ? hit.partner : null;
+}
+
+function buildPartnerRows(db, partner) {
+  const byCreator = Object.fromEntries((db.creators || []).map((c) => [c.id, c]));
+  const byCampaign = Object.fromEntries((db.campaigns || []).map((c) => [c.id, c]));
+  const mine = (db.campaigns || []).filter((c) => (c.partner || "") === partner);
+  const ids = new Set(mine.map((c) => c.id));
+
+  const rows = (db.participants || []).filter((p) => ids.has(p.campaignId)).map((p) => {
+    const cr = byCreator[p.creatorId] || {};
+    const cp = byCampaign[p.campaignId] || {};
+    const st = partnerStatusOf(p);
+    const m = String(p.visitAt || "").trim().match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{1,2}:\d{2}))?/);
+    const handle = cr.handle || "";
+    return {
+      pid: p.id,
+      campaign: cp.brand || "",
+      creator: p.fullName || cr.name || handle,
+      handle,
+      igUrl: handle ? "https://www.instagram.com/" + String(handle).replace(/^@/, "") + "/" : "",
+      acceptMessage: p.acceptMessage || "",
+      visitDate: m ? m[1] : "",
+      visitTime: m && m[2] ? m[2] : "",
+      email: cr.email || "",
+      status: st,
+      gender: cr.gender || "",
+      followers: cr.followers || 0,
+      remark: p.remark || "",
+      kakao: p.contact || cr.contact || "",
+      contentUrl: (p.content && p.content.url) || "",
+      nationality: p.nationality || cr.nationality || cr.country || "",
+      notes: p.formNotes || "",
+      otherSns: p.otherSns || ""
+      /* deliberately absent: cr.payout, p.note, p.fee, p.address, and every
+         campaign that is not this partner's */
+    };
+  });
+
+  rows.sort((a, b) => (a.visitDate || "9999").localeCompare(b.visitDate || "9999") ||
+                      (a.visitTime || "").localeCompare(b.visitTime || "") ||
+                      a.creator.localeCompare(b.creator));
+  return { partner, campaigns: mine.map((c) => ({ id: c.id, brand: c.brand, name: c.name, start: c.start, end: c.end })), rows };
+}
+
+async function partnerCommentsCollection() {
+  const client = await getMongoClient();
+  if (!client) return null;
+  return client.db(MONGODB_DB).collection("partner_comments");
+}
+
+app.get("/api/partner/:token", async (req, res) => {
+  if (!MONGODB_URI) return res.status(503).json({ error: "Not configured." });
+  try {
+    const doc = await loadWorkspaceDoc();
+    const partner = resolvePartnerToken(doc, req.params.token);
+    if (!partner) return res.status(404).json({ error: "This link is not valid, or has been turned off." });
+    const payload = buildPartnerRows(doc.db || {}, partner);
+    const col = await partnerCommentsCollection();
+    const comments = col ? await col.find({ partner }).sort({ at: 1 }).toArray() : [];
+    payload.comments = comments.map((c) => ({ pid: c.pid, text: c.text, author: c.author, at: c.at }));
+    payload.updatedAt = doc.savedAt || null;
+    res.set("X-Robots-Tag", "noindex, nofollow");
+    return res.json({ ok: true, ...payload });
+  } catch (err) {
+    console.error("GET /api/partner failed:", err.message);
+    return res.status(502).json({ error: "Could not reach the database." });
+  }
+});
+
+/* Comments live in their own collection, not in the workspace document.
+   The workspace is saved with an optimistic revision check, so writing a
+   partner's comment into it would collide with whoever has the dashboard
+   open — and a comment is not worth a save conflict. */
+app.post("/api/partner/:token/comment", async (req, res) => {
+  if (!MONGODB_URI) return res.status(503).json({ error: "Not configured." });
+  const text = String((req.body || {}).text || "").trim().slice(0, 2000);
+  const pid = String((req.body || {}).pid || "");
+  const author = String((req.body || {}).author || "").trim().slice(0, 80);
+  if (!text || !pid) return res.status(400).json({ error: "A comment and a row are both required." });
+  try {
+    const doc = await loadWorkspaceDoc();
+    const partner = resolvePartnerToken(doc, req.params.token);
+    if (!partner) return res.status(404).json({ error: "This link is not valid, or has been turned off." });
+    /* only against a row this partner can actually see */
+    const known = buildPartnerRows(doc.db || {}, partner).rows.some((r) => r.pid === pid);
+    if (!known) return res.status(400).json({ error: "Unknown row." });
+    const col = await partnerCommentsCollection();
+    const entry = { partner, pid, text, author: author || "Partner", at: new Date().toISOString(), read: false };
+    await col.insertOne(entry);
+    return res.json({ ok: true, comment: { pid, text, author: entry.author, at: entry.at } });
+  } catch (err) {
+    console.error("POST /api/partner comment failed:", err.message);
+    return res.status(502).json({ error: "Could not save that comment." });
+  }
+});
+
+/* what the dashboard reads to show the comments back to you */
+app.get("/api/partner-comments", async (req, res) => {
+  if (!MONGODB_URI) return res.json({ ok: true, comments: [] });
+  try {
+    const col = await partnerCommentsCollection();
+    const rows = await col.find({}).sort({ at: -1 }).limit(500).toArray();
+    return res.json({ ok: true, comments: rows.map((c) => ({
+      id: String(c._id), partner: c.partner, pid: c.pid, text: c.text, author: c.author, at: c.at, read: !!c.read })) });
+  } catch (err) {
+    return res.status(502).json({ error: err.message });
+  }
+});
+
+app.post("/api/partner-comments/read", async (req, res) => {
+  try {
+    const col = await partnerCommentsCollection();
+    await col.updateMany({ read: { $ne: true } }, { $set: { read: true } });
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(502).json({ error: err.message });
+  }
+});
+
+app.get("/partner/:token", (req, res) => {
+  res.set("X-Robots-Tag", "noindex, nofollow");
+  res.sendFile(path.join(__dirname, "partner.html"));
+});
+
 app.post("/api/signup", async (req, res) => {
   const name = String(req.body?.name || "").trim();
   const email = normalizeEmail(req.body?.email);

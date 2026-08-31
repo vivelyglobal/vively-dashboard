@@ -34,6 +34,9 @@ export const NOTION_FIELD_DEFS = [
   { key: 'comments',    label: 'Comments' },
   { key: 'shares',      label: 'Shares' },
   { key: 'metricsAt',   label: 'Metrics updated (date the numbers were read)' },
+  { key: 'gender',      label: '성별 · Gender' },
+  { key: 'formNotes',   label: 'Notes (what the creator wrote)' },
+  { key: 'acceptMessage', label: 'Accepted / Rejected message' },
   { key: 'visitAt',     label: 'Visit date & time (restaurant / salon booking)' },
   { key: 'status',      label: 'Status (maps to pipeline stage)' },
   { key: 'note',        label: 'Note / message' }
@@ -51,6 +54,15 @@ export function guessNotionField(propName, propType) {
      claimed as the profile link. */
   if (propType === 'email' || /email|이메일/.test(h)) return 'email';
   if (/follower|팔로워/.test(h)) return 'followers';
+  /* Settled before the alias table too. It matches on substrings, and "no"
+     is the alias for the row-number column, so "Notes" and "Number of people
+     visiting" both come back as a row number. Notes is a column the partner
+     reads, so getting it wrong is not cosmetic. */
+  if (/^notes?$|^비고$/.test(h)) return 'formNotes';
+  if (/number of people|people visiting|인원/.test(h)) return 'skip';
+  if (/accepted.*rejected|rejected.*accepted|승인.*메시지/.test(h)) return 'acceptMessage';
+  if (/^성별$|^gender$|^sex$/.test(h)) return 'gender';
+
   const g = guessField(propName, 0, []);
   if (g !== 'skip') return g;
   /* Performance columns first: "Comments" is a metric here, and the
@@ -63,7 +75,9 @@ export function guessNotionField(propName, propType) {
   /* A form's date question is nearly always the booking slot — but Notion
      adds its own bookkeeping timestamps to every database, and those must
      not be mistaken for the slot the creator picked. */
-  const bookkeeping = /created|submitted|last edited|last_edited|updated|timestamp|생성|수정/.test(h);
+  const bookkeeping = /created|submitted|submission|last edited|last_edited|updated|timestamp|생성|수정/.test(h);
+  /* when the content went up is not when the creator is coming in */
+  if (/^posted|posting date|upload date|게시일/.test(h)) return 'skip';
   if (!bookkeeping && (propType === 'date' || /when|date|time|schedule|slot|booking|visit|avail|예약|일정|방문/.test(h))) return 'visitAt';
   if (/note|message|comment|비고|메모/.test(h)) return 'note';
   return 'skip';
@@ -149,6 +163,12 @@ export function notionRowToApplicant(properties, mapping) {
     otherSns: String(get('otherSns') || '').trim(),
     contentUrl: String(get('contentUrl') || '').trim(),
     note: String(get('note') || '').trim(),
+    /* the creator's own Notes answer, kept apart from the private internal
+       note — this one is shown to the partner */
+    formNotes: String(get('formNotes') || '').trim(),
+    /* a Notion formula that composes the accept/reject wording from Status */
+    acceptMessage: String(get('acceptMessage') || '').trim(),
+    gender: String(get('gender') || '').trim(),
     visitAt: notionVisitValue(get('visitAt')),
     metricsAt: notionVisitValue(get('metricsAt')),
     metrics: NOTION_METRIC_KEYS.reduce((acc, k) => {
@@ -393,6 +413,9 @@ export async function runNotionSync(cp, opts) {
       p.contact = ap.contact || p.contact;
       p.nationality = ap.nationality || p.nationality;
       p.otherSns = ap.otherSns || p.otherSns;
+      p.formNotes = ap.formNotes || p.formNotes;
+      p.acceptMessage = ap.acceptMessage || p.acceptMessage;
+      if (ap.gender && cr) cr.gender = ap.gender;
       p.importedStatus = ap.statusRaw || p.importedStatus;
       if (ap.visitAt && ap.visitAt !== p.visitAt) { p.visitAt = ap.visitAt; reslotted++; }
       /* Notion is the source of truth for the pipeline stage: when someone
@@ -419,6 +442,7 @@ export async function runNotionSync(cp, opts) {
         dropReason: ap.dropReason, revisions: 0, note: ap.note,
         fullName: ap.fullName, address: ap.address, contact: ap.contact, nationality: ap.nationality,
         visitAt: ap.visitAt, arrivingDate: '', otherSns: ap.otherSns, importedStatus: ap.statusRaw,
+        formNotes: ap.formNotes, acceptMessage: ap.acceptMessage, remark: '',
         notionPageId: row.pageId, content: null
       };
       applyStageDates(np, ap.stage, cp);

@@ -9,6 +9,7 @@ import { $, esc } from '../ui/dom.js';
 import { downloadFile, flagPill, stagePill, statCard, whoHtml } from '../ui/html.js';
 import { toast } from '../ui/overlay.js';
 import { settingsCalendar } from './calendar.js';
+import { settingsPartners } from './partners.js';
 import { settingsSheets } from './sheetsSettings.js';
 
 /* ============================================================
@@ -19,6 +20,7 @@ export const SETTINGS_ITEMS = [
   { id: 'blacklist',    label: 'Creator blacklist',   sub: 'blocked, flagged, preferred' },
   { id: 'sheet',        label: 'Google Sheet',        sub: 'shared store for the team' },
   { id: 'calendar',     label: 'Google Calendar',     sub: 'push bookings to a calendar' },
+  { id: 'partners',     label: 'Partners',            sub: 'share progress, read their comments' },
   { id: 'integrations', label: 'Instagram & TikTok',  sub: 'what a connection can pull' },
   { id: 'sources',      label: 'Data sources',        sub: 'where creators come from' },
   { id: 'report',       label: 'Report hand-off',     sub: 'Vively Toolkit' },
@@ -30,6 +32,7 @@ export function renderSettings(view, item) {
   if (item === 'blacklist')  return settingsBlacklist(view);
   if (item === 'sheet')      return settingsSheets(view);
   if (item === 'calendar')   return settingsCalendar(view);
+  if (item === 'partners')   return settingsPartners(view);
   if (item === 'sources') {
     const dupGroups = duplicateCreatorGroups();
     const dupExtra = dupGroups.reduce((a, g) => a + g.list.length - 1, 0);
@@ -254,6 +257,7 @@ export async function restoreBackup(e) {
     clearPersisted();
     DB.creators = db.creators; DB.campaigns = db.campaigns; DB.participants = db.participants || [];
     DB.appointments = db.appointments || [];
+    DB.partnerLinks = db.partnerLinks || [];
     DB.creators.forEach((c) => (byCreator[c.id] = c));
     DB.campaigns.forEach((c) => (byCampaign[c.id] = c));
     if (saved.settings && typeof saved.settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = saved.settings.hideBlocked;

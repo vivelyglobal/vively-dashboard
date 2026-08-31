@@ -55,7 +55,26 @@ npm run check:browser   # walks the routes through both versions and diffs the
                         # words on screen  (needs: npx playwright install chromium)
 npm run check:calendar  # drives the Google Calendar sync against a stand-in
                         # Google and counts what lands on the calendar
+npm run check:partner   # opens a partner link in a browser and checks that
+                        # nothing belonging to anyone else is in the page
 ```
+
+## The partner view
+
+A partner's point of contact gets one unguessable link and no login. The rows
+are assembled in `server.js` (`buildPartnerRows`), not in the browser, so bank
+details, internal notes, fees, addresses and every campaign belonging to
+someone else are absent from the response rather than merely hidden in the
+page. `tests/partner.test.mjs` asserts that by searching the serialised
+payload for values that must not appear.
+
+Comments live in their own `partner_comments` collection, not in the workspace
+document. The workspace is saved with an optimistic revision check, so writing
+a partner's comment into it would collide with whoever has the dashboard open.
+
+Payout details never leave the server copy: they are excluded from the Sheet
+sync by its explicit column list, stripped from the workspace backup download
+and the per-campaign hand-off by `stripPayout`, and masked on screen.
 
 ### After editing index.html
 
