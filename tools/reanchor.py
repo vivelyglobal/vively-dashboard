@@ -39,10 +39,9 @@ def map_end(i):                       # last surviving line at or before i
     raise SystemExit('cannot map end %d' % i)
 
 def correct(mapped, want, lo):
-    """The diff can align a generic boundary line - a bare "}" or a blank -
-    against an identical one further down, which silently swallows whatever
-    was inserted in between. So the mapped end is checked against the text
-    it is supposed to be, and pulled back to the nearest line that matches."""
+    """The diff can align a boundary line against an identical one elsewhere.
+    Checked against the text it should be, and pulled back to the nearest
+    line that matches."""
     if 0 <= mapped < len(cur) and cur[mapped] == want:
         return mapped
     for j in range(min(mapped, len(cur) - 1), lo - 1, -1):
@@ -50,26 +49,32 @@ def correct(mapped, want, lo):
             return j
     raise SystemExit('cannot place end line %r' % want[:60])
 
-moved = 0
-for m in man:
-    # A module added after the reference was taken is already in current
-    # coordinates, so there is nothing to map it through. The flag is true
-    # for exactly one run - the one that introduces it - and is cleared here
-    # so the next run treats it like every other module.
-    if m.pop('current', False):
-        continue
-    new = []
-    for a, b in m['ranges']:
-        na = map_start(a - 1)
-        nb = correct(map_end(b - 1), ref[b - 1], na)
-        if (na + 1, nb + 1) != (a, b): moved += 1
-        if cur[na] != ref[a - 1]:
-            raise SystemExit('%s: start line does not match after mapping' % m['file'])
-        new.append([na + 1, nb + 1])
-    m['ranges'] = new
+# Ranges tile the file in order. Where one ends exactly where the next
+# begins, its end is derived from that neighbour rather than matched by
+# text - several boundaries are a blank line, and there are hundreds of
+# those to align against. Only the starts, which are banner comments or
+# declarations, are matched directly.
+flat = sorted(([m, i, r] for m in man if not m.get('current') for i, r in enumerate(m['ranges'])),
+              key=lambda x: x[2][0])
+starts = {}
+for m, i, (a, b) in flat:
+    na = map_start(a - 1)
+    if cur[na] != ref[a - 1]:
+        raise SystemExit('%s: start line does not match after mapping' % m['file'])
+    starts[(m['file'], i)] = na
 
-json.dump(man, open('tools/manifest.json', 'w', encoding='utf-8'), indent=1)
-print('re-anchored %d modules (%d ranges moved)' % (len(man), moved))
+moved = 0
+for idx, (m, i, r) in enumerate(flat):
+    a, b = r
+    na = starts[(m['file'], i)]
+    nxt = flat[idx + 1] if idx + 1 < len(flat) else None
+    if nxt and nxt[2][0] == b + 1:
+        nb = starts[(nxt[0]['file'], nxt[1])] - 1      # adjacent: exact by construction
+    else:
+        nb = correct(map_end(b - 1), ref[b - 1], na)
+    if (na + 1, nb + 1) != (a, b):
+        moved += 1
+    m['ranges'][i] = [na + 1, nb + 1]
 
 # --- no module may reach into the next one -------------------------------
 # A boundary line like "}" can be matched against the wrong one, and the
@@ -79,9 +84,10 @@ flat = sorted(([m['file'], i, r] for m in man for i, r in enumerate(m['ranges'])
 clamped = 0
 for (fa, ia, ra), (fb, ib, rb) in zip(flat, flat[1:]):
     if ra[1] >= rb[0]:
-        print('  clamped %s: %d -> %d (would have run into %s)' % (fa, ra[1], rb[0] - 1, fb))
-        ra[1] = rb[0] - 1
+        print('  OVERLAP %s [..%d] runs into %s [%d..]' % (fa, ra[1], fb, rb[0]))
         clamped += 1
 if clamped:
-    json.dump(man, open('tools/manifest.json', 'w', encoding='utf-8'), indent=1)
-print('%d overlap(s) clamped' % clamped)
+    raise SystemExit('%d overlap(s) - a module would swallow its neighbour; not writing' % clamped)
+
+json.dump(man, open('tools/manifest.json', 'w', encoding='utf-8'), indent=1)
+print('re-anchored %d modules, %d range(s) moved, no overlaps' % (len(man), moved))

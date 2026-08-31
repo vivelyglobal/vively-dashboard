@@ -32,6 +32,11 @@ for (const m of manifest) {
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, src);
   m.sha256 = crypto.createHash('sha256').update(src).digest('hex');
+  /* `current` means "ranges are already in today's coordinates", which is
+     true only until this file is written and the manifest becomes the new
+     baseline. Clearing it here stops a stale flag telling a later re-anchor
+     to skip the module, which lets its neighbour swallow it. */
+  delete m.current;
 }
 fs.writeFileSync('tools/manifest.json', JSON.stringify(manifest, null, 1));
 console.log(`wrote ${manifest.length} modules and refreshed their checksums`);

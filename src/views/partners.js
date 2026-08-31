@@ -1,6 +1,6 @@
 import { num } from '../lib/format.js';
 import { DB, byCreator, notify, serverSave } from '../model/db.js';
-import { partnersInUse } from '../sync/partner.js';
+import { partnerStatus, partnersInUse } from '../sync/partner.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { copyText } from '../ui/html.js';
 import { toast } from '../ui/overlay.js';
@@ -55,16 +55,18 @@ export function settingsPartners(view) {
       <p class="card-sub" style="margin-top:10px">Each link is read-only and shows only that partner's campaigns.
         Anyone holding the link can open it, so send it to the person who needs it and revoke it when they no longer do.</p>
       <div class="tbl-wrap" style="margin-top:10px"><table class="tbl">
-        <thead><tr><th>Partner</th><th class="num">Campaigns</th><th class="num">Creators</th><th>Link</th><th></th></tr></thead>
+        <thead><tr><th>Partner</th><th class="num">Campaigns</th><th class="num">Creators shown</th><th>Link</th><th></th></tr></thead>
         <tbody>${partners.map((name) => {
           const link = partnerLinkFor(name);
           const camps = DB.campaigns.filter((c) => c.partner === name);
           const ids = new Set(camps.map((c) => c.id));
-          const people = DB.participants.filter((p) => ids.has(p.campaignId)).length;
+          const all = DB.participants.filter((p) => ids.has(p.campaignId));
+          const people = all.filter((p) => !partnerStatus(p).theirs).length;
+          const hidden = all.length - people;
           return `<tr>
             <td><strong>${esc(name)}</strong></td>
             <td class="num">${num(camps.length)}</td>
-            <td class="num">${num(people)}</td>
+            <td class="num">${num(people)}${hidden ? `<br><span style="font-size:11px;color:var(--text-3)">${num(hidden)} awaiting approval, hidden</span>` : ''}</td>
             <td>${link
               ? `<code style="font-size:11px">/partner/${esc(link.token.slice(0, 10))}…</code>`
               : '<span style="color:var(--text-3)">not created</span>'}</td>
@@ -77,8 +79,8 @@ export function settingsPartners(view) {
         }).join('')}</tbody>
       </table></div>`}
       <div class="note" style="margin-top:12px">
-        <strong>What a partner never sees:</strong> bank details, internal notes, fees, shipping addresses,
-        and any campaign that is not theirs. The list is assembled on the server, so those fields are not in
+        <strong>What a partner never sees:</strong> creators still on <em>Waiting Approval</em>, bank details,
+        internal notes, fees, shipping addresses, and any campaign that is not theirs. The list is assembled on the server, so those fields are not in
         the page at all rather than merely hidden from it.
       </div>
     </div>

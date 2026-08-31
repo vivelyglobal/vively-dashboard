@@ -90,12 +90,10 @@ async function load() {
 
 function render() {
   const rows = DATA.rows.filter((r) => filter === 'all' || r.campaign === filter);
-  const waiting = DATA.rows.filter((r) => r.status.theirs).length;
   document.getElementById('title').textContent = DATA.partner + ' — 크리에이터 진행 현황';
   document.getElementById('sub').innerHTML =
     esc(DATA.campaigns.length + '개 프로젝트 · ' + DATA.rows.length + '명') +
-    (DATA.updatedAt ? ' · 마지막 업데이트 ' + esc(new Date(DATA.updatedAt).toLocaleString('ko-KR')) : '') +
-    (waiting ? ' · <b style="color:var(--amber)">승인 대기 ' + waiting + '건</b>' : '');
+    (DATA.updatedAt ? ' · 마지막 업데이트 ' + esc(new Date(DATA.updatedAt).toLocaleString('ko-KR')) : '');
 
   document.getElementById('bar').innerHTML =
     ['all'].concat(DATA.campaigns.map((c) => c.brand)).map((c) =>

@@ -41,7 +41,46 @@ const db = {
 test('a partner sees only their own campaigns', () => {
   const out = buildPartnerRows(db, 'SPLABAB');
   assert.deepEqual(out.campaigns.map((c) => c.brand), ['Sushikoji']);
-  assert.deepEqual(out.rows.map((r) => r.pid).sort(), ['a-c1', 'a-c2']);
+  /* a-c2 is Waiting Approval, so it is withheld — see the next test */
+  assert.deepEqual(out.rows.map((r) => r.pid), ['a-c1']);
+});
+
+test('a creator still awaiting brand approval is ABSENT, not just hidden', () => {
+  const out = buildPartnerRows(db, 'SPLABAB');
+  assert.equal(out.rows.some((r) => r.pid === 'a-c2'), false);
+  assert.equal(out.withheld, 1, 'the count is reported back to the dashboard');
+  /* not merely filtered in the page — the row is not in the payload at all,
+     so there is nothing to find by opening devtools */
+  const json = JSON.stringify(out);
+  assert.ok(!json.includes('@two'), 'an unapproved creator reached the payload');
+  assert.ok(!json.includes('two@x.com'), 'an unapproved creator\'s email reached the payload');
+});
+
+test('every other status still comes through', () => {
+  const many = { ...db, participants: [
+    { id: 'a-x1', campaignId: 'a', creatorId: 'c1', stage: 'confirmed',  importedStatus: 'Confirmed' },
+    { id: 'a-x2', campaignId: 'a', creatorId: 'c1', stage: 'dropped',    importedStatus: 'Brand Rejected' },
+    { id: 'a-x3', campaignId: 'a', creatorId: 'c1', stage: 'dropped',    importedStatus: 'Declined' },
+    { id: 'a-x4', campaignId: 'a', creatorId: 'c1', stage: 'shipped',    importedStatus: 'Waiting Upload' },
+    { id: 'a-x5', campaignId: 'a', creatorId: 'c1', stage: 'live',       importedStatus: 'Uploaded' },
+    { id: 'a-x6', campaignId: 'a', creatorId: 'c1', stage: 'confirmed',  importedStatus: 'Brand Accepted' },
+    { id: 'a-x7', campaignId: 'a', creatorId: 'c1', stage: 'shipped',    importedStatus: 'Re-Schedule' },
+    { id: 'a-x8', campaignId: 'a', creatorId: 'c1', stage: 'dropped',    importedStatus: 'Cancelled' },
+    { id: 'a-x9', campaignId: 'a', creatorId: 'c1', stage: 'shortlisted', importedStatus: 'Waiting Approval' }
+  ] };
+  const out = buildPartnerRows(many, 'SPLABAB');
+  assert.deepEqual(out.rows.map((r) => r.pid).sort(),
+    ['a-x1', 'a-x2', 'a-x3', 'a-x4', 'a-x5', 'a-x6', 'a-x7', 'a-x8']);
+  assert.equal(out.withheld, 1);
+});
+
+test('a shortlisted row with no Notion status is withheld too', () => {
+  /* shortlisted means "sent to the brand for approval" — the same thing
+     Waiting Approval means, arrived at from the pipeline instead */
+  const only = { ...db, participants: [
+    { id: 'a-s', campaignId: 'a', creatorId: 'c1', stage: 'shortlisted' }
+  ] };
+  assert.equal(buildPartnerRows(only, 'SPLABAB').rows.length, 0);
 });
 
 test('another partner sees a different set, and never yours', () => {
@@ -87,12 +126,15 @@ test('the creator form note and the internal note are different fields', () => {
   assert.ok(!String(r.notes).includes('INTERNAL'));
 });
 
-test('Waiting Approval keeps its own label — it is what sits with the partner', () => {
+test('Waiting Approval is the flag the row filter keys on', () => {
   const s = partnerStatusOf({ importedStatus: 'Waiting Approval', stage: 'shortlisted' });
   assert.equal(s.en, 'Waiting Approval');
   assert.equal(s.theirs, true);
-  /* and from a stage alone, with no Notion status */
-  assert.equal(partnerStatusOf({ stage: 'shortlisted' }).en, 'Waiting Approval');
+  assert.equal(partnerStatusOf({ stage: 'shortlisted' }).theirs, true);
+  /* and nothing else carries it, or rows would vanish for the wrong reason */
+  ['Confirmed', 'Brand Accepted', 'Brand Rejected', 'Declined', 'Cancelled',
+   'Re-Schedule', 'Waiting Upload', 'Uploaded'].forEach((st) =>
+    assert.ok(!partnerStatusOf({ importedStatus: st }).theirs, st + ' should not be withheld'));
 });
 
 test('the nine Notion statuses land on the right partner labels', () => {
@@ -115,7 +157,11 @@ test('a row with no Notion status still gets one from its stage', () => {
 });
 
 test('rows come back in visit order so the POC reads it as a schedule', () => {
-  const rows = buildPartnerRows(db, 'SPLABAB').rows;
-  assert.equal(rows[0].visitDate, '2026-09-04');
-  assert.equal(rows[1].visitDate, '');          /* unscheduled sinks to the bottom */
+  const withDates = { ...db, participants: [
+    { id: 'a-late', campaignId: 'a', creatorId: 'c1', stage: 'confirmed', visitAt: '2026-09-20 10:00' },
+    { id: 'a-none', campaignId: 'a', creatorId: 'c2', stage: 'confirmed', visitAt: '' },
+    { id: 'a-soon', campaignId: 'a', creatorId: 'c3', stage: 'confirmed', visitAt: '2026-09-04 19:00' }
+  ] };
+  const rows = buildPartnerRows(withDates, 'SPLABAB').rows;
+  assert.deepEqual(rows.map((r) => r.pid), ['a-soon', 'a-late', 'a-none']);
 });

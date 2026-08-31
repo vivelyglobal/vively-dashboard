@@ -794,7 +794,13 @@ function buildPartnerRows(db, partner) {
   const mine = (db.campaigns || []).filter((c) => (c.partner || "") === partner);
   const ids = new Set(mine.map((c) => c.id));
 
-  const rows = (db.participants || []).filter((p) => ids.has(p.campaignId)).map((p) => {
+  /* A creator still awaiting brand approval is not shown at all. They are a
+     proposal, not a booking, and the partner sees the roster once it is
+     settled. Filtered HERE rather than in the page, so an unapproved creator
+     is never in the response for anyone to find in devtools. */
+  const rows = (db.participants || []).filter((p) => ids.has(p.campaignId))
+    .filter((p) => !partnerStatusOf(p).theirs)
+    .map((p) => {
     const cr = byCreator[p.creatorId] || {};
     const cp = byCampaign[p.campaignId] || {};
     const st = partnerStatusOf(p);
@@ -827,7 +833,10 @@ function buildPartnerRows(db, partner) {
   rows.sort((a, b) => (a.visitDate || "9999").localeCompare(b.visitDate || "9999") ||
                       (a.visitTime || "").localeCompare(b.visitTime || "") ||
                       a.creator.localeCompare(b.creator));
-  return { partner, campaigns: mine.map((c) => ({ id: c.id, brand: c.brand, name: c.name, start: c.start, end: c.end })), rows };
+  const withheld = (db.participants || []).filter((p) => ids.has(p.campaignId))
+    .filter((p) => partnerStatusOf(p).theirs).length;
+  return { partner, withheld,
+    campaigns: mine.map((c) => ({ id: c.id, brand: c.brand, name: c.name, start: c.start, end: c.end })), rows };
 }
 
 async function partnerCommentsCollection() {

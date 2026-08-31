@@ -36,6 +36,7 @@ export const NOTION_FIELD_DEFS = [
   { key: 'metricsAt',   label: 'Metrics updated (date the numbers were read)' },
   { key: 'gender',      label: '성별 · Gender' },
   { key: 'formNotes',   label: 'Notes (what the creator wrote)' },
+  { key: 'remark',      label: '참고 · Remark (shown to the partner)' },
   { key: 'acceptMessage', label: 'Accepted / Rejected message' },
   { key: 'visitAt',     label: 'Visit date & time (restaurant / salon booking)' },
   { key: 'status',      label: 'Status (maps to pipeline stage)' },
@@ -59,7 +60,14 @@ export function guessNotionField(propName, propType) {
      visiting" both come back as a row number. Notes is a column the partner
      reads, so getting it wrong is not cosmetic. */
   if (/^notes?$|^비고$/.test(h)) return 'formNotes';
+  if (/^remarks?$|^참고$|^특이사항$/.test(h)) return 'remark';
   if (/number of people|people visiting|인원/.test(h)) return 'skip';
+  /* Deliberately never mapped. A form that collects bank details is holding
+     the most sensitive thing in this whole system in plain text, and pulling
+     it into the workspace would spread it to local storage, the Sheet, every
+     export and — one mistake later — a partner link. Payout details are
+     entered in the dashboard, where stripPayout keeps them from travelling. */
+  if (/bank|account number|계좌|은행/.test(h)) return 'skip';
   if (/accepted.*rejected|rejected.*accepted|승인.*메시지/.test(h)) return 'acceptMessage';
   if (/^성별$|^gender$|^sex$/.test(h)) return 'gender';
 
@@ -166,6 +174,7 @@ export function notionRowToApplicant(properties, mapping) {
     /* the creator's own Notes answer, kept apart from the private internal
        note — this one is shown to the partner */
     formNotes: String(get('formNotes') || '').trim(),
+    remark: String(get('remark') || '').trim(),
     /* a Notion formula that composes the accept/reject wording from Status */
     acceptMessage: String(get('acceptMessage') || '').trim(),
     gender: String(get('gender') || '').trim(),
@@ -414,6 +423,7 @@ export async function runNotionSync(cp, opts) {
       p.nationality = ap.nationality || p.nationality;
       p.otherSns = ap.otherSns || p.otherSns;
       p.formNotes = ap.formNotes || p.formNotes;
+      p.remark = ap.remark || p.remark;
       p.acceptMessage = ap.acceptMessage || p.acceptMessage;
       if (ap.gender && cr) cr.gender = ap.gender;
       p.importedStatus = ap.statusRaw || p.importedStatus;
@@ -442,7 +452,7 @@ export async function runNotionSync(cp, opts) {
         dropReason: ap.dropReason, revisions: 0, note: ap.note,
         fullName: ap.fullName, address: ap.address, contact: ap.contact, nationality: ap.nationality,
         visitAt: ap.visitAt, arrivingDate: '', otherSns: ap.otherSns, importedStatus: ap.statusRaw,
-        formNotes: ap.formNotes, acceptMessage: ap.acceptMessage, remark: '',
+        formNotes: ap.formNotes, acceptMessage: ap.acceptMessage, remark: ap.remark || '',
         notionPageId: row.pageId, content: null
       };
       applyStageDates(np, ap.stage, cp);

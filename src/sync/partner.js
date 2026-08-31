@@ -67,7 +67,10 @@ export const partnersInUse = () => [...new Set(DB.campaigns.map((c) => c.partner
 export function partnerRows(partner) {
   const camps = DB.campaigns.filter((c) => (c.partner || '') === partner);
   const ids = new Set(camps.map((c) => c.id));
-  return DB.participants.filter((p) => ids.has(p.campaignId)).map((p) => {
+  /* mirrors the server: a creator awaiting brand approval is not shown */
+  return DB.participants.filter((p) => ids.has(p.campaignId))
+    .filter((p) => !partnerStatus(p).theirs)
+    .map((p) => {
     const cr = byCreator[p.creatorId] || {};
     const cp = byCampaign[p.campaignId] || {};
     const st = partnerStatus(p);

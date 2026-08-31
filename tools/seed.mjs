@@ -81,10 +81,14 @@ participants.forEach((p, i) => {
   p.note = 'INTERNAL ONLY — do not show a partner ' + i;
   p.formNotes = i % 3 === 0 ? '채식주의자입니다' : '';
   p.remark = i % 5 === 0 ? '2명 방문 예정' : '';
+  if (i % 3 === 0) p.acceptMessage = '승인되었습니다';
   p.fee = 50000 + i * 1000;
   p.address = '서울시 강남구 비밀주소 ' + i;
-  if (i % 6 === 0) { p.importedStatus = 'Waiting Approval'; p.stage = 'shortlisted'; }
+  /* order matters: whichever runs last decides the status, and the marker
+     below has to end up on rows that really are withheld */
   if (i % 7 === 0) { p.importedStatus = 'Brand Rejected'; p.stage = 'dropped'; p.dropReason = 'Brand rejected'; }
+  if (i % 6 === 0) { p.importedStatus = 'Waiting Approval'; p.stage = 'shortlisted'; p.dropReason = null;
+                     p.remark = 'WITHHELD-MARKER-DO-NOT-SHOW'; }
   p.acceptMessage = i % 6 === 0 ? '안녕하세요! 승인 대기 중입니다.' : '';
 });
 

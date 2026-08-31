@@ -4566,6 +4566,7 @@ const NOTION_FIELD_DEFS = [
   { key: 'metricsAt',   label: 'Metrics updated (date the numbers were read)' },
   { key: 'gender',      label: '성별 · Gender' },
   { key: 'formNotes',   label: 'Notes (what the creator wrote)' },
+  { key: 'remark',      label: '참고 · Remark (shown to the partner)' },
   { key: 'acceptMessage', label: 'Accepted / Rejected message' },
   { key: 'visitAt',     label: 'Visit date & time (restaurant / salon booking)' },
   { key: 'status',      label: 'Status (maps to pipeline stage)' },
@@ -4589,7 +4590,14 @@ function guessNotionField(propName, propType) {
      visiting" both come back as a row number. Notes is a column the partner
      reads, so getting it wrong is not cosmetic. */
   if (/^notes?$|^비고$/.test(h)) return 'formNotes';
+  if (/^remarks?$|^참고$|^특이사항$/.test(h)) return 'remark';
   if (/number of people|people visiting|인원/.test(h)) return 'skip';
+  /* Deliberately never mapped. A form that collects bank details is holding
+     the most sensitive thing in this whole system in plain text, and pulling
+     it into the workspace would spread it to local storage, the Sheet, every
+     export and — one mistake later — a partner link. Payout details are
+     entered in the dashboard, where stripPayout keeps them from travelling. */
+  if (/bank|account number|계좌|은행/.test(h)) return 'skip';
   if (/accepted.*rejected|rejected.*accepted|승인.*메시지/.test(h)) return 'acceptMessage';
   if (/^성별$|^gender$|^sex$/.test(h)) return 'gender';
 
@@ -4696,6 +4704,7 @@ function notionRowToApplicant(properties, mapping) {
     /* the creator's own Notes answer, kept apart from the private internal
        note — this one is shown to the partner */
     formNotes: String(get('formNotes') || '').trim(),
+    remark: String(get('remark') || '').trim(),
     /* a Notion formula that composes the accept/reject wording from Status */
     acceptMessage: String(get('acceptMessage') || '').trim(),
     gender: String(get('gender') || '').trim(),
@@ -4944,6 +4953,7 @@ async function runNotionSync(cp, opts) {
       p.nationality = ap.nationality || p.nationality;
       p.otherSns = ap.otherSns || p.otherSns;
       p.formNotes = ap.formNotes || p.formNotes;
+      p.remark = ap.remark || p.remark;
       p.acceptMessage = ap.acceptMessage || p.acceptMessage;
       if (ap.gender && cr) cr.gender = ap.gender;
       p.importedStatus = ap.statusRaw || p.importedStatus;
@@ -4972,7 +4982,7 @@ async function runNotionSync(cp, opts) {
         dropReason: ap.dropReason, revisions: 0, note: ap.note,
         fullName: ap.fullName, address: ap.address, contact: ap.contact, nationality: ap.nationality,
         visitAt: ap.visitAt, arrivingDate: '', otherSns: ap.otherSns, importedStatus: ap.statusRaw,
-        formNotes: ap.formNotes, acceptMessage: ap.acceptMessage, remark: '',
+        formNotes: ap.formNotes, acceptMessage: ap.acceptMessage, remark: ap.remark || '',
         notionPageId: row.pageId, content: null
       };
       applyStageDates(np, ap.stage, cp);
@@ -7608,7 +7618,10 @@ const partnersInUse = () => [...new Set(DB.campaigns.map((c) => c.partner).filte
 function partnerRows(partner) {
   const camps = DB.campaigns.filter((c) => (c.partner || '') === partner);
   const ids = new Set(camps.map((c) => c.id));
-  return DB.participants.filter((p) => ids.has(p.campaignId)).map((p) => {
+  /* mirrors the server: a creator awaiting brand approval is not shown */
+  return DB.participants.filter((p) => ids.has(p.campaignId))
+    .filter((p) => !partnerStatus(p).theirs)
+    .map((p) => {
     const cr = byCreator[p.creatorId] || {};
     const cp = byCampaign[p.campaignId] || {};
     const st = partnerStatus(p);
@@ -7694,16 +7707,18 @@ function settingsPartners(view) {
       <p class="card-sub" style="margin-top:10px">Each link is read-only and shows only that partner's campaigns.
         Anyone holding the link can open it, so send it to the person who needs it and revoke it when they no longer do.</p>
       <div class="tbl-wrap" style="margin-top:10px"><table class="tbl">
-        <thead><tr><th>Partner</th><th class="num">Campaigns</th><th class="num">Creators</th><th>Link</th><th></th></tr></thead>
+        <thead><tr><th>Partner</th><th class="num">Campaigns</th><th class="num">Creators shown</th><th>Link</th><th></th></tr></thead>
         <tbody>${partners.map((name) => {
           const link = partnerLinkFor(name);
           const camps = DB.campaigns.filter((c) => c.partner === name);
           const ids = new Set(camps.map((c) => c.id));
-          const people = DB.participants.filter((p) => ids.has(p.campaignId)).length;
+          const all = DB.participants.filter((p) => ids.has(p.campaignId));
+          const people = all.filter((p) => !partnerStatus(p).theirs).length;
+          const hidden = all.length - people;
           return `<tr>
             <td><strong>${esc(name)}</strong></td>
             <td class="num">${num(camps.length)}</td>
-            <td class="num">${num(people)}</td>
+            <td class="num">${num(people)}${hidden ? `<br><span style="font-size:11px;color:var(--text-3)">${num(hidden)} awaiting approval, hidden</span>` : ''}</td>
             <td>${link
               ? `<code style="font-size:11px">/partner/${esc(link.token.slice(0, 10))}…</code>`
               : '<span style="color:var(--text-3)">not created</span>'}</td>
@@ -7716,8 +7731,8 @@ function settingsPartners(view) {
         }).join('')}</tbody>
       </table></div>`}
       <div class="note" style="margin-top:12px">
-        <strong>What a partner never sees:</strong> bank details, internal notes, fees, shipping addresses,
-        and any campaign that is not theirs. The list is assembled on the server, so those fields are not in
+        <strong>What a partner never sees:</strong> creators still on <em>Waiting Approval</em>, bank details,
+        internal notes, fees, shipping addresses, and any campaign that is not theirs. The list is assembled on the server, so those fields are not in
         the page at all rather than merely hidden from it.
       </div>
     </div>

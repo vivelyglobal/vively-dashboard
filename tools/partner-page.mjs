@@ -75,11 +75,25 @@ await step('the columns the POC asked for are all there', async () => {
     if (!heads.some((h) => h.includes(want))) throw new Error('missing column: ' + want + ' | ' + heads.join(' / '));
 });
 
-await step('승인 대기 is called out, because it is theirs to action', async () => {
-  const sub = await p.$eval('#sub', (e) => e.textContent);
-  if (!/승인 대기/.test(sub)) throw new Error(sub);
-  const pills = await p.$$eval('.pill.amber', (n) => n.length);
-  if (!pills) throw new Error('no Waiting Approval rows highlighted');
+await step('no creator awaiting approval appears anywhere', async () => {
+  const withheld = await p.evaluate(() => DATA.withheld);
+  if (!withheld) throw new Error('the seed has no withheld rows, so this would prove nothing');
+  const labels = await p.evaluate(() => DATA.rows.map((r) => r.status.en));
+  if (labels.includes('Waiting Approval')) throw new Error('a Waiting Approval row is in the list');
+  const shown = await p.$$eval('tbody tr', (n) => n.length);
+  console.log(`     (${withheld} withheld, ${shown} shown)`);
+});
+
+await step('a withheld creator is not in the payload at all', async () => {
+  const raw = await p.evaluate(() => JSON.stringify(DATA));
+  if (/WITHHELD-MARKER/.test(raw)) throw new Error('a withheld row reached the browser');
+  const html = await p.content();
+  if (/WITHHELD-MARKER/.test(html)) throw new Error('a withheld row is in the page source');
+});
+
+await step('참고 from the Notion Remark column is shown', async () => {
+  const text = await p.$eval('table', (e) => e.innerText);
+  if (!/2명 방문 예정/.test(text)) throw new Error('the remark is not on the page');
 });
 
 await step('filtering by campaign narrows the list', async () => {

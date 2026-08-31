@@ -89,9 +89,17 @@ npm run check:modules
 ```
 
 `tools/reanchor.py` maps each range through a diff rather than matching line
-text — half the boundaries in this file are a bare `}`, and anchoring on that
-silently lets one module swallow its neighbour. It checks for exactly that
-and refuses.
+text. Only the *starts* are matched — those are banner comments or
+declarations. Ends come from the next range's start, because ranges tile the
+file in order and several boundaries are a blank line, of which there are
+hundreds to align against wrongly. It then checks no module reaches into its
+neighbour and refuses to write if one does.
+
+A module added to the manifest by hand carries `current: true`, meaning "these
+ranges are already in today's coordinates, do not map them". `rebuild-split`
+clears it once the file is written, because from that point the manifest is
+the new baseline — a `current` flag that survives into a commit tells the next
+re-anchor to skip a module, and its neighbour then swallows it.
 
 `tools/split.mjs` is the record of the extraction: for each module, the exact
 line ranges of `index.html` it came from and a checksum of the result. It is
