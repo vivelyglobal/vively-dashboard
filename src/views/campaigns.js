@@ -5,10 +5,11 @@ import { DAY, TODAY, addDays, dLabel, iso } from '../lib/dates.js';
 import { engagementsOf, kmb, money2, num, pct, won, wonK } from '../lib/format.js';
 import { recomputeCreatorStats } from '../model/creators.js';
 import { DB, SERVER, byCampaign, byCreator, notify, persist, serverSave } from '../model/db.js';
+import { duplicateIdBanner, wireDuplicateIdBanner } from '../model/duplicates.js';
 import { SETTINGS, isBlocked, selectable } from '../model/settings.js';
 import { campaignStats, dailySeries, liveOf, partsOf, viralScore } from '../model/stats.js';
 import { suggestScore } from '../model/suggest.js';
-import { CAMPAIGN_STATUS, CATEGORIES, COUNTRIES, STAGES, STAGE_IDX, avColor, stageOf, viewCurve } from '../model/vocab.js';
+import { CAMPAIGN_STATUS, CATEGORIES, COUNTRIES, STAGES, STAGE_IDX, avColor, newId, stageOf, viewCurve } from '../model/vocab.js';
 import { GCAL_PREFS } from '../sync/gcal.js';
 import { syncStageToNotion } from '../sync/notionWriteback.js';
 import { $, $$, esc } from '../ui/dom.js';
@@ -51,6 +52,7 @@ export function renderCampaignGrid(view, tab) {
   }
 
   view.innerHTML = `
+    ${duplicateIdBanner()}
     <div class="card-head" style="margin-bottom:14px;">
       <span style="font-size:13px;color:var(--text-3)">${list.length} campaigns</span>
       <div class="sp"></div>
@@ -88,6 +90,7 @@ export function renderCampaignGrid(view, tab) {
     </div>`;
   }).join('') || `<div class="empty">No campaigns in this view.</div>`;
 
+  wireDuplicateIdBanner();
   $('#cpNew').addEventListener('click', () => openNewCampaign());
   $('#cpImport').addEventListener('click', () => openImportWizard());
   $('#cpImportNotion').addEventListener('click', () => openNotionImportWizard());
@@ -127,7 +130,7 @@ export function openNewCampaign() {
     <button class="btn primary" id="ncSave">Create campaign</button>
   `);
   $('#ncSave').addEventListener('click', () => {
-    const id = 'cp' + (DB.campaigns.length + 1);
+    const id = newId('cp');
     const cp = {
       id,
       brand: $('#ncBrand').value.trim() || 'Untitled brand',

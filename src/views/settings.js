@@ -4,7 +4,7 @@ import { num } from '../lib/format.js';
 import { duplicateCreatorGroups, mergeDuplicateCreators } from '../model/creators.js';
 import { DB, byCampaign, byCreator, clearPersisted, notify, persist, persistState } from '../model/db.js';
 import { SETTINGS } from '../model/settings.js';
-import { SOURCES, tierOf } from '../model/vocab.js';
+import { SOURCES, newId, tierOf } from '../model/vocab.js';
 import { $, esc } from '../ui/dom.js';
 import { downloadFile, flagPill, stagePill, statCard, whoHtml } from '../ui/html.js';
 import { toast } from '../ui/overlay.js';
@@ -279,7 +279,7 @@ export async function importCreatorsCsv(e) {
     const v = l.split(',');
     const get = (k) => { const i = cols.indexOf(k); return i >= 0 ? (v[i] || '').trim().replace(/^"|"$/g, '') : ''; };
     const handle = get('handle'); if (!handle) return;
-    const id = 'im' + (DB.creators.length + 1) + n;
+    const id = newId('im');
     const followers = +get('followers') || 0;
     const c = {
       id, handle: handle.startsWith('@') ? handle : '@' + handle, name: get('name') || handle,

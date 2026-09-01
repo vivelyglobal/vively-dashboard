@@ -1,12 +1,10 @@
-import { rnd } from '../lib/rng.js';
 import { TODAY, iso } from '../lib/dates.js';
-import { won } from '../lib/format.js';
-import { STAGE_IDX, tierOf, avColor } from '../model/vocab.js';
-import { DB, byCreator, SERVER, serverSave, notify } from '../model/db.js';
 import { findCreatorByHandle, mergeDuplicateCreators } from '../model/creators.js';
-import { $, $$, esc } from '../ui/dom.js';
-import { toast, openDrawer, closeDrawer } from '../ui/overlay.js';
-import { STATUS_MAP, normHeader, guessField, handleFromUrl, parseFollowers, parseDateCell, countryOf } from './excel.js';
+import { DB, SERVER, byCreator, notify, serverSave } from '../model/db.js';
+import { STAGE_IDX, avColor, newId, tierOf } from '../model/vocab.js';
+import { $, esc } from '../ui/dom.js';
+import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';
+import { STATUS_MAP, countryOf, guessField, handleFromUrl, normHeader, parseDateCell, parseFollowers } from './excel.js';
 
 /* ============================================================
    NOTION SYNC
@@ -373,14 +371,14 @@ export async function runNotionSync(cp, opts) {
     return { campaign: cp, error: err.message };
   }
 
-  let newRows = 0, updated = 0, newCreators = 0, matched = 0, skipped = 0, moved = 0, reslotted = 0, adopted = 0, metricsUpdated = 0;
+  let newRows = 0, updated = 0, newCreators = 0, matched = 0, skipped = 0, moved = 0, reslotted = 0, adopted = 0, metricsUpdated = 0, rehomed = 0;
   data.rows.forEach((row) => {
     const ap = notionRowToApplicant(row.properties, cp.notionMapping);
     if (!ap.handle) { skipped++; return; }
 
     let cr = findCreatorByHandle(ap.handle);
     if (!cr) {
-      const crId = 'nt' + (DB.creators.length + 1) + '-' + Math.floor(rnd() * 9999);
+      const crId = newId('nt');
       cr = {
         id: crId, handle: ap.handle, name: ap.fullName || ap.handle,
         platform: ap.platform, followers: ap.followers,
@@ -415,6 +413,15 @@ export async function runNotionSync(cp, opts) {
        existing row for this submission instead of skipping it. */
     let p = DB.participants.find((x) => x.notionPageId === row.pageId);
     let adoptedRow = false;
+    /* This submission belongs to THIS campaign's form, so the row it matches
+       belongs to this campaign whatever it currently says. Two campaigns
+       that shared an id pooled their rosters under one campaignId; syncing
+       either one now pulls its own rows back where they belong. */
+    if (p && p.campaignId !== cp.id) {
+      p.campaignId = cp.id;
+      p.id = cp.id + '-' + p.creatorId;
+      rehomed++;
+    }
     if (!p) {
       const orphan = DB.participants.find((x) =>
         x.campaignId === cp.id && x.creatorId === cr.id && !x.notionPageId);
@@ -490,13 +497,14 @@ export async function runNotionSync(cp, opts) {
     else if (!data.rows.some((r) => r.properties[mappedTo])) visitWarning = `“${mappedTo}” is empty for every row`;
   }
 
-  const stats = { campaign: cp, rows: data.rows.length, newRows, updated, moved, reslotted, skipped, newCreators, adopted, metricsUpdated, visitWarning };
+  const stats = { campaign: cp, rows: data.rows.length, newRows, updated, moved, reslotted, skipped, newCreators, adopted, metricsUpdated, rehomed, visitWarning };
   if (batch) return stats;
 
   notify();
   if (visitWarning) toast(`No visit dates — ${visitWarning}. Click ⚙ next to Sync to pick the column.`);
   const summary = `Synced ${data.rows.length} Notion submission${data.rows.length === 1 ? '' : 's'} — ${newRows} new, ${updated + adopted} updated` +
     (adopted ? ` (${adopted} existing roster row${adopted === 1 ? '' : 's'} linked up)` : '') +
+    (rehomed ? `, ${rehomed} moved back to this campaign` : '') +
     (moved ? `, ${moved} moved stage` : '') +
     (reslotted ? `, ${reslotted} visit date${reslotted === 1 ? '' : 's'}` : '') +
     (metricsUpdated ? `, ${metricsUpdated} content/metrics` : '') +

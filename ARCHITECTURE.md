@@ -59,7 +59,31 @@ npm run check:partner   # opens a partner link in a browser and checks that
                         # nothing belonging to anyone else is in the page
 npm run check:writeback # moves a creator through the roster's own dropdown
                         # and checks what Notion was actually asked to store
+npm run check:ids       # reproduces the duplicate-id collision and its repair
 ```
+
+## Record ids
+
+`newId()` in `model/vocab.js`. Ids used to be a counter plus a number from
+`rnd()`, and `rnd()` is mulberry32 with a **fixed seed** — it restarts the
+same sequence on every page load. Two campaigns created in two sessions, both
+the ninth at the time, got the same suffix and therefore the same id.
+Sushikoji-JP and Sushisora did exactly that: one route matched both, the menu
+lit both, and neither could be edited alone.
+
+The seeded generator is kept on purpose for anything that should look the
+same on every load — avatar colours, sample curves. It must never be used for
+identity again, and a test asserts no id is built from it.
+
+`model/duplicates.js` finds any collision left in an existing workspace and
+renumbers the later record, keeping the first on the original id so existing
+links still resolve. It does **not** try to split pooled roster rows: only
+Notion knows which creator belongs to which of the two, so the next sync of
+each campaign re-homes its own rows by page id.
+
+`buildPartnerRows` treats an id claimed by two *different* partners as
+contested and withdraws it from both. A data bug must not become one partner
+seeing another's creators.
 
 ## Writing back to Notion
 

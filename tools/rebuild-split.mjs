@@ -14,7 +14,8 @@ const REPLACE = {
   'import/metrics.js': [[/\brender\(\)/g, 'notify()']],
   'sync/sheets.js':    [[/\brender\(\)/g, 'notify()']],
   'sync/gcal.js':      [[/\brender\(\)/g, 'notify()']],
-  'sync/notionWriteback.js': [[/\brender\(\)/g, 'notify()']]
+  'sync/notionWriteback.js': [[/\brender\(\)/g, 'notify()']],
+  'model/duplicates.js':     [[/\brender\(\)/g, 'notify()']]
 };
 const DB_TAIL = fs.readFileSync('tools/db-tail.txt', 'utf8');
 

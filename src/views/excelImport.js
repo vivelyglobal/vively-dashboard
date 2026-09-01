@@ -2,11 +2,10 @@ import { IMPORT_FIELDS, TEMPLATES, countryOf, detectTemplate, guessField, parseI
 import { parseCsvText } from '../lib/csv.js';
 import { TODAY, addDays, iso } from '../lib/dates.js';
 import { num } from '../lib/format.js';
-import { rnd } from '../lib/rng.js';
 import { downloadXlsx, readXlsx } from '../lib/xlsx.js';
 import { findCreatorByHandle, mergeDuplicateCreators } from '../model/creators.js';
 import { DB, SERVER, byCampaign, byCreator, serverSave } from '../model/db.js';
-import { CAMPAIGN_STATUS, CATEGORIES, COUNTRIES, STAGE_IDX, avColor, stageOf, tierOf } from '../model/vocab.js';
+import { CAMPAIGN_STATUS, CATEGORIES, COUNTRIES, STAGE_IDX, avColor, newId, stageOf, tierOf } from '../model/vocab.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { stagePill, statCard } from '../ui/html.js';
 import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';
@@ -191,7 +190,7 @@ export function commitImport() {
   const skipBlocked = $('#impSkipBlocked').checked;
   const template = st.template;
 
-  const id = 'cp' + (DB.campaigns.length + 1) + Math.floor(rnd() * 900 + 100);
+  const id = newId('cp');
   const cost = +$('#impCost').value || 0;
   const target = +$('#impTarget').value || 30;
   const cp = {
@@ -221,7 +220,7 @@ export function commitImport() {
     if (cr && skipBlocked && cr.flag === 'blocked') { skipped++; return; }
 
     if (!cr) {
-      const crId = 'im' + (DB.creators.length + 1) + '-' + Math.floor(rnd() * 9999);
+      const crId = newId('im');
       cr = {
         id: crId, handle: r.handle, name: r.fullName || r.handle,
         platform: r.platform, followers: r.followers,

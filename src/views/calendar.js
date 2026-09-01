@@ -1,7 +1,7 @@
 import { TODAY, iso } from '../lib/dates.js';
 import { num } from '../lib/format.js';
-import { rnd } from '../lib/rng.js';
 import { DB, byCampaign, notify } from '../model/db.js';
+import { newId } from '../model/vocab.js';
 import { GCAL, GCAL_PREFS, calendarItems, gcalCall, removeCalendarEvent, runCalendarSync, saveGcalPrefs, testCalendarConnection, tzOffsetMinutes } from '../sync/gcal.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';
@@ -71,7 +71,7 @@ export function openAppointmentForm(existing) {
       return;
     }
 
-    const rec = existing || { id: 'ap' + Date.now().toString(36) + Math.floor(rnd() * 999),
+    const rec = existing || { id: newId('ap'),
                               createdAt: new Date().toISOString() };
     Object.assign(rec, {
       title, date, endDate, startTime, endTime, timezone: tz,

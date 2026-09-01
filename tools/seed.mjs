@@ -117,6 +117,18 @@ participants.forEach((p, i) => {
   mine[5].importedStatus = '';             mine[5].stage = 'confirmed';
 }
 
+/* Reproduces the collision found in the live workspace: two campaigns on
+   one id, with both rosters pooled under it. */
+{
+  const clash = JSON.parse(JSON.stringify(campaigns[1]));
+  clash.brand = 'Sushisora'; clash.name = 'Sushisora';
+  clash.id = campaigns[1].id;                      /* the same id as Juno Seoul */
+  clash.notionDatabaseId = 'ds-clash';
+  clash.partner = campaigns[1].partner;            /* same partner, so partner
+                                                      scoping stays testable */
+  campaigns.push(clash);
+}
+
 const partnerLinks = [
   { partner: 'SPLABAB', token: 'tok-splabab-test', createdAt: new Date().toISOString(), revokedAt: null },
   { partner: 'OTHERCO', token: 'tok-otherco-test', createdAt: new Date().toISOString(), revokedAt: null },

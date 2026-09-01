@@ -803,7 +803,17 @@ function resolvePartnerToken(doc, token) {
 function buildPartnerRows(db, partner) {
   const byCreator = Object.fromEntries((db.creators || []).map((c) => [c.id, c]));
   const byCampaign = Object.fromEntries((db.campaigns || []).map((c) => [c.id, c]));
-  const mine = (db.campaigns || []).filter((c) => (c.partner || "") === partner);
+  const all = db.campaigns || [];
+  /* Fail safe on a data bug rather than through it. Two campaigns sharing an
+     id used to be possible, and if the two belong to different partners then
+     an id is no longer enough to say whose a roster row is — so a contested
+     id is dropped from BOTH partners' views. Showing nothing is recoverable;
+     showing one partner another's creators is not. */
+  const owners = {};
+  all.forEach((c) => { (owners[c.id] = owners[c.id] || new Set()).add(c.partner || ""); });
+  const contested = new Set(Object.keys(owners).filter((id) => owners[id].size > 1));
+
+  const mine = all.filter((c) => (c.partner || "") === partner && !contested.has(c.id));
   const ids = new Set(mine.map((c) => c.id));
 
   /* A creator still awaiting brand approval is not shown at all. They are a
@@ -847,7 +857,7 @@ function buildPartnerRows(db, partner) {
                       a.creator.localeCompare(b.creator));
   const withheld = (db.participants || []).filter((p) => ids.has(p.campaignId))
     .filter((p) => partnerStatusOf(p).theirs).length;
-  return { partner, withheld,
+  return { partner, withheld, contested: [...contested],
     campaigns: mine.map((c) => ({ id: c.id, brand: c.brand, name: c.name, start: c.start, end: c.end })), rows };
 }
 

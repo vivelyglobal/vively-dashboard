@@ -2,10 +2,9 @@ import { countryOf } from '../import/excel.js';
 import { NOTION_FIELD_DEFS, guessNotionField, notionRowToApplicant } from '../import/notion.js';
 import { TODAY, addDays, iso } from '../lib/dates.js';
 import { num } from '../lib/format.js';
-import { rnd } from '../lib/rng.js';
 import { findCreatorByHandle, mergeDuplicateCreators } from '../model/creators.js';
 import { DB, SERVER, byCampaign, byCreator, serverSave } from '../model/db.js';
-import { CAMPAIGN_STATUS, CATEGORIES, COUNTRIES, STAGE_IDX, avColor, stageOf, tierOf } from '../model/vocab.js';
+import { CAMPAIGN_STATUS, CATEGORIES, COUNTRIES, STAGE_IDX, avColor, newId, stageOf, tierOf } from '../model/vocab.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { stagePill, statCard } from '../ui/html.js';
 import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';
@@ -200,7 +199,7 @@ export function commitNotionImport() {
   const merge = $('#niMerge').checked;
   const skipBlocked = $('#niSkipBlocked').checked;
 
-  const id = 'cp' + (DB.campaigns.length + 1) + Math.floor(rnd() * 900 + 100);
+  const id = newId('cp');
   const cost = +$('#niCost').value || 0;
   const target = +$('#niTarget').value || 30;
   const cp = {
@@ -235,7 +234,7 @@ export function commitNotionImport() {
     if (cr && skipBlocked && cr.flag === 'blocked') { skipped++; return; }
 
     if (!cr) {
-      const crId = 'nt' + (DB.creators.length + 1) + '-' + Math.floor(rnd() * 9999);
+      const crId = newId('nt');
       cr = {
         id: crId, handle: r.handle, name: r.fullName || r.handle,
         platform: r.platform, followers: r.followers,

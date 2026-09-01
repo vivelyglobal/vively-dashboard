@@ -844,6 +844,29 @@ function tierOf(followers) {
   return                         { id: 'macro', label: 'Macro', cls: 'yellow' };
 }
 
+/* ------------------------------------------------------------------
+   Record ids.
+
+   These used to be built from a counter plus a number off RNG — and RNG
+   is mulberry32 with a FIXED seed, so it restarts the same sequence on
+   every page load. Two campaigns created in two different sessions, both
+   the ninth at the time, got the same "random" suffix and therefore the
+   same id: selecting one selected both, and neither could be edited
+   without editing the other. It happened, to Sushikoji-JP and Sushisora.
+
+   The seeded generator is deliberately kept for anything that should
+   look the same on every load — avatar colours, sample curves. It must
+   never again be used for identity.
+   ------------------------------------------------------------------ */
+function newId(prefix) {
+  const rand = (globalThis.crypto && crypto.randomUUID)
+    ? crypto.randomUUID().replace(/-/g, '').slice(0, 12)
+    : Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
+  /* the timestamp keeps ids roughly sortable by age and makes a collision
+     need two records in the same millisecond AND the same random draw */
+  return `${prefix}${Date.now().toString(36)}${rand}`;
+}
+
 const AV_COLORS = ['#4e8ef7', '#d96a08', '#1e9e6a', '#bd8300', '#a06ee0', '#e5514a', '#00a0b0'];
 const avColor = (s) => {
   let h = 0; for (let i = 0; i < String(s).length; i++) h = (h * 31 + String(s).charCodeAt(i)) >>> 0;
@@ -2139,6 +2162,7 @@ function renderCampaignGrid(view, tab) {
   }
 
   view.innerHTML = `
+    ${duplicateIdBanner()}
     <div class="card-head" style="margin-bottom:14px;">
       <span style="font-size:13px;color:var(--text-3)">${list.length} campaigns</span>
       <div class="sp"></div>
@@ -2176,6 +2200,7 @@ function renderCampaignGrid(view, tab) {
     </div>`;
   }).join('') || `<div class="empty">No campaigns in this view.</div>`;
 
+  wireDuplicateIdBanner();
   $('#cpNew').addEventListener('click', () => openNewCampaign());
   $('#cpImport').addEventListener('click', () => openImportWizard());
   $('#cpImportNotion').addEventListener('click', () => openNotionImportWizard());
@@ -2215,7 +2240,7 @@ function openNewCampaign() {
     <button class="btn primary" id="ncSave">Create campaign</button>
   `);
   $('#ncSave').addEventListener('click', () => {
-    const id = 'cp' + (DB.campaigns.length + 1);
+    const id = newId('cp');
     const cp = {
       id,
       brand: $('#ncBrand').value.trim() || 'Untitled brand',
@@ -4910,14 +4935,14 @@ async function runNotionSync(cp, opts) {
     return { campaign: cp, error: err.message };
   }
 
-  let newRows = 0, updated = 0, newCreators = 0, matched = 0, skipped = 0, moved = 0, reslotted = 0, adopted = 0, metricsUpdated = 0;
+  let newRows = 0, updated = 0, newCreators = 0, matched = 0, skipped = 0, moved = 0, reslotted = 0, adopted = 0, metricsUpdated = 0, rehomed = 0;
   data.rows.forEach((row) => {
     const ap = notionRowToApplicant(row.properties, cp.notionMapping);
     if (!ap.handle) { skipped++; return; }
 
     let cr = findCreatorByHandle(ap.handle);
     if (!cr) {
-      const crId = 'nt' + (DB.creators.length + 1) + '-' + Math.floor(rnd() * 9999);
+      const crId = newId('nt');
       cr = {
         id: crId, handle: ap.handle, name: ap.fullName || ap.handle,
         platform: ap.platform, followers: ap.followers,
@@ -4952,6 +4977,15 @@ async function runNotionSync(cp, opts) {
        existing row for this submission instead of skipping it. */
     let p = DB.participants.find((x) => x.notionPageId === row.pageId);
     let adoptedRow = false;
+    /* This submission belongs to THIS campaign's form, so the row it matches
+       belongs to this campaign whatever it currently says. Two campaigns
+       that shared an id pooled their rosters under one campaignId; syncing
+       either one now pulls its own rows back where they belong. */
+    if (p && p.campaignId !== cp.id) {
+      p.campaignId = cp.id;
+      p.id = cp.id + '-' + p.creatorId;
+      rehomed++;
+    }
     if (!p) {
       const orphan = DB.participants.find((x) =>
         x.campaignId === cp.id && x.creatorId === cr.id && !x.notionPageId);
@@ -5027,13 +5061,14 @@ async function runNotionSync(cp, opts) {
     else if (!data.rows.some((r) => r.properties[mappedTo])) visitWarning = `“${mappedTo}” is empty for every row`;
   }
 
-  const stats = { campaign: cp, rows: data.rows.length, newRows, updated, moved, reslotted, skipped, newCreators, adopted, metricsUpdated, visitWarning };
+  const stats = { campaign: cp, rows: data.rows.length, newRows, updated, moved, reslotted, skipped, newCreators, adopted, metricsUpdated, rehomed, visitWarning };
   if (batch) return stats;
 
   render();
   if (visitWarning) toast(`No visit dates — ${visitWarning}. Click ⚙ next to Sync to pick the column.`);
   const summary = `Synced ${data.rows.length} Notion submission${data.rows.length === 1 ? '' : 's'} — ${newRows} new, ${updated + adopted} updated` +
     (adopted ? ` (${adopted} existing roster row${adopted === 1 ? '' : 's'} linked up)` : '') +
+    (rehomed ? `, ${rehomed} moved back to this campaign` : '') +
     (moved ? `, ${moved} moved stage` : '') +
     (reslotted ? `, ${reslotted} visit date${reslotted === 1 ? '' : 's'}` : '') +
     (metricsUpdated ? `, ${metricsUpdated} content/metrics` : '') +
@@ -5618,7 +5653,7 @@ function commitNotionImport() {
   const merge = $('#niMerge').checked;
   const skipBlocked = $('#niSkipBlocked').checked;
 
-  const id = 'cp' + (DB.campaigns.length + 1) + Math.floor(rnd() * 900 + 100);
+  const id = newId('cp');
   const cost = +$('#niCost').value || 0;
   const target = +$('#niTarget').value || 30;
   const cp = {
@@ -5653,7 +5688,7 @@ function commitNotionImport() {
     if (cr && skipBlocked && cr.flag === 'blocked') { skipped++; return; }
 
     if (!cr) {
-      const crId = 'nt' + (DB.creators.length + 1) + '-' + Math.floor(rnd() * 9999);
+      const crId = newId('nt');
       cr = {
         id: crId, handle: r.handle, name: r.fullName || r.handle,
         platform: r.platform, followers: r.followers,
@@ -5914,7 +5949,7 @@ function commitImport() {
   const skipBlocked = $('#impSkipBlocked').checked;
   const template = st.template;
 
-  const id = 'cp' + (DB.campaigns.length + 1) + Math.floor(rnd() * 900 + 100);
+  const id = newId('cp');
   const cost = +$('#impCost').value || 0;
   const target = +$('#impTarget').value || 30;
   const cp = {
@@ -5944,7 +5979,7 @@ function commitImport() {
     if (cr && skipBlocked && cr.flag === 'blocked') { skipped++; return; }
 
     if (!cr) {
-      const crId = 'im' + (DB.creators.length + 1) + '-' + Math.floor(rnd() * 9999);
+      const crId = newId('im');
       cr = {
         id: crId, handle: r.handle, name: r.fullName || r.handle,
         platform: r.platform, followers: r.followers,
@@ -7559,7 +7594,7 @@ async function importCreatorsCsv(e) {
     const v = l.split(',');
     const get = (k) => { const i = cols.indexOf(k); return i >= 0 ? (v[i] || '').trim().replace(/^"|"$/g, '') : ''; };
     const handle = get('handle'); if (!handle) return;
-    const id = 'im' + (DB.creators.length + 1) + n;
+    const id = newId('im');
     const followers = +get('followers') || 0;
     const c = {
       id, handle: handle.startsWith('@') ? handle : '@' + handle, name: get('name') || handle,
@@ -7577,6 +7612,97 @@ async function importCreatorsCsv(e) {
 }
 
 
+
+
+/* ------------------------------------------------------------------
+   Duplicate record ids.
+
+   Two campaigns sharing an id is not a cosmetic problem: the route
+   #/campaigns/<id> matches both, the menu highlights both, and an edit
+   lands on whichever one the lookup happened to keep — so neither can
+   be changed independently. Their participants pool under the one id
+   too, which is why a roster shows other people's creators.
+
+   Nothing generates a colliding id any more, but workspaces created
+   before that fix can still contain one, so it is checked on load and
+   repairable from Setup.
+   ------------------------------------------------------------------ */
+function duplicateIdGroups() {
+  const groups = [];
+  [['campaigns', 'campaign'], ['creators', 'creator'], ['participants', 'roster row']].forEach(([key, label]) => {
+    const seen = {};
+    (DB[key] || []).forEach((r) => { (seen[r.id] = seen[r.id] || []).push(r); });
+    Object.entries(seen).forEach(([id, list]) => {
+      if (list.length > 1) groups.push({ kind: key, label, id, list });
+    });
+  });
+  return groups;
+}
+
+/* Renumbering keeps the FIRST record on the shared id and moves the later
+   ones, so whichever was there first stays where every existing link,
+   bookmark and calendar event already points. */
+function repairDuplicateIds() {
+  const groups = duplicateIdGroups();
+  if (!groups.length) return { fixed: 0 };
+  let fixed = 0, movedRows = 0;
+
+  groups.forEach((g) => {
+    g.list.slice(1).forEach((rec) => {
+      const oldId = rec.id;
+      const prefix = g.kind === 'campaigns' ? 'cp' : g.kind === 'creators' ? 'cr' : 'p';
+      rec.id = newId(prefix);
+      fixed++;
+
+      if (g.kind === 'campaigns') {
+        byCampaign[rec.id] = rec;
+        /* Participants stay on the original id on purpose. There is no way
+           to tell here which of the two campaigns each belongs to — but the
+           next "Sync from Notion" on this campaign knows, because Notion
+           says which rows are its own, and moves them across. */
+      } else if (g.kind === 'creators') {
+        byCreator[rec.id] = rec;
+      } else {
+        rec.id = rec.campaignId + '-' + rec.creatorId + '-' + newId('x');
+        movedRows++;
+      }
+    });
+  });
+
+  recomputeCreatorStats();
+  return { fixed, movedRows, groups };
+}
+
+function duplicateIdBanner() {
+  const groups = duplicateIdGroups();
+  if (!groups.length) return '';
+  const campaignDupes = groups.filter((g) => g.kind === 'campaigns');
+  return `<div class="note bad" style="margin-bottom:14px">
+    <strong>${groups.length} record${groups.length === 1 ? '' : 's'} share an id with another.</strong>
+    ${campaignDupes.length ? campaignDupes.map((g) =>
+      `<br>${esc(g.list.map((c) => c.brand || c.name).join('  ·  '))} all answer to <code>${esc(g.id)}</code>,
+       so selecting one selects them all and an edit cannot tell them apart.` ).join('') : ''}
+    <div style="margin-top:8px"><button class="btn xs" id="dupFix">Give each one its own id</button>
+      <span style="margin-left:8px;color:var(--text-3)">Then run <em>Sync from Notion</em> on each to pull its own creators back.</span></div>
+  </div>`;
+}
+
+function wireDuplicateIdBanner() {
+  const btn = $('#dupFix');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    const groups = duplicateIdGroups();
+    const names = groups.filter((g) => g.kind === 'campaigns')
+      .flatMap((g) => g.list.slice(1).map((c) => c.brand || c.name));
+    if (!confirm(`Give a fresh id to: ${names.join(', ') || groups.length + ' records'}?\n\n` +
+      `The first of each pair keeps the old id, so existing links still work. ` +
+      `Creators stay put until you sync each campaign from Notion, which is what knows who belongs where.`)) return;
+    const out = repairDuplicateIds();
+    render();
+    serverSave({ silent: true });
+    toast(`${out.fixed} record${out.fixed === 1 ? '' : 's'} renumbered — now sync each campaign from Notion`);
+  });
+}
 
 /* ------------------------------------------------------------------
    Writing a stage change back to Notion.
@@ -8392,7 +8518,7 @@ function openAppointmentForm(existing) {
       return;
     }
 
-    const rec = existing || { id: 'ap' + Date.now().toString(36) + Math.floor(rnd() * 999),
+    const rec = existing || { id: newId('ap'),
                               createdAt: new Date().toISOString() };
     Object.assign(rec, {
       title, date, endDate, startTime, endTime, timezone: tz,

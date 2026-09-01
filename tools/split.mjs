@@ -36,7 +36,8 @@ const REPLACE = {
   'import/metrics.js': [[/\brender\(\)/g, 'notify()']],
   'sync/sheets.js':    [[/\brender\(\)/g, 'notify()']],
   'sync/gcal.js':      [[/\brender\(\)/g, 'notify()']],
-  'sync/notionWriteback.js': [[/\brender\(\)/g, 'notify()']]
+  'sync/notionWriteback.js': [[/\brender\(\)/g, 'notify()']],
+  'model/duplicates.js':     [[/\brender\(\)/g, 'notify()']]
 };
 const VIEW_RENDER = /^views\//;
 

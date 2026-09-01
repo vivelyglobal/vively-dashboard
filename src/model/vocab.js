@@ -37,6 +37,29 @@ export function tierOf(followers) {
   return                         { id: 'macro', label: 'Macro', cls: 'yellow' };
 }
 
+/* ------------------------------------------------------------------
+   Record ids.
+
+   These used to be built from a counter plus a number off RNG — and RNG
+   is mulberry32 with a FIXED seed, so it restarts the same sequence on
+   every page load. Two campaigns created in two different sessions, both
+   the ninth at the time, got the same "random" suffix and therefore the
+   same id: selecting one selected both, and neither could be edited
+   without editing the other. It happened, to Sushikoji-JP and Sushisora.
+
+   The seeded generator is deliberately kept for anything that should
+   look the same on every load — avatar colours, sample curves. It must
+   never again be used for identity.
+   ------------------------------------------------------------------ */
+export function newId(prefix) {
+  const rand = (globalThis.crypto && crypto.randomUUID)
+    ? crypto.randomUUID().replace(/-/g, '').slice(0, 12)
+    : Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
+  /* the timestamp keeps ids roughly sortable by age and makes a collision
+     need two records in the same millisecond AND the same random draw */
+  return `${prefix}${Date.now().toString(36)}${rand}`;
+}
+
 export const AV_COLORS = ['#4e8ef7', '#d96a08', '#1e9e6a', '#bd8300', '#a06ee0', '#e5514a', '#00a0b0'];
 export const avColor = (s) => {
   let h = 0; for (let i = 0; i < String(s).length; i++) h = (h * 31 + String(s).charCodeAt(i)) >>> 0;

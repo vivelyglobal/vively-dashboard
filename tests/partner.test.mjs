@@ -83,6 +83,27 @@ test('a shortlisted row with no Notion status is withheld too', () => {
   assert.equal(buildPartnerRows(only, 'SPLABAB').rows.length, 0);
 });
 
+test('an id claimed by two partners is shown to NEITHER of them', () => {
+  /* two campaigns sharing an id was possible before ids were made unique.
+     Where the two belong to different partners, the id no longer says whose
+     a roster row is — so it is withdrawn from both rather than guessed at.
+     Showing nothing is recoverable; showing the wrong partner is not. */
+  const clashed = { ...db, campaigns: [
+    { id: 'x', brand: 'Ours',   partner: 'SPLABAB' },
+    { id: 'x', brand: 'Theirs', partner: 'OTHERCO' },
+    { id: 'safe', brand: 'Fine', partner: 'SPLABAB' }
+  ], participants: [
+    { id: 'x-1', campaignId: 'x', creatorId: 'c1', stage: 'confirmed' },
+    { id: 's-1', campaignId: 'safe', creatorId: 'c2', stage: 'confirmed' }
+  ] };
+  const mine = buildPartnerRows(clashed, 'SPLABAB');
+  const theirs = buildPartnerRows(clashed, 'OTHERCO');
+  assert.equal(mine.rows.length, 1, 'only the uncontested campaign should show');
+  assert.equal(mine.rows[0].campaign, 'Fine');
+  assert.equal(theirs.rows.length, 0);
+  assert.equal(mine.contested.join(), 'x');
+});
+
 test('another partner sees a different set, and never yours', () => {
   const other = buildPartnerRows(db, 'OTHERCO');
   assert.deepEqual(other.rows.map((r) => r.pid), ['b-c3']);
