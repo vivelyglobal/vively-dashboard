@@ -85,7 +85,9 @@ const NOTION_TOKEN = process.env.NOTION_TOKEN || "";
    has more than one. Everything below talks to /data_sources/... instead of
    /databases/.../query, per Notion's upgrade guide. */
 const NOTION_VERSION = "2025-09-03";
-const NOTION_API = "https://api.notion.com/v1";
+/* overridable so the test harness can point at a local stand-in; unset in
+   production, which is every deployment that does not say otherwise */
+const NOTION_API = process.env.NOTION_API || "https://api.notion.com/v1";
 
 function normalizeNotionId(raw) {
   const s = String(raw || "").trim();
@@ -542,7 +544,17 @@ app.get("/api/notion/database", async (req, res) => {
   try {
     const dataSourceId = await resolveDataSourceId(rawId);
     const ds = await notionFetch("/data_sources/" + dataSourceId);
-    const properties = Object.entries(ds.properties || {}).map(([name, def]) => ({ name, type: def.type }));
+    const properties = Object.entries(ds.properties || {}).map(([name, def]) => {
+      const prop = { name, type: def.type };
+      /* the allowed values of a status or select column. Writing back needs
+         them: Notion rejects a value that is not already an option, and the
+         options are per-database even when every form looks the same. */
+      if (def.type === "status") prop.options = Object.values(def.status?.groups || {})
+        .flat().map((o) => o.name).filter(Boolean);
+      else if (def.type === "select") prop.options = (def.select?.options || []).map((o) => o.name);
+      if (prop.options) prop.options = [...new Set(prop.options)];
+      return prop;
+    });
     return res.json({
       ok: true,
       id: dataSourceId, // a data-source ID now, not a database ID — store and reuse this as-is
@@ -819,6 +831,7 @@ function buildPartnerRows(db, partner) {
       gender: cr.gender || "",
       followers: cr.followers || 0,
       remark: p.remark || "",
+      headcount: p.headcount || "",
       contentUrl: (p.content && p.content.url) || "",
       nationality: p.nationality || cr.nationality || cr.country || "",
       notes: p.formNotes || "",
@@ -916,6 +929,46 @@ app.post("/api/partner-comments/read", async (req, res) => {
 app.get("/partner/:token", (req, res) => {
   res.set("X-Robots-Tag", "noindex, nofollow");
   res.sendFile(path.join(__dirname, "partner.html"));
+});
+
+/* Writing a status back to Notion.
+
+   The dashboard has always read from Notion. This is the one place it
+   writes, and it writes exactly one property on one page — never a whole
+   row, never a page it was not handed the id for.
+
+   A status column can be Notion's "status" type or an ordinary "select",
+   and the two take different shapes. The type is not stored alongside the
+   mapping, so this tries the likely one and falls back rather than making
+   an extra schema call before every write. */
+app.post("/api/notion/status", async (req, res) => {
+  if (!NOTION_TOKEN) return res.status(503).json({ error: "Notion is not configured on the server yet." });
+  const b = req.body || {};
+  const pageId = normalizeNotionId(b.pageId);
+  const property = String(b.property || "").trim();
+  const value = String(b.value || "").trim();
+  if (!pageId || !property || !value) {
+    return res.status(400).json({ error: "pageId, property and value are all required." });
+  }
+
+  const attempt = (shape) => notionFetch("/pages/" + pageId, {
+    method: "PATCH",
+    body: JSON.stringify({ properties: { [property]: shape } })
+  });
+
+  try {
+    await attempt({ status: { name: value } });
+    return res.json({ ok: true, wrote: value, as: "status" });
+  } catch (err) {
+    try {
+      await attempt({ select: { name: value } });
+      return res.json({ ok: true, wrote: value, as: "select" });
+    } catch (err2) {
+      console.error("POST /api/notion/status failed:", err.message, "|", err2.message);
+      /* the first error is the useful one — the second is only a fallback */
+      return res.status(502).json({ error: err.message });
+    }
+  }
 });
 
 app.post("/api/signup", async (req, res) => {

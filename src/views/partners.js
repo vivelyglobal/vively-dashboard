@@ -1,5 +1,7 @@
 import { num } from '../lib/format.js';
 import { DB, byCreator, notify, serverSave } from '../model/db.js';
+import { STAGES } from '../model/vocab.js';
+import { STAGE_TO_NOTION, WRITEBACK, saveWriteback } from '../sync/notionWriteback.js';
 import { partnerStatus, partnersInUse } from '../sync/partner.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { copyText } from '../ui/html.js';
@@ -37,6 +39,41 @@ export function newPartnerToken() {
 export function partnerLinkFor(partner) {
   DB.partnerLinks = DB.partnerLinks || [];
   return DB.partnerLinks.find((l) => l.partner === partner && !l.revokedAt) || null;
+}
+
+/* the switch for writing stage changes back to Notion */
+export function writebackCardHtml() {
+  return `<div class="card">
+    <div class="card-head"><h3>Stage changes → Notion</h3><div class="sp"></div>
+      <span class="pill ${WRITEBACK.on ? 'green' : 'grey'}">${WRITEBACK.on ? 'On' : 'Off'}</span></div>
+    <p class="card-sub" style="margin-top:10px">Moving a creator between stages here sets the same row's
+      <strong>Status</strong> in Notion, so the two stop drifting apart. It only touches campaigns whose form
+      has a Status column mapped, and only rows that came from Notion.</p>
+    <label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:13px">
+      <input type="checkbox" id="wbOn" ${WRITEBACK.on ? 'checked' : ''}/> Write stage changes back to Notion</label>
+    <div class="divider"></div>
+    <div class="lbl">How the two vocabularies line up</div>
+    <div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th>Dashboard stage</th><th>Notion Status</th></tr></thead>
+      <tbody>${STAGES.map((st) => {
+        const v = st.id === 'dropped' ? 'Declined / Cancelled / Brand Rejected' : STAGE_TO_NOTION[st.id];
+        return `<tr><td>${esc(st.label)}</td><td>${v
+          ? esc(v)
+          : '<span style="color:var(--text-3)">no equivalent — left as it was</span>'}</td></tr>`;
+      }).join('')}</tbody>
+    </table></div>
+    <p class="card-sub" style="margin-top:10px">Notion has no status for the first three, so moving a card there
+      changes nothing over there and says so. Content in and In review both read as <em>Waiting Upload</em>;
+      that is safe because reading Notion only ever moves a creator forward, never back.</p>
+  </div>`;
+}
+
+export function wireWritebackCard() {
+  const box = $('#wbOn');
+  if (box) box.addEventListener('change', () => {
+    WRITEBACK.on = box.checked; saveWriteback(); notify();
+    toast(WRITEBACK.on ? 'Stage changes will be written to Notion' : 'Stage changes stay in the dashboard');
+  });
 }
 
 export function settingsPartners(view) {

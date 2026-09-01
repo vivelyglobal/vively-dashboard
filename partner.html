@@ -67,7 +67,7 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
 const kmb = (v) => !v ? '—' : v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v >= 1000 ? Math.round(v / 1000) + 'K' : String(v);
 
 const COLS = [
-  ['크리에이터', 'Creator'], ['상태', '초대 확인'], ['방문 일정', 'Visit'], ['예약 시간', 'Time'],
+  ['크리에이터', 'Creator'], ['상태', '초대 확인'], ['방문 일정', 'Visit'], ['예약 시간', 'Time'], ['인원수', 'People'],
   ['IG 팔로워수', 'Followers'], ['성별', 'Gender'], ['국적', 'Nationality'],
   ['IG 프로필', 'Profile'], ['Email', ''], ['Other SNS', ''],
   ['콘텐츠 링크', 'Content'], ['참고', 'Remark'], ['Notes', ''], ['', '']
@@ -116,6 +116,7 @@ function render() {
               <span style="color:var(--text-3);font-size:11px">${esc(r.status.en)}</span></td>
           <td>${esc(r.visitDate || '—')}</td>
           <td>${esc(r.visitTime || '—')}</td>
+          <td>${esc(r.headcount || '—')}</td>
           <td>${kmb(r.followers)}</td>
           <td>${esc(r.gender || '—')}</td>
           <td>${esc(r.nationality || '—')}</td>

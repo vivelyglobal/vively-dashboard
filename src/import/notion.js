@@ -37,6 +37,7 @@ export const NOTION_FIELD_DEFS = [
   { key: 'gender',      label: '성별 · Gender' },
   { key: 'formNotes',   label: 'Notes (what the creator wrote)' },
   { key: 'remark',      label: '참고 · Remark (shown to the partner)' },
+  { key: 'headcount',   label: '인원수 · Number of people visiting' },
   { key: 'visitAt',     label: 'Visit date & time (restaurant / salon booking)' },
   { key: 'status',      label: 'Status (maps to pipeline stage)' },
   { key: 'note',        label: 'Note / message' }
@@ -66,7 +67,7 @@ export function guessNotionField(propName, propType) {
   if (/accepted.*rejected|rejected.*accepted|승인.*메시지/.test(h)) return 'skip';
   /* likewise the reminder formulas, which are Notion-side workflow prompts */
   if (/^reminder/.test(h)) return 'skip';
-  if (/number of people|people visiting|인원/.test(h)) return 'skip';
+  if (/number of people|people visiting|인원/.test(h)) return 'headcount';
   /* Deliberately never mapped. A form that collects bank details is holding
      the most sensitive thing in this whole system in plain text, and pulling
      it into the workspace would spread it to local storage, the Sheet, every
@@ -179,6 +180,8 @@ export function notionRowToApplicant(properties, mapping) {
        note — this one is shown to the partner */
     formNotes: String(get('formNotes') || '').trim(),
     remark: String(get('remark') || '').trim(),
+    /* how many are coming, which is what a restaurant holds tables for */
+    headcount: String(get('headcount') || '').trim(),
     gender: String(get('gender') || '').trim(),
     visitAt: notionVisitValue(get('visitAt')),
     metricsAt: notionVisitValue(get('metricsAt')),
@@ -435,6 +438,7 @@ export async function runNotionSync(cp, opts) {
       p.otherSns = merge('otherSns', p.otherSns);
       p.formNotes = merge('formNotes', p.formNotes);
       p.remark = merge('remark', p.remark);
+      p.headcount = merge('headcount', p.headcount);
       if (ap.gender && cr) cr.gender = ap.gender;
       p.importedStatus = ap.statusRaw || p.importedStatus;
       /* a booking removed in Notion has to clear here too, or the calendar
@@ -465,7 +469,7 @@ export async function runNotionSync(cp, opts) {
         dropReason: ap.dropReason, revisions: 0, note: ap.note,
         fullName: ap.fullName, address: ap.address, contact: ap.contact, nationality: ap.nationality,
         visitAt: ap.visitAt, arrivingDate: '', otherSns: ap.otherSns, importedStatus: ap.statusRaw,
-        formNotes: ap.formNotes, remark: ap.remark || '',
+        formNotes: ap.formNotes, remark: ap.remark || '', headcount: ap.headcount || '',
         notionPageId: row.pageId, content: null
       };
       applyStageDates(np, ap.stage, cp);

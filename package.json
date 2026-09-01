@@ -13,7 +13,8 @@
     "check:modules": "node tools/check-freevars.mjs && node tools/check-exports.mjs && node tools/check-inline-handlers.mjs && node tools/split.mjs --check",
     "check:browser": "node tools/seed.mjs > tmp/seed.json && node tools/parity.mjs && node tools/interactions.mjs",
     "check:calendar": "node tools/seed.mjs > tmp/seed.json && node tools/calendar-sync.mjs && node tools/calendar-edge.mjs && node tools/calendar-form.mjs",
-    "check:partner": "node tools/seed.mjs > tmp/seed.json && node tools/partner-page.mjs"
+    "check:partner": "node tools/seed.mjs > tmp/seed.json && node tools/partner-page.mjs",
+    "check:writeback": "node tools/seed.mjs > tmp/seed.json && node tools/writeback-page.mjs"
   },
   "engines": {
     "node": ">=18"

@@ -128,7 +128,11 @@ test('Notion bookkeeping columns are not read as a booking slot', () => {
      every creator's booking to the moment they filled the form */
   assert.equal(guessNotionField('Submission time', 'created_time'), 'skip');
   assert.equal(guessNotionField('Posted Date', 'date'), 'skip');
-  assert.equal(guessNotionField('Number of people visiting ', 'rich_text'), 'skip');
+  /* this one is no longer skipped — the partner needs it to hold the right
+     size of table — but it must still never be read as a row number, which
+     is what "number" in its name used to get it */
+  assert.equal(guessNotionField('Number of people visiting ', 'rich_text'), 'headcount');
+  assert.equal(guessNotionField('인원수', 'rich_text'), 'headcount');
 });
 
 test('the columns added for the partner view map correctly', () => {

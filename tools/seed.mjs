@@ -68,6 +68,22 @@ campaigns.forEach((c) => { if (c.fulfilment === 'visit') { c.venue = c.brand + '
 
 /* two partners and one campaign belonging to neither, so the scoping can be
    shown to actually scope rather than merely be intended to */
+/* the SPLABAB campaigns are Notion-linked, with a Status column mapped, so
+   the write-back has something to write to */
+campaigns.forEach((c) => {
+  c.notionDatabaseId = 'ds-' + c.id;
+  c.notionMapping = { 'Full Name ': 'fullName', 'Status': 'status',
+                      'Date & Time Availability ': 'visitAt', 'Remark': 'remark',
+                      'Number of people visiting ': 'headcount', 'Notes': 'formNotes' };
+});
+/* real Notion page ids are uuids, and the server refuses anything that is
+   not one — so the fixture has to look like the real thing */
+const fakePageId = (n) => {
+  const h = (n + 0x10000000).toString(16).padStart(8, '0');
+  return `${h}-1111-4222-8333-${h}${h.slice(0, 4)}`;
+};
+participants.forEach((p, i) => { p.notionPageId = fakePageId(i + 1); p.headcount = String(1 + (i % 4)); });
+
 campaigns[0].partner = 'SPLABAB';
 campaigns[1].partner = 'SPLABAB';
 campaigns[2].partner = 'OTHERCO';
@@ -89,6 +105,17 @@ participants.forEach((p, i) => {
   if (i % 6 === 0) { p.importedStatus = 'Waiting Approval'; p.stage = 'shortlisted'; p.dropReason = null;
                      p.remark = 'WITHHELD-MARKER-DO-NOT-SHOW'; }
 });
+
+/* two rows arranged for the write-back checks, so the harness never has to
+   poke at internals to set up a case */
+{
+  const mine = participants.filter((p) => p.campaignId === campaigns[0].id);
+  mine[2].dropReason = 'Brand rejected';   mine[2].stage = 'confirmed'; mine[2].importedStatus = 'Confirmed';
+  mine[3].importedStatus = 'Brand Accepted'; mine[3].stage = 'confirmed';
+  /* index 6 is the Waiting Approval marker the partner-page checks rely on,
+     so the "no status yet" fixture goes on a row nothing else claims */
+  mine[5].importedStatus = '';             mine[5].stage = 'confirmed';
+}
 
 const partnerLinks = [
   { partner: 'SPLABAB', token: 'tok-splabab-test', createdAt: new Date().toISOString(), revokedAt: null },

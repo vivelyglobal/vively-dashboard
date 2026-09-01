@@ -71,7 +71,7 @@ await step('nothing sensitive is anywhere in the delivered page', async () => {
 
 await step('the columns the POC asked for are all there', async () => {
   const heads = await p.$$eval('th', (n) => n.map((x) => x.textContent.replace(/\s+/g, ' ').trim()));
-  for (const want of ['크리에이터', '방문 일정', '예약 시간', 'Email', 'IG 팔로워수', '성별', '국적', '참고', 'Notes'])
+  for (const want of ['크리에이터', '방문 일정', '예약 시간', '인원수', 'Email', 'IG 팔로워수', '성별', '국적', '참고', 'Notes'])
     if (!heads.some((h) => h.includes(want))) throw new Error('missing column: ' + want + ' | ' + heads.join(' / '));
   for (const gone of ['Kakao', 'Message'])
     if (heads.some((h) => h.includes(gone))) throw new Error(gone + ' should have been removed');
@@ -99,6 +99,13 @@ await step('a withheld creator is not in the payload at all', async () => {
   if (/WITHHELD-MARKER/.test(raw)) throw new Error('a withheld row reached the browser');
   const html = await p.content();
   if (/WITHHELD-MARKER/.test(html)) throw new Error('a withheld row is in the page source');
+});
+
+await step('인원수 is shown, so a table can be held for the right number', async () => {
+  const counts = await p.evaluate(() => DATA.rows.map((r) => r.headcount).filter(Boolean));
+  if (!counts.length) throw new Error('no headcounts in the payload');
+  const text = await p.$eval('table', (e) => e.innerText);
+  if (!text.includes(counts[0])) throw new Error('the headcount is not in the table');
 });
 
 await step('참고 from the Notion Remark column is shown', async () => {

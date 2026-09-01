@@ -57,7 +57,25 @@ npm run check:calendar  # drives the Google Calendar sync against a stand-in
                         # Google and counts what lands on the calendar
 npm run check:partner   # opens a partner link in a browser and checks that
                         # nothing belonging to anyone else is in the page
+npm run check:writeback # moves a creator through the roster's own dropdown
+                        # and checks what Notion was actually asked to store
 ```
+
+## Writing back to Notion
+
+The dashboard has always read from Notion. `sync/notionWriteback.js` is the
+only place it writes, and it writes one property on one page.
+
+The two vocabularies do not line up. Notion has no Contacted, Replied or
+Sourced, so moving a card there writes nothing and says so. Shipped, Content
+in and In review all mean Waiting Upload; that is only safe because the read
+direction is forward-only, so reading Waiting Upload will not drag a creator
+who is already at In review back to Shipped. `tests/writeback.test.mjs`
+asserts that round trip for every stage rather than trusting it.
+
+Every value it can write is checked against the real option list from the
+Sushikoji form, because Notion rejects a status that is not already an option
+and the options are per-database.
 
 ## The partner view
 

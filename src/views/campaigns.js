@@ -10,6 +10,7 @@ import { campaignStats, dailySeries, liveOf, partsOf, viralScore } from '../mode
 import { suggestScore } from '../model/suggest.js';
 import { CAMPAIGN_STATUS, CATEGORIES, COUNTRIES, STAGES, STAGE_IDX, avColor, stageOf, viewCurve } from '../model/vocab.js';
 import { GCAL_PREFS } from '../sync/gcal.js';
+import { syncStageToNotion } from '../sync/notionWriteback.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { FLAGS, avatarHtml, copyText, daysAgo, downloadFile, emptyState, flagPill, stagePill, statCard, statusPill, tierPill, toCsv, whoHtml } from '../ui/html.js';
 import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';
@@ -402,6 +403,10 @@ export function moveStage(p, stage) {
   if (STAGE_IDX[stage] >= 4 && !p.confirmedAt && stage !== 'dropped') p.confirmedAt = t;
   if (STAGE_IDX[stage] >= 5 && !p.shippedAt && stage !== 'dropped') p.shippedAt = t;
   toast(byCreator[p.creatorId].handle + ' → ' + stageOf(stage).label);
+  /* the only place a stage changes, so the only place that has to tell
+     Notion. Deliberately not awaited: a dragged card should land at once,
+     and the result arrives as its own message a moment later. */
+  syncStageToNotion(p, stage);
 }
 
 export function renderRosterTable(mount, cp) {
@@ -608,6 +613,8 @@ export function showParticipant(pid) {
       <div class="field"><label>Content link</label>
         <input type="url" id="pdContentUrl" placeholder="https://www.instagram.com/reel/…" value="${esc((c && c.url) || '')}"/></div>
     </div>
+    <div class="field"><label>인원수 · People visiting <span style="color:var(--text-3);font-weight:400">— shown to the partner</span></label>
+      <input type="text" id="pdHeadcount" placeholder="2" value="${esc(p.headcount || '')}"/></div>
     <div class="field"><label>참고 · Remark <span style="color:var(--text-3);font-weight:400">— shown to the partner</span></label>
       <input type="text" id="pdRemark" placeholder="arriving with 2 guests · asked to move to evening" value="${esc(p.remark || '')}"/></div>
     <div class="field"><label>Internal note <span style="color:var(--text-3);font-weight:400">— not shown to the partner</span></label>
@@ -684,6 +691,7 @@ export function showParticipant(pid) {
   $('#pdSave').addEventListener('click', () => {
     p.note = $('#pdNote').value;
     p.remark = $('#pdRemark').value.trim();
+    p.headcount = $('#pdHeadcount').value.trim();
     cr.gender = $('#pdGender').value;
 
     const mode = $('#pdPayMode').value;

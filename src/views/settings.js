@@ -9,7 +9,7 @@ import { $, esc } from '../ui/dom.js';
 import { downloadFile, flagPill, stagePill, statCard, whoHtml } from '../ui/html.js';
 import { toast } from '../ui/overlay.js';
 import { settingsCalendar } from './calendar.js';
-import { settingsPartners } from './partners.js';
+import { settingsPartners, wireWritebackCard, writebackCardHtml } from './partners.js';
 import { settingsSheets } from './sheetsSettings.js';
 
 /* ============================================================
@@ -20,6 +20,7 @@ export const SETTINGS_ITEMS = [
   { id: 'blacklist',    label: 'Creator blacklist',   sub: 'blocked, flagged, preferred' },
   { id: 'sheet',        label: 'Google Sheet',        sub: 'shared store for the team' },
   { id: 'calendar',     label: 'Google Calendar',     sub: 'push bookings to a calendar' },
+  { id: 'notion',       label: 'Notion',              sub: 'stage changes written back' },
   { id: 'partners',     label: 'Partners',            sub: 'share progress, read their comments' },
   { id: 'integrations', label: 'Instagram & TikTok',  sub: 'what a connection can pull' },
   { id: 'sources',      label: 'Data sources',        sub: 'where creators come from' },
@@ -32,6 +33,7 @@ export function renderSettings(view, item) {
   if (item === 'blacklist')  return settingsBlacklist(view);
   if (item === 'sheet')      return settingsSheets(view);
   if (item === 'calendar')   return settingsCalendar(view);
+  if (item === 'notion')     { view.innerHTML = `<div class="grid g2">${writebackCardHtml()}</div>`; return wireWritebackCard(); }
   if (item === 'partners')   return settingsPartners(view);
   if (item === 'sources') {
     const dupGroups = duplicateCreatorGroups();

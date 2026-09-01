@@ -90,6 +90,7 @@ export function partnerRows(partner) {
       gender: cr.gender || '',
       followers: cr.followers || 0,
       remark: p.remark || '',
+      headcount: p.headcount || '',
       contentUrl: (p.content && p.content.url) || '',
       nationality: p.nationality || cr.nationality || cr.country || '',
       /* the creator's own answer to the form's Notes question. p.note is a

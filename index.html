@@ -2491,6 +2491,10 @@ function moveStage(p, stage) {
   if (STAGE_IDX[stage] >= 4 && !p.confirmedAt && stage !== 'dropped') p.confirmedAt = t;
   if (STAGE_IDX[stage] >= 5 && !p.shippedAt && stage !== 'dropped') p.shippedAt = t;
   toast(byCreator[p.creatorId].handle + ' → ' + stageOf(stage).label);
+  /* the only place a stage changes, so the only place that has to tell
+     Notion. Deliberately not awaited: a dragged card should land at once,
+     and the result arrives as its own message a moment later. */
+  syncStageToNotion(p, stage);
 }
 
 function renderRosterTable(mount, cp) {
@@ -2697,6 +2701,8 @@ function showParticipant(pid) {
       <div class="field"><label>Content link</label>
         <input type="url" id="pdContentUrl" placeholder="https://www.instagram.com/reel/…" value="${esc((c && c.url) || '')}"/></div>
     </div>
+    <div class="field"><label>인원수 · People visiting <span style="color:var(--text-3);font-weight:400">— shown to the partner</span></label>
+      <input type="text" id="pdHeadcount" placeholder="2" value="${esc(p.headcount || '')}"/></div>
     <div class="field"><label>참고 · Remark <span style="color:var(--text-3);font-weight:400">— shown to the partner</span></label>
       <input type="text" id="pdRemark" placeholder="arriving with 2 guests · asked to move to evening" value="${esc(p.remark || '')}"/></div>
     <div class="field"><label>Internal note <span style="color:var(--text-3);font-weight:400">— not shown to the partner</span></label>
@@ -2773,6 +2779,7 @@ function showParticipant(pid) {
   $('#pdSave').addEventListener('click', () => {
     p.note = $('#pdNote').value;
     p.remark = $('#pdRemark').value.trim();
+    p.headcount = $('#pdHeadcount').value.trim();
     cr.gender = $('#pdGender').value;
 
     const mode = $('#pdPayMode').value;
@@ -4567,6 +4574,7 @@ const NOTION_FIELD_DEFS = [
   { key: 'gender',      label: '성별 · Gender' },
   { key: 'formNotes',   label: 'Notes (what the creator wrote)' },
   { key: 'remark',      label: '참고 · Remark (shown to the partner)' },
+  { key: 'headcount',   label: '인원수 · Number of people visiting' },
   { key: 'visitAt',     label: 'Visit date & time (restaurant / salon booking)' },
   { key: 'status',      label: 'Status (maps to pipeline stage)' },
   { key: 'note',        label: 'Note / message' }
@@ -4596,7 +4604,7 @@ function guessNotionField(propName, propType) {
   if (/accepted.*rejected|rejected.*accepted|승인.*메시지/.test(h)) return 'skip';
   /* likewise the reminder formulas, which are Notion-side workflow prompts */
   if (/^reminder/.test(h)) return 'skip';
-  if (/number of people|people visiting|인원/.test(h)) return 'skip';
+  if (/number of people|people visiting|인원/.test(h)) return 'headcount';
   /* Deliberately never mapped. A form that collects bank details is holding
      the most sensitive thing in this whole system in plain text, and pulling
      it into the workspace would spread it to local storage, the Sheet, every
@@ -4709,6 +4717,8 @@ function notionRowToApplicant(properties, mapping) {
        note — this one is shown to the partner */
     formNotes: String(get('formNotes') || '').trim(),
     remark: String(get('remark') || '').trim(),
+    /* how many are coming, which is what a restaurant holds tables for */
+    headcount: String(get('headcount') || '').trim(),
     gender: String(get('gender') || '').trim(),
     visitAt: notionVisitValue(get('visitAt')),
     metricsAt: notionVisitValue(get('metricsAt')),
@@ -4965,6 +4975,7 @@ async function runNotionSync(cp, opts) {
       p.otherSns = merge('otherSns', p.otherSns);
       p.formNotes = merge('formNotes', p.formNotes);
       p.remark = merge('remark', p.remark);
+      p.headcount = merge('headcount', p.headcount);
       if (ap.gender && cr) cr.gender = ap.gender;
       p.importedStatus = ap.statusRaw || p.importedStatus;
       /* a booking removed in Notion has to clear here too, or the calendar
@@ -4995,7 +5006,7 @@ async function runNotionSync(cp, opts) {
         dropReason: ap.dropReason, revisions: 0, note: ap.note,
         fullName: ap.fullName, address: ap.address, contact: ap.contact, nationality: ap.nationality,
         visitAt: ap.visitAt, arrivingDate: '', otherSns: ap.otherSns, importedStatus: ap.statusRaw,
-        formNotes: ap.formNotes, remark: ap.remark || '',
+        formNotes: ap.formNotes, remark: ap.remark || '', headcount: ap.headcount || '',
         notionPageId: row.pageId, content: null
       };
       applyStageDates(np, ap.stage, cp);
@@ -7289,6 +7300,7 @@ const SETTINGS_ITEMS = [
   { id: 'blacklist',    label: 'Creator blacklist',   sub: 'blocked, flagged, preferred' },
   { id: 'sheet',        label: 'Google Sheet',        sub: 'shared store for the team' },
   { id: 'calendar',     label: 'Google Calendar',     sub: 'push bookings to a calendar' },
+  { id: 'notion',       label: 'Notion',              sub: 'stage changes written back' },
   { id: 'partners',     label: 'Partners',            sub: 'share progress, read their comments' },
   { id: 'integrations', label: 'Instagram & TikTok',  sub: 'what a connection can pull' },
   { id: 'sources',      label: 'Data sources',        sub: 'where creators come from' },
@@ -7301,6 +7313,7 @@ function renderSettings(view, item) {
   if (item === 'blacklist')  return settingsBlacklist(view);
   if (item === 'sheet')      return settingsSheets(view);
   if (item === 'calendar')   return settingsCalendar(view);
+  if (item === 'notion')     { view.innerHTML = `<div class="grid g2">${writebackCardHtml()}</div>`; return wireWritebackCard(); }
   if (item === 'partners')   return settingsPartners(view);
   if (item === 'sources') {
     const dupGroups = duplicateCreatorGroups();
@@ -7564,6 +7577,123 @@ async function importCreatorsCsv(e) {
 }
 
 
+
+/* ------------------------------------------------------------------
+   Writing a stage change back to Notion.
+
+   Until now this was one-way: Notion in, dashboard out. Moving a card
+   on the board now sets the same row's Status in Notion, so the team
+   working in Notion and the team working here stop diverging.
+
+   The two vocabularies do not line up one-to-one, and pretending they
+   do is how you corrupt a roster:
+
+     · Notion has no "Contacted", "Replied" or "Sourced". Moving a card
+       into one of those has nothing to write, and says so rather than
+       writing something approximate.
+     · Content in, In review and Shipped all mean "Waiting Upload" in
+       Notion. That is safe to write because the sync back is
+       forward-only — reading Waiting Upload will not drag a creator
+       who is already at In review back to Shipped.
+     · "Brand Accepted" and "Confirmed" both read as Confirmed here, so
+       a row already on Brand Accepted is left alone rather than being
+       flattened to the vaguer word.
+   ------------------------------------------------------------------ */
+const STAGE_TO_NOTION = {
+  shortlisted: 'Waiting Approval',
+  confirmed:   'Confirmed',
+  shipped:     'Waiting Upload',
+  submitted:   'Waiting Upload',
+  review:      'Waiting Upload',
+  live:        'Uploaded'
+  /* sourced, contacted and replied have no Notion equivalent */
+};
+
+/* a drop can mean three different things over there */
+function notionValueForDrop(p) {
+  const why = String(p.dropReason || '').toLowerCase();
+  if (/brand/.test(why)) return 'Brand Rejected';
+  if (/cancel/.test(why)) return 'Cancelled';
+  return 'Declined';
+}
+
+function notionValueForStage(p, stage) {
+  return stage === 'dropped' ? notionValueForDrop(p) : (STAGE_TO_NOTION[stage] || null);
+}
+
+/* which Notion property holds the status for this campaign */
+function notionStatusProperty(cp) {
+  const entry = Object.entries(cp.notionMapping || {}).find(([, key]) => key === 'status');
+  return entry ? entry[0] : null;
+}
+
+const WRITEBACK_KEY = 'vively-notion-writeback-v1';
+const WRITEBACK = { on: true };
+function loadWriteback() {
+  try { const v = localStorage.getItem(WRITEBACK_KEY); if (v !== null) WRITEBACK.on = v === '1'; }
+  catch (e) { /* storage blocked — leave it on */ }
+}
+function saveWriteback() {
+  try { localStorage.setItem(WRITEBACK_KEY, WRITEBACK.on ? '1' : '0'); } catch (e) { /* nothing to do */ }
+}
+
+/* Returns why nothing was written, or null when a write was made. Kept
+   separate from moveStage so the reason can be shown without the caller
+   having to know any of the rules above. */
+async function pushStageToNotion(p, stage) {
+  if (!WRITEBACK.on) return 'off';
+  const cp = byCampaign[p.campaignId];
+  if (!cp || !p.notionPageId) return 'not-from-notion';
+  const property = notionStatusProperty(cp);
+  if (!property) return 'no-status-column';
+
+  const value = notionValueForStage(p, stage);
+  if (!value) return 'no-notion-equivalent';
+
+  /* Already saying the same thing over there — including the case where
+     Notion's word is the more specific of the two. */
+  const current = String(p.importedStatus || '').trim();
+  if (current && (STATUS_MAP[current.toLowerCase()] || {}).stage === stage) return 'already';
+
+  try {
+    const res = await fetch('/api/notion/status', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pageId: p.notionPageId, property, value })
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `Server responded ${res.status}`);
+    p.importedStatus = value;
+    p.notionStatusAt = new Date().toISOString();
+    return null;
+  } catch (err) {
+    p.notionStatusError = err.message;
+    throw err;
+  }
+}
+
+/* the user-facing half: says what happened, good or bad */
+async function syncStageToNotion(p, stage) {
+  const cr = byCreator[p.creatorId] || {};
+  let why;
+  try {
+    why = await pushStageToNotion(p, stage);
+  } catch (err) {
+    toast(`Notion did not accept the change for ${cr.handle} — ${err.message}`);
+    render();
+    return;
+  }
+  if (why === null) {
+    p.notionStatusError = null;
+    toast(`${cr.handle} → ${stageOf(stage).label} · Notion updated`);
+    serverSave({ silent: true });
+  } else if (why === 'no-notion-equivalent') {
+    toast(`${cr.handle} → ${stageOf(stage).label}. Notion has no status for that, so it was left as it was.`);
+  } else if (why === 'no-status-column') {
+    toast(`${cr.handle} → ${stageOf(stage).label}. This campaign has no Status column mapped, so nothing was sent.`);
+  }
+  render();
+}
+
 /* ============================================================
    PARTNER VIEW
 
@@ -7654,6 +7784,7 @@ function partnerRows(partner) {
       gender: cr.gender || '',
       followers: cr.followers || 0,
       remark: p.remark || '',
+      headcount: p.headcount || '',
       contentUrl: (p.content && p.content.url) || '',
       nationality: p.nationality || cr.nationality || cr.country || '',
       /* the creator's own answer to the form's Notes question. p.note is a
@@ -7700,6 +7831,41 @@ function newPartnerToken() {
 function partnerLinkFor(partner) {
   DB.partnerLinks = DB.partnerLinks || [];
   return DB.partnerLinks.find((l) => l.partner === partner && !l.revokedAt) || null;
+}
+
+/* the switch for writing stage changes back to Notion */
+function writebackCardHtml() {
+  return `<div class="card">
+    <div class="card-head"><h3>Stage changes → Notion</h3><div class="sp"></div>
+      <span class="pill ${WRITEBACK.on ? 'green' : 'grey'}">${WRITEBACK.on ? 'On' : 'Off'}</span></div>
+    <p class="card-sub" style="margin-top:10px">Moving a creator between stages here sets the same row's
+      <strong>Status</strong> in Notion, so the two stop drifting apart. It only touches campaigns whose form
+      has a Status column mapped, and only rows that came from Notion.</p>
+    <label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:13px">
+      <input type="checkbox" id="wbOn" ${WRITEBACK.on ? 'checked' : ''}/> Write stage changes back to Notion</label>
+    <div class="divider"></div>
+    <div class="lbl">How the two vocabularies line up</div>
+    <div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th>Dashboard stage</th><th>Notion Status</th></tr></thead>
+      <tbody>${STAGES.map((st) => {
+        const v = st.id === 'dropped' ? 'Declined / Cancelled / Brand Rejected' : STAGE_TO_NOTION[st.id];
+        return `<tr><td>${esc(st.label)}</td><td>${v
+          ? esc(v)
+          : '<span style="color:var(--text-3)">no equivalent — left as it was</span>'}</td></tr>`;
+      }).join('')}</tbody>
+    </table></div>
+    <p class="card-sub" style="margin-top:10px">Notion has no status for the first three, so moving a card there
+      changes nothing over there and says so. Content in and In review both read as <em>Waiting Upload</em>;
+      that is safe because reading Notion only ever moves a creator forward, never back.</p>
+  </div>`;
+}
+
+function wireWritebackCard() {
+  const box = $('#wbOn');
+  if (box) box.addEventListener('change', () => {
+    WRITEBACK.on = box.checked; saveWriteback(); render();
+    toast(WRITEBACK.on ? 'Stage changes will be written to Notion' : 'Stage changes stay in the dashboard');
+  });
 }
 
 function settingsPartners(view) {
@@ -8876,6 +9042,7 @@ loadPersisted();
 loadSyncConfig();
 loadContractDefaults();
 loadGcalPrefs();
+loadWriteback();
 loadPartnerComments();
 lastPushedJson = JSON.stringify(DB);
 wireSearch();
