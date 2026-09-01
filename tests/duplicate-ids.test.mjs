@@ -103,3 +103,56 @@ test('duplicate creators and roster rows are caught too', () => {
   ctx.api.repairDuplicateIds();
   assert.equal(ctx.api.duplicateIdGroups().length, 0);
 });
+
+/* --- what a repair must NOT disturb ---------------------------------------
+   A roster row's id is not just a label. The Google Calendar event for that
+   booking has an id derived from it, and a partner's comments are filed
+   against it. Change it and you get a second event for the same visit and
+   comments attached to nothing. */
+const rehomeSrc = src.slice(src.indexOf('    if (p && p.campaignId !== cp.id) {'),
+                            src.indexOf('rehomed++;') + 'rehomed++;\n    }'.length);
+
+test('re-homing a row to its real campaign does not change the row id', () => {
+  assert.ok(/p\.campaignId = cp\.id;/.test(rehomeSrc), 'it should set the campaign');
+  assert.ok(!/p\.id\s*=/.test(rehomeSrc),
+    'the row id must not be reassigned — a calendar event and any partner comments are keyed on it');
+});
+
+test('a re-homed booking keeps the calendar event it already has', () => {
+  const ctx = makeCtx({ campaigns: [], creators: [], participants: [] });
+  /* the calendar derives an event id from the row id, so the same row must
+     keep resolving to the same event after it moves campaign */
+  const row = { id: 'cp9345-nt33-962', campaignId: 'cp9345', creatorId: 'nt33',
+                notionPageId: 'pg1', googleEventId: 'v0abc' };
+  const before = row.id;
+  row.campaignId = 'cpNEWID';            /* what re-homing now does, and only this */
+  assert.equal(row.id, before);
+  assert.equal(row.googleEventId, 'v0abc');
+});
+
+test('a renumbered duplicate row does not inherit another row\'s event', () => {
+  const db = { campaigns: [], creators: [],
+    participants: [
+      { id: 'dup', campaignId: 'c', creatorId: 'a', googleEventId: 'v0shared', googleLink: 'x' },
+      { id: 'dup', campaignId: 'c', creatorId: 'b', googleEventId: 'v0shared', googleLink: 'x' }
+    ] };
+  makeCtx(db).api.repairDuplicateIds();
+  assert.equal(db.participants[0].googleEventId, 'v0shared', 'the first row keeps what it had');
+  assert.equal(db.participants[1].googleEventId, undefined,
+    'the renumbered row must not point at an event that is no longer its own');
+  assert.notEqual(db.participants[1].id, 'dup');
+});
+
+test('the repair leaves every other record untouched', () => {
+  const db = {
+    campaigns: [{ id: 'a', brand: 'A', notionDatabaseId: 'x', notionMapping: { S: 'status' } },
+                { id: 'b', brand: 'B' }, { id: 'b', brand: 'C' }],
+    creators: [{ id: 'c1', handle: '@one', payout: { number: '110' } }],
+    participants: [{ id: 'p1', campaignId: 'a', creatorId: 'c1', visitAt: '2026-09-04 19:00',
+                     googleEventId: 'v0keep', notionPageId: 'pg' }]
+  };
+  const snapshot = JSON.stringify({ a: db.campaigns[0], c: db.creators[0], p: db.participants[0] });
+  makeCtx(db).api.repairDuplicateIds();
+  assert.equal(JSON.stringify({ a: db.campaigns[0], c: db.creators[0], p: db.participants[0] }), snapshot,
+    'only the colliding record should have been touched');
+});

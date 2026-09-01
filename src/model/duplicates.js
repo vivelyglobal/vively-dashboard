@@ -53,7 +53,16 @@ export function repairDuplicateIds() {
       } else if (g.kind === 'creators') {
         byCreator[rec.id] = rec;
       } else {
-        rec.id = rec.campaignId + '-' + rec.creatorId + '-' + newId('x');
+        /* Two roster rows genuinely sharing an id is the one case where the
+           id has to change. Anything already keyed on the old one — a
+           calendar event, a partner's comments — stays with the row that
+           kept it; the renumbered row starts clean rather than pointing at
+           an event that is not its own. The calendar's orphan check then
+           surfaces the leftover event with a button to remove it. */
+        rec.id = newId('p');
+        delete rec.googleEventId;
+        delete rec.googleLink;
+        delete rec.googleSyncedAt;
         movedRows++;
       }
     });

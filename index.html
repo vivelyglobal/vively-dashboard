@@ -4982,8 +4982,13 @@ async function runNotionSync(cp, opts) {
        that shared an id pooled their rosters under one campaignId; syncing
        either one now pulls its own rows back where they belong. */
     if (p && p.campaignId !== cp.id) {
+      /* Only the campaign changes. The row's own id stays exactly as it is,
+         because other things are keyed on it: a Google Calendar event's id is
+         derived from it, and a partner's comments are filed against it.
+         Rewriting it would leave a duplicate event for the same booking and
+         orphan the comments. The id merely happens to start with a campaign
+         id — nothing reads it that way. */
       p.campaignId = cp.id;
-      p.id = cp.id + '-' + p.creatorId;
       rehomed++;
     }
     if (!p) {
@@ -7663,7 +7668,16 @@ function repairDuplicateIds() {
       } else if (g.kind === 'creators') {
         byCreator[rec.id] = rec;
       } else {
-        rec.id = rec.campaignId + '-' + rec.creatorId + '-' + newId('x');
+        /* Two roster rows genuinely sharing an id is the one case where the
+           id has to change. Anything already keyed on the old one — a
+           calendar event, a partner's comments — stays with the row that
+           kept it; the renumbered row starts clean rather than pointing at
+           an event that is not its own. The calendar's orphan check then
+           surfaces the leftover event with a button to remove it. */
+        rec.id = newId('p');
+        delete rec.googleEventId;
+        delete rec.googleLink;
+        delete rec.googleSyncedAt;
         movedRows++;
       }
     });

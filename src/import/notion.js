@@ -418,8 +418,13 @@ export async function runNotionSync(cp, opts) {
        that shared an id pooled their rosters under one campaignId; syncing
        either one now pulls its own rows back where they belong. */
     if (p && p.campaignId !== cp.id) {
+      /* Only the campaign changes. The row's own id stays exactly as it is,
+         because other things are keyed on it: a Google Calendar event's id is
+         derived from it, and a partner's comments are filed against it.
+         Rewriting it would leave a duplicate event for the same booking and
+         orphan the comments. The id merely happens to start with a campaign
+         id — nothing reads it that way. */
       p.campaignId = cp.id;
-      p.id = cp.id + '-' + p.creatorId;
       rehomed++;
     }
     if (!p) {

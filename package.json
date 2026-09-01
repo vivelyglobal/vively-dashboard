@@ -15,7 +15,7 @@
     "check:calendar": "node tools/seed.mjs > tmp/seed.json && node tools/calendar-sync.mjs && node tools/calendar-edge.mjs && node tools/calendar-form.mjs",
     "check:partner": "node tools/seed.mjs > tmp/seed.json && node tools/partner-page.mjs",
     "check:writeback": "node tools/seed.mjs > tmp/seed.json && node tools/writeback-page.mjs",
-    "check:ids": "node tools/seed.mjs > tmp/seed.json && node tools/duplicate-ids-page.mjs"
+    "check:ids": "node tools/seed.mjs > tmp/seed.json && node tools/duplicate-ids-page.mjs && node tools/rehome-safety.mjs"
   },
   "engines": {
     "node": ">=18"
