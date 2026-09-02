@@ -2,7 +2,7 @@ import { STATUS_MAP, TEMPLATES } from '../import/excel.js';
 import { iso } from '../lib/dates.js';
 import { num } from '../lib/format.js';
 import { duplicateCreatorGroups, mergeDuplicateCreators } from '../model/creators.js';
-import { DB, byCampaign, byCreator, clearPersisted, notify, persist, persistState } from '../model/db.js';
+import { DB, byCampaign, byCreator, clearPersisted, linkSocialContent, notify, persist, persistState } from '../model/db.js';
 import { SETTINGS } from '../model/settings.js';
 import { SOURCES, newId, tierOf } from '../model/vocab.js';
 import { $, esc } from '../ui/dom.js';
@@ -260,8 +260,12 @@ export async function restoreBackup(e) {
     DB.creators = db.creators; DB.campaigns = db.campaigns; DB.participants = db.participants || [];
     DB.appointments = db.appointments || [];
     DB.partnerLinks = db.partnerLinks || [];
+    DB.socialContent = db.socialContent || [];
     DB.creators.forEach((c) => (byCreator[c.id] = c));
     DB.campaigns.forEach((c) => (byCampaign[c.id] = c));
+    /* a backup taken before the split still has content on the rows;
+       linking adopts it rather than losing every video in the file */
+    linkSocialContent();
     if (saved.settings && typeof saved.settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = saved.settings.hideBlocked;
     persist(true);
     toast(`Restored ${DB.campaigns.length} campaigns and ${DB.creators.length} creators`);

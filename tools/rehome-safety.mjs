@@ -81,14 +81,22 @@ await step('every roster row still belongs to a campaign that exists', async () 
 await step('creator records, payouts and content are all still intact', async () => {
   const out = await p.evaluate(() => {
     const raw = JSON.parse(localStorage.getItem('vively-workspace-v1'));
+    /* a post lives in the library now, not on the row — count it where it
+       is, and count rows that lost theirs, so the split cannot quietly
+       drop a video while every other number still adds up */
+    const lib = raw.db.socialContent || [];
     return { creators: raw.db.creators.length,
-             withContent: raw.db.participants.filter((x) => x.content && x.content.url).length,
+             withContent: lib.filter((c) => c.url).length,
+             orphanPosts: lib.filter((c) => c.participantId &&
+               !raw.db.participants.some((p) => p.id === c.participantId)).length,
              withVisit: raw.db.participants.filter((x) => x.visitAt).length,
              withPage: raw.db.participants.filter((x) => x.notionPageId).length };
   });
   const src = JSON.parse(seed).db;
   const want = { creators: src.creators.length,
-                 withContent: src.participants.filter((x) => x.content && x.content.url).length,
+                 withContent: src.participants.filter((x) => x.content && x.content.url).length
+                   + (src.socialContent || []).filter((c) => c.url).length,
+                 orphanPosts: 0,
                  withVisit: src.participants.filter((x) => x.visitAt).length,
                  withPage: src.participants.filter((x) => x.notionPageId).length };
   for (const k of Object.keys(want))

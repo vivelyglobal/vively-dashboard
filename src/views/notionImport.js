@@ -3,8 +3,8 @@ import { NOTION_FIELD_DEFS, guessNotionField, notionRowToApplicant } from '../im
 import { TODAY, addDays, iso } from '../lib/dates.js';
 import { num } from '../lib/format.js';
 import { findCreatorByHandle, mergeDuplicateCreators } from '../model/creators.js';
-import { DB, SERVER, byCampaign, byCreator, serverSave } from '../model/db.js';
-import { CAMPAIGN_STATUS, CATEGORIES, COUNTRIES, STAGE_IDX, avColor, newId, stageOf, tierOf } from '../model/vocab.js';
+import { DB, SERVER, attachContent, byCampaign, byCreator, serverSave } from '../model/db.js';
+import { CAMPAIGN_STATUS, CATEGORIES, COUNTRIES, STAGE_IDX, newId, stageOf, tierOf } from '../model/vocab.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { stagePill, statCard } from '../ui/html.js';
 import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';
@@ -271,14 +271,7 @@ export function commitNotionImport() {
       visitAt: r.visitAt || '', arrivingDate: '', importedStatus: r.statusRaw,
       notionPageId: r.notionPageId, content: null
     };
-    if (r.contentUrl) {
-      p.content = {
-        url: r.contentUrl, platform: r.platform, format: 'Reel', postedAt: iso(TODAY), submittedAt: iso(TODAY),
-        views: 0, paidViews: 0, organicViews: 0, likes: 0, comments: 0, shares: 0, saves: 0,
-        reach: 0, profileVisits: 0, followsGained: 0, linkClicks: 0,
-        curve: [], boosted: false, viral: false, topCountries: [], thumbTint: avColor(cr.handle)
-      };
-    }
+    if (r.contentUrl) attachContent(p, cr, { url: r.contentUrl, platform: r.platform, dataSource: 'import' });
     DB.participants.push(p);
   });
 

@@ -10,6 +10,7 @@ import { CAMPAIGN_STATUS } from '../model/vocab.js';
 import { num, kmb } from '../lib/format.js';
 import { state, activeCampaigns, OVERVIEW_ITEMS, OVERVIEW_TABS } from '../views/overview.js';
 import { ANALYTICS_ITEMS, ANALYTICS_TABS } from '../views/analytics.js';
+import { SOCIAL_ITEMS, SOCIAL_TABS } from '../views/social.js';
 import { CREATOR_SEGMENTS, CREATOR_TABS, segmentOf } from '../views/creators.js';
 import { CONTRACT_DOCS, CONTRACT_TABS } from '../docs/contracts.js';
 import { SETTINGS_ITEMS } from '../views/settings.js';
@@ -23,17 +24,20 @@ export const SECTIONS = [
   { id: 'creators',  icon: '◎', label: 'Creators', badge: () => DB.creators.length },
   { id: 'contracts', icon: '§', label: 'Contracts' },
   { id: 'analytics', icon: '◫', label: 'Analytics' },
+  { id: 'social',    icon: '▶', label: 'Social', badge: () => DB.socialContent.filter((c) => c.url).length },
   { id: 'settings',  icon: '⚙', label: 'Setup' }
 ];
 
 export function defaultItem(section) {
   return { overview: 'summary', campaigns: 'all', creators: 'all', analytics: 'trend', contracts: 'msa',
-           settings: 'templates', messages: (activeCampaigns()[0] || DB.campaigns[0] || {}).id }[section] || '';
+           social: 'library', settings: 'templates',
+           messages: (activeCampaigns()[0] || DB.campaigns[0] || {}).id }[section] || '';
 }
 
 export function tabsFor(section, item) {
   if (section === 'overview')  return OVERVIEW_TABS[item] || OVERVIEW_TABS.summary;
   if (section === 'analytics') return ANALYTICS_TABS[item] || ANALYTICS_TABS.trend;
+  if (section === 'social')    return SOCIAL_TABS;
   if (section === 'creators')  return CREATOR_TABS;
   if (section === 'contracts') return CONTRACT_TABS;
   if (section === 'messages')  return MSG_KINDS.map(([k, l]) => [k, l]);
@@ -52,6 +56,9 @@ export function panelFor(section, item) {
 
   if (section === 'analytics')
     return { title: 'Analytics', groups: [{ items: ANALYTICS_ITEMS.map((o) => ({ id: o.id, title: o.label, sub: o.sub })) }] };
+
+  if (section === 'social')
+    return { title: 'Social media', groups: [{ items: SOCIAL_ITEMS.map((o) => ({ id: o.id, title: o.label, sub: o.sub })) }] };
 
   if (section === 'settings')
     return { title: 'Setup', groups: [{ items: SETTINGS_ITEMS.map((o) => ({ id: o.id, title: o.label, sub: o.sub })) }] };
@@ -91,6 +98,7 @@ export function titleFor(section, item) {
   if (section === 'messages')  return (byCampaign[item] || {}).brand || 'Messages';
   if (section === 'creators')  return segmentOf(item).label;
   if (section === 'analytics') return (ANALYTICS_ITEMS.find((x) => x.id === item) || {}).label || 'Analytics';
+  if (section === 'social')    return (SOCIAL_ITEMS.find((x) => x.id === item) || {}).label || 'Social media';
   if (section === 'contracts') return (CONTRACT_DOCS[item] || CONTRACT_DOCS.msa).label;
   if (section === 'settings')  return (SETTINGS_ITEMS.find((x) => x.id === item) || {}).label || 'Setup';
   return (OVERVIEW_ITEMS.find((x) => x.id === item) || {}).label || 'Overview';

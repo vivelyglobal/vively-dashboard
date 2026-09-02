@@ -1,7 +1,7 @@
 import { TODAY, iso } from '../lib/dates.js';
 import { findCreatorByHandle, mergeDuplicateCreators } from '../model/creators.js';
-import { DB, SERVER, byCreator, notify, serverSave } from '../model/db.js';
-import { STAGE_IDX, avColor, newId, tierOf } from '../model/vocab.js';
+import { DB, SERVER, attachContent, byCreator, notify, serverSave } from '../model/db.js';
+import { STAGE_IDX, newId, tierOf } from '../model/vocab.js';
 import { $, esc } from '../ui/dom.js';
 import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';
 import { STATUS_MAP, countryOf, guessField, handleFromUrl, normHeader, parseDateCell, parseFollowers } from './excel.js';
@@ -370,14 +370,7 @@ export async function openNotionMappingDrawer(cp) {
 export function applyNotionContent(p, ap, cr) {
   const hasMetrics = Object.keys(ap.metrics || {}).length > 0;
   if (!ap.contentUrl && !hasMetrics) return 0;
-  if (!p.content) {
-    p.content = {
-      url: '', platform: ap.platform, format: 'Reel', postedAt: iso(TODAY), submittedAt: iso(TODAY),
-      views: 0, paidViews: 0, organicViews: 0, likes: 0, comments: 0, shares: 0, saves: 0,
-      reach: 0, profileVisits: 0, followsGained: 0, linkClicks: 0,
-      curve: [], boosted: false, viral: false, topCountries: [], thumbTint: avColor(cr.handle)
-    };
-  }
+  attachContent(p, cr, { platform: ap.platform, dataSource: 'notion' });
   let touched = 0;
   if (ap.contentUrl && p.content.url !== ap.contentUrl) { p.content.url = ap.contentUrl; touched++; }
   NOTION_METRIC_KEYS.forEach((k) => {

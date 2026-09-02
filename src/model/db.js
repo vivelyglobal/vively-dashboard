@@ -1,11 +1,214 @@
+import { TODAY, iso } from '../lib/dates.js';
 import { scheduleSheetPush } from '../sync/sheets.js';
 import { toast } from '../ui/overlay.js';
 import { SETTINGS } from './settings.js';
+import { avColor, newId } from './vocab.js';
 
 /* ---------------- the workspace ---------------- */
-export const DB = { creators: [], campaigns: [], participants: [], appointments: [], partnerLinks: [] };
+export const DB = { creators: [], campaigns: [], participants: [], appointments: [], partnerLinks: [], socialContent: [] };
 export const byCreator = {};
 export const byCampaign = {};
+
+/* ==================================================================
+   SOCIAL CONTENT
+
+   A published post is one record, and it lives in DB.socialContent.
+   It is NOT stored a second time on the roster row: `p.content`
+   points at the very same object in memory, and the save path strips
+   it back out, so there is exactly one copy on disk and no way for
+   the two to drift apart. Everything already written against
+   `p.content` keeps working untouched.
+
+   The campaign is a real field on the record, never a hashtag.
+   Hashtags are only ever evidence used to fill campaignId in, which
+   is why matchMethod and matchConfidence are recorded beside it:
+   a number nobody can explain is a number nobody will trust.
+   ================================================================== */
+export const SOCIAL_MATCH_STATUS = {
+  confirmed:    { label: 'Confirmed',    tone: 'green',  sub: 'a person decided this' },
+  auto_matched: { label: 'Auto-matched', tone: 'blue',   sub: 'matched with high confidence' },
+  suggested:    { label: 'Needs review', tone: 'yellow', sub: 'a guess worth checking' },
+  unassigned:   { label: 'Unassigned',   tone: 'grey',   sub: 'no campaign yet' },
+  excluded:     { label: 'Not campaign', tone: 'grey',   sub: 'ruled out by hand' }
+};
+
+/* the fields the app has always kept on a content record, defaulted so
+   an older record and a freshly imported one have the same shape */
+export function socialContentDefaults() {
+  return {
+    platform: 'Instagram', platformPostId: '', username: '',
+    postUrl: '', thumbnailUrl: '', caption: '', hashtags: [], mentions: [],
+    format: 'Reel', publishedAt: '', submittedAt: '',
+    views: 0, paidViews: 0, organicViews: 0, likes: 0, comments: 0, shares: 0, saves: 0,
+    reach: 0, profileVisits: 0, followsGained: 0, linkClicks: 0,
+    matchMethod: '', matchConfidence: 0, matchStatus: 'unassigned',
+    dataSource: 'manual', lastScrapedAt: null,
+    curve: [], boosted: false, viral: false, topCountries: [], thumbTint: '',
+    createdAt: '', updatedAt: ''
+  };
+}
+
+/* Instagram and TikTok both put the post id in the path; anything else
+   falls back to the whole URL, which is still stable per post. */
+export function platformPostIdOf(url) {
+  const u = String(url || '').trim();
+  if (!u) return '';
+  let m = u.match(/instagram\.com\/(?:p|reel|reels|tv)\/([\w-]+)/i);
+  if (m) return 'ig_' + m[1];
+  m = u.match(/tiktok\.com\/@[\w.]+\/video\/(\d+)/i);
+  if (m) return 'tt_' + m[1];
+  return u.replace(/[?#].*$/, '');
+}
+
+export function platformOfUrl(url, fallback) {
+  const u = String(url || '');
+  if (/tiktok\.com/i.test(u)) return 'TikTok';
+  if (/instagram\.com/i.test(u)) return 'Instagram';
+  if (/youtube\.com|youtu\.be/i.test(u)) return 'YouTube';
+  return fallback || 'Instagram';
+}
+
+export const hashtagsIn = (text) => (String(text || '').match(/#[\p{L}\p{N}_]+/gu) || []).map((h) => h.toLowerCase());
+export const mentionsIn = (text) => (String(text || '').match(/@[\w.]+/g) || []).map((h) => h.toLowerCase());
+
+export function socialEngagements(c) {
+  if (!c) return 0;
+  return (c.likes || 0) + (c.comments || 0) + (c.shares || 0) + (c.saves || 0);
+}
+/* Rate against views, because that is what a brand asks about a video.
+   Returns null rather than 0 when there is nothing to divide by, so an
+   unmeasured post sorts and reads as "no data" instead of "terrible". */
+export function socialEngagementRate(c) {
+  if (!c || !c.views) return null;
+  return (socialEngagements(c) / c.views) * 100;
+}
+export function socialViewRatio(c, cr) {
+  const f = cr && cr.followers;
+  if (!c || !c.views || !f) return null;
+  return c.views / f;
+}
+
+/* ---- linking -----------------------------------------------------
+   Called after every load. Rebuilds `p.content` as a reference to the
+   record in DB.socialContent, and adopts any older row that still
+   carries its content inline — which is every row until this ships.
+   ------------------------------------------------------------------ */
+export function linkSocialContent() {
+  if (!Array.isArray(DB.socialContent)) DB.socialContent = [];
+  const byParticipant = {};
+  DB.socialContent.forEach((c) => {
+    Object.entries(socialContentDefaults()).forEach(([k, v]) => {
+      if (c[k] === undefined) c[k] = Array.isArray(v) ? v.slice() : v;
+    });
+    if (c.participantId) byParticipant[c.participantId] = c;
+  });
+
+  let adopted = 0;
+  DB.participants.forEach((p) => {
+    const existing = byParticipant[p.id];
+    if (existing) {
+      /* the row and the record are now the same object, so a write
+         through either one is the same write */
+      existing.campaignId = p.campaignId;
+      existing.creatorId = p.creatorId;
+      p.content = existing;
+      return;
+    }
+    if (!p.content) return;
+    const cr = byCreator[p.creatorId] || {};
+    const rec = Object.assign(socialContentDefaults(), p.content, {
+      id: p.content.id || newId('sc'),
+      participantId: p.id,
+      campaignId: p.campaignId,
+      creatorId: p.creatorId,
+      username: p.content.username || cr.handle || '',
+      postUrl: p.content.postUrl || p.content.url || '',
+      publishedAt: p.content.publishedAt || p.content.postedAt || '',
+      /* it came in through the roster, so the campaign is not a guess */
+      matchMethod: p.content.matchMethod || 'roster',
+      matchConfidence: p.content.matchConfidence || 100,
+      matchStatus: p.content.matchStatus || 'confirmed',
+      dataSource: p.content.dataSource || 'manual',
+      createdAt: p.content.createdAt || new Date().toISOString()
+    });
+    rec.platform = platformOfUrl(rec.postUrl, p.content.platform || cr.platform);
+    rec.platformPostId = rec.platformPostId || platformPostIdOf(rec.postUrl);
+    if (!rec.hashtags.length) rec.hashtags = hashtagsIn(rec.caption);
+    if (!rec.mentions.length) rec.mentions = mentionsIn(rec.caption);
+    if (!rec.thumbTint) rec.thumbTint = avColor(cr.handle || p.creatorId || '');
+    /* url and postUrl are the same string; url is what 108 existing
+       call sites read, so it stays rather than being renamed */
+    rec.url = rec.postUrl;
+    DB.socialContent.push(rec);
+    byParticipant[p.id] = rec;
+    p.content = rec;
+    adopted++;
+  });
+  return adopted;
+}
+
+/* The one place a content record is created. Every caller used to build
+   the object literal itself, so a field added in one place was missing in
+   the other three — and now there is a second thing to get right, filing
+   it in DB.socialContent. Doing both here means a post can never exist on
+   a row without existing in the library. */
+export function attachContent(p, cr, seed) {
+  if (p.content) return p.content;
+  const url = (seed && seed.url) || '';
+  const rec = Object.assign(socialContentDefaults(), {
+    id: newId('sc'),
+    participantId: p.id, campaignId: p.campaignId, creatorId: p.creatorId,
+    username: (cr && cr.handle) || '',
+    publishedAt: iso(TODAY), postedAt: iso(TODAY), submittedAt: iso(TODAY),
+    matchMethod: 'roster', matchConfidence: 100, matchStatus: 'confirmed',
+    thumbTint: avColor((cr && cr.handle) || p.creatorId || ''),
+    createdAt: new Date().toISOString()
+  }, seed || {});
+  rec.url = url; rec.postUrl = url;
+  rec.platform = platformOfUrl(url, (seed && seed.platform) || (cr && cr.platform));
+  rec.platformPostId = platformPostIdOf(url);
+  DB.socialContent.push(rec);
+  p.content = rec;
+  return rec;
+}
+
+/* Clearing the URL on a post nobody measured removes it outright — and it
+   has to leave the library too, or the content page goes on listing a
+   video that no roster row claims any more. */
+export function detachContent(p) {
+  if (!p.content) return;
+  const i = DB.socialContent.indexOf(p.content);
+  if (i >= 0) DB.socialContent.splice(i, 1);
+  p.content = null;
+}
+
+export function setContentUrl(p, cr, url) {
+  const c = attachContent(p, cr, { url });
+  c.url = url;
+  c.postUrl = url;
+  c.platform = platformOfUrl(url, c.platform);
+  c.platformPostId = platformPostIdOf(url);
+  c.updatedAt = new Date().toISOString();
+  return c;
+}
+
+/* The saved shape: participants without their content, and one
+   socialContent array beside them. Called by every write path so the
+   local copy and the server copy are the same shape. */
+export function dbPayload() {
+  return {
+    creators: DB.creators,
+    campaigns: DB.campaigns,
+    participants: DB.participants.map((p) => {
+      if (!p.content) return p;
+      const { content, ...rest } = p;
+      return rest;
+    }),
+    appointments: DB.appointments,
+    partnerLinks: DB.partnerLinks,
+    socialContent: DB.socialContent
+  };
+}
 
 /* ------------------------------------------------------------------
    Persistence. The whole workspace is saved to this browser's local
@@ -27,7 +230,7 @@ export function persist(now) {
   const write = () => {
     if (persistState.on) {
       try {
-        const json = JSON.stringify({ savedAt: new Date().toISOString(), db: DB, settings: SETTINGS });
+        const json = JSON.stringify({ savedAt: new Date().toISOString(), db: dbPayload(), settings: SETTINGS });
         localStorage.setItem(STORE_KEY, json);
         persistState.at = new Date();
         persistState.bytes = json.length;
@@ -62,10 +265,7 @@ export const SERVER = { status: 'idle', at: null, revision: 0, error: null, busy
 export let lastServerJson = '';
 export let serverSaveTimer = null;
 
-export function workspacePayload() {
-  return { creators: DB.creators, campaigns: DB.campaigns, participants: DB.participants,
-           appointments: DB.appointments, partnerLinks: DB.partnerLinks };
-}
+export function workspacePayload() { return dbPayload(); }
 
 export async function serverLoad() {
   try {
@@ -83,8 +283,10 @@ export async function serverLoad() {
     DB.participants = db.participants || [];
     DB.appointments = db.appointments || [];
     DB.partnerLinks = db.partnerLinks || [];
+    DB.socialContent = db.socialContent || [];
     DB.creators.forEach((c) => (byCreator[c.id] = c));
     DB.campaigns.forEach((c) => (byCampaign[c.id] = c));
+    linkSocialContent();
     if (settings && typeof settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = settings.hideBlocked;
     SERVER.revision = revision || 0;
     SERVER.at = savedAt ? new Date(savedAt) : null;
@@ -168,8 +370,10 @@ export function loadPersisted() {
     DB.participants = db.participants || [];
     DB.appointments = db.appointments || [];
     DB.partnerLinks = db.partnerLinks || [];
+    DB.socialContent = db.socialContent || [];
     DB.creators.forEach((c) => (byCreator[c.id] = c));
     DB.campaigns.forEach((c) => (byCampaign[c.id] = c));
+    linkSocialContent();
     if (saved.settings && typeof saved.settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = saved.settings.hideBlocked;
     persistState.at = saved.savedAt ? new Date(saved.savedAt) : null;
     persistState.bytes = raw.length;

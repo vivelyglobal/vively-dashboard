@@ -888,9 +888,210 @@ function viewCurve(total, days, boosted) {
 }
 
 /* ---------------- the workspace ---------------- */
-const DB = { creators: [], campaigns: [], participants: [], appointments: [], partnerLinks: [] };
+const DB = { creators: [], campaigns: [], participants: [], appointments: [], partnerLinks: [], socialContent: [] };
 const byCreator = {};
 const byCampaign = {};
+
+/* ==================================================================
+   SOCIAL CONTENT
+
+   A published post is one record, and it lives in DB.socialContent.
+   It is NOT stored a second time on the roster row: `p.content`
+   points at the very same object in memory, and the save path strips
+   it back out, so there is exactly one copy on disk and no way for
+   the two to drift apart. Everything already written against
+   `p.content` keeps working untouched.
+
+   The campaign is a real field on the record, never a hashtag.
+   Hashtags are only ever evidence used to fill campaignId in, which
+   is why matchMethod and matchConfidence are recorded beside it:
+   a number nobody can explain is a number nobody will trust.
+   ================================================================== */
+const SOCIAL_MATCH_STATUS = {
+  confirmed:    { label: 'Confirmed',    tone: 'green',  sub: 'a person decided this' },
+  auto_matched: { label: 'Auto-matched', tone: 'blue',   sub: 'matched with high confidence' },
+  suggested:    { label: 'Needs review', tone: 'yellow', sub: 'a guess worth checking' },
+  unassigned:   { label: 'Unassigned',   tone: 'grey',   sub: 'no campaign yet' },
+  excluded:     { label: 'Not campaign', tone: 'grey',   sub: 'ruled out by hand' }
+};
+
+/* the fields the app has always kept on a content record, defaulted so
+   an older record and a freshly imported one have the same shape */
+function socialContentDefaults() {
+  return {
+    platform: 'Instagram', platformPostId: '', username: '',
+    postUrl: '', thumbnailUrl: '', caption: '', hashtags: [], mentions: [],
+    format: 'Reel', publishedAt: '', submittedAt: '',
+    views: 0, paidViews: 0, organicViews: 0, likes: 0, comments: 0, shares: 0, saves: 0,
+    reach: 0, profileVisits: 0, followsGained: 0, linkClicks: 0,
+    matchMethod: '', matchConfidence: 0, matchStatus: 'unassigned',
+    dataSource: 'manual', lastScrapedAt: null,
+    curve: [], boosted: false, viral: false, topCountries: [], thumbTint: '',
+    createdAt: '', updatedAt: ''
+  };
+}
+
+/* Instagram and TikTok both put the post id in the path; anything else
+   falls back to the whole URL, which is still stable per post. */
+function platformPostIdOf(url) {
+  const u = String(url || '').trim();
+  if (!u) return '';
+  let m = u.match(/instagram\.com\/(?:p|reel|reels|tv)\/([\w-]+)/i);
+  if (m) return 'ig_' + m[1];
+  m = u.match(/tiktok\.com\/@[\w.]+\/video\/(\d+)/i);
+  if (m) return 'tt_' + m[1];
+  return u.replace(/[?#].*$/, '');
+}
+
+function platformOfUrl(url, fallback) {
+  const u = String(url || '');
+  if (/tiktok\.com/i.test(u)) return 'TikTok';
+  if (/instagram\.com/i.test(u)) return 'Instagram';
+  if (/youtube\.com|youtu\.be/i.test(u)) return 'YouTube';
+  return fallback || 'Instagram';
+}
+
+const hashtagsIn = (text) => (String(text || '').match(/#[\p{L}\p{N}_]+/gu) || []).map((h) => h.toLowerCase());
+const mentionsIn = (text) => (String(text || '').match(/@[\w.]+/g) || []).map((h) => h.toLowerCase());
+
+function socialEngagements(c) {
+  if (!c) return 0;
+  return (c.likes || 0) + (c.comments || 0) + (c.shares || 0) + (c.saves || 0);
+}
+/* Rate against views, because that is what a brand asks about a video.
+   Returns null rather than 0 when there is nothing to divide by, so an
+   unmeasured post sorts and reads as "no data" instead of "terrible". */
+function socialEngagementRate(c) {
+  if (!c || !c.views) return null;
+  return (socialEngagements(c) / c.views) * 100;
+}
+function socialViewRatio(c, cr) {
+  const f = cr && cr.followers;
+  if (!c || !c.views || !f) return null;
+  return c.views / f;
+}
+
+/* ---- linking -----------------------------------------------------
+   Called after every load. Rebuilds `p.content` as a reference to the
+   record in DB.socialContent, and adopts any older row that still
+   carries its content inline — which is every row until this ships.
+   ------------------------------------------------------------------ */
+function linkSocialContent() {
+  if (!Array.isArray(DB.socialContent)) DB.socialContent = [];
+  const byParticipant = {};
+  DB.socialContent.forEach((c) => {
+    Object.entries(socialContentDefaults()).forEach(([k, v]) => {
+      if (c[k] === undefined) c[k] = Array.isArray(v) ? v.slice() : v;
+    });
+    if (c.participantId) byParticipant[c.participantId] = c;
+  });
+
+  let adopted = 0;
+  DB.participants.forEach((p) => {
+    const existing = byParticipant[p.id];
+    if (existing) {
+      /* the row and the record are now the same object, so a write
+         through either one is the same write */
+      existing.campaignId = p.campaignId;
+      existing.creatorId = p.creatorId;
+      p.content = existing;
+      return;
+    }
+    if (!p.content) return;
+    const cr = byCreator[p.creatorId] || {};
+    const rec = Object.assign(socialContentDefaults(), p.content, {
+      id: p.content.id || newId('sc'),
+      participantId: p.id,
+      campaignId: p.campaignId,
+      creatorId: p.creatorId,
+      username: p.content.username || cr.handle || '',
+      postUrl: p.content.postUrl || p.content.url || '',
+      publishedAt: p.content.publishedAt || p.content.postedAt || '',
+      /* it came in through the roster, so the campaign is not a guess */
+      matchMethod: p.content.matchMethod || 'roster',
+      matchConfidence: p.content.matchConfidence || 100,
+      matchStatus: p.content.matchStatus || 'confirmed',
+      dataSource: p.content.dataSource || 'manual',
+      createdAt: p.content.createdAt || new Date().toISOString()
+    });
+    rec.platform = platformOfUrl(rec.postUrl, p.content.platform || cr.platform);
+    rec.platformPostId = rec.platformPostId || platformPostIdOf(rec.postUrl);
+    if (!rec.hashtags.length) rec.hashtags = hashtagsIn(rec.caption);
+    if (!rec.mentions.length) rec.mentions = mentionsIn(rec.caption);
+    if (!rec.thumbTint) rec.thumbTint = avColor(cr.handle || p.creatorId || '');
+    /* url and postUrl are the same string; url is what 108 existing
+       call sites read, so it stays rather than being renamed */
+    rec.url = rec.postUrl;
+    DB.socialContent.push(rec);
+    byParticipant[p.id] = rec;
+    p.content = rec;
+    adopted++;
+  });
+  return adopted;
+}
+
+/* The one place a content record is created. Every caller used to build
+   the object literal itself, so a field added in one place was missing in
+   the other three — and now there is a second thing to get right, filing
+   it in DB.socialContent. Doing both here means a post can never exist on
+   a row without existing in the library. */
+function attachContent(p, cr, seed) {
+  if (p.content) return p.content;
+  const url = (seed && seed.url) || '';
+  const rec = Object.assign(socialContentDefaults(), {
+    id: newId('sc'),
+    participantId: p.id, campaignId: p.campaignId, creatorId: p.creatorId,
+    username: (cr && cr.handle) || '',
+    publishedAt: iso(TODAY), postedAt: iso(TODAY), submittedAt: iso(TODAY),
+    matchMethod: 'roster', matchConfidence: 100, matchStatus: 'confirmed',
+    thumbTint: avColor((cr && cr.handle) || p.creatorId || ''),
+    createdAt: new Date().toISOString()
+  }, seed || {});
+  rec.url = url; rec.postUrl = url;
+  rec.platform = platformOfUrl(url, (seed && seed.platform) || (cr && cr.platform));
+  rec.platformPostId = platformPostIdOf(url);
+  DB.socialContent.push(rec);
+  p.content = rec;
+  return rec;
+}
+
+/* Clearing the URL on a post nobody measured removes it outright — and it
+   has to leave the library too, or the content page goes on listing a
+   video that no roster row claims any more. */
+function detachContent(p) {
+  if (!p.content) return;
+  const i = DB.socialContent.indexOf(p.content);
+  if (i >= 0) DB.socialContent.splice(i, 1);
+  p.content = null;
+}
+
+function setContentUrl(p, cr, url) {
+  const c = attachContent(p, cr, { url });
+  c.url = url;
+  c.postUrl = url;
+  c.platform = platformOfUrl(url, c.platform);
+  c.platformPostId = platformPostIdOf(url);
+  c.updatedAt = new Date().toISOString();
+  return c;
+}
+
+/* The saved shape: participants without their content, and one
+   socialContent array beside them. Called by every write path so the
+   local copy and the server copy are the same shape. */
+function dbPayload() {
+  return {
+    creators: DB.creators,
+    campaigns: DB.campaigns,
+    participants: DB.participants.map((p) => {
+      if (!p.content) return p;
+      const { content, ...rest } = p;
+      return rest;
+    }),
+    appointments: DB.appointments,
+    partnerLinks: DB.partnerLinks,
+    socialContent: DB.socialContent
+  };
+}
 
 /* ------------------------------------------------------------------
    Persistence. The whole workspace is saved to this browser's local
@@ -912,7 +1113,7 @@ function persist(now) {
   const write = () => {
     if (persistState.on) {
       try {
-        const json = JSON.stringify({ savedAt: new Date().toISOString(), db: DB, settings: SETTINGS });
+        const json = JSON.stringify({ savedAt: new Date().toISOString(), db: dbPayload(), settings: SETTINGS });
         localStorage.setItem(STORE_KEY, json);
         persistState.at = new Date();
         persistState.bytes = json.length;
@@ -947,10 +1148,7 @@ const SERVER = { status: 'idle', at: null, revision: 0, error: null, busy: false
 let lastServerJson = '';
 let serverSaveTimer = null;
 
-function workspacePayload() {
-  return { creators: DB.creators, campaigns: DB.campaigns, participants: DB.participants,
-           appointments: DB.appointments, partnerLinks: DB.partnerLinks };
-}
+function workspacePayload() { return dbPayload(); }
 
 async function serverLoad() {
   try {
@@ -968,8 +1166,10 @@ async function serverLoad() {
     DB.participants = db.participants || [];
     DB.appointments = db.appointments || [];
     DB.partnerLinks = db.partnerLinks || [];
+    DB.socialContent = db.socialContent || [];
     DB.creators.forEach((c) => (byCreator[c.id] = c));
     DB.campaigns.forEach((c) => (byCampaign[c.id] = c));
+    linkSocialContent();
     if (settings && typeof settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = settings.hideBlocked;
     SERVER.revision = revision || 0;
     SERVER.at = savedAt ? new Date(savedAt) : null;
@@ -1053,8 +1253,10 @@ function loadPersisted() {
     DB.participants = db.participants || [];
     DB.appointments = db.appointments || [];
     DB.partnerLinks = db.partnerLinks || [];
+    DB.socialContent = db.socialContent || [];
     DB.creators.forEach((c) => (byCreator[c.id] = c));
     DB.campaigns.forEach((c) => (byCampaign[c.id] = c));
+    linkSocialContent();
     if (saved.settings && typeof saved.settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = saved.settings.hideBlocked;
     persistState.at = saved.savedAt ? new Date(saved.savedAt) : null;
     persistState.bytes = raw.length;
@@ -2437,6 +2639,8 @@ function confirmDeleteCampaign(cp) {
 
 /* removes the campaign and its roster rows. Creators are deliberately left alone. */
 function deleteCampaign(id) {
+  const goneRows = new Set(DB.participants.filter((p) => p.campaignId === id).map((p) => p.id));
+  DB.socialContent = DB.socialContent.filter((c) => !goneRows.has(c.participantId));
   DB.participants = DB.participants.filter((p) => p.campaignId !== id);
   DB.campaigns = DB.campaigns.filter((c) => c.id !== id);
   delete byCampaign[id];
@@ -2695,18 +2899,6 @@ function stripPayout(db) {
 
 /* one place that writes a content URL, whether it came from Notion, a
    spreadsheet, or someone typing it into the drawer */
-function setContentUrl(p, cr, url) {
-  if (!p.content) {
-    p.content = { url: '', platform: cr.platform || 'Instagram', format: 'Reel',
-      postedAt: iso(TODAY), submittedAt: iso(TODAY),
-      views: 0, paidViews: 0, organicViews: 0, likes: 0, comments: 0, shares: 0, saves: 0,
-      reach: 0, profileVisits: 0, followsGained: 0, linkClicks: 0,
-      curve: [], boosted: false, viral: false, topCountries: [], thumbTint: avColor(cr.handle) };
-  }
-  p.content.url = url;
-  return p.content;
-}
-
 function showParticipant(pid) {
   const p = DB.participants.find((x) => x.id === pid);
   if (!p) return;
@@ -2891,7 +3083,7 @@ function showParticipant(pid) {
 
     const url = $('#pdContentUrl').value.trim();
     if (url) setContentUrl(p, cr, url);
-    else if (p.content && !p.content.views) p.content = null;
+    else if (p.content && !p.content.views) detachContent(p);
 
     if ($('#pdStage').value !== p.stage) moveStage(p, $('#pdStage').value);
     closeDrawer(); render(); toast('Saved');
@@ -3111,6 +3303,271 @@ const ANALYTICS_TABS = {
   breakdown: [['platform', 'Platform'], ['tier', 'Creator tier'], ['organic', 'Organic vs paid'], ['format', 'Format']],
   viral:     [['leaderboard', 'Leaderboard'], ['all', 'All viral posts']]
 };
+
+/* ============================================================
+   SOCIAL MEDIA — content library
+
+   Every published post in one searchable place. The library reads
+   DB.socialContent, which is the single home for a post; the roster
+   row points at the same object, so nothing here is a second copy of
+   numbers kept somewhere else.
+   ============================================================ */
+const SOCIAL_ITEMS = [
+  { id: 'library', label: 'Content', sub: 'every video, searchable' }
+];
+const SOCIAL_TABS = [
+  ['all', 'All'], ['matched', 'In a campaign'], ['review', 'Needs review'], ['unassigned', 'Unassigned']
+];
+
+const socialState = {
+  q: '', campaign: '', creator: '', platform: '', country: '', tier: '',
+  from: '', to: '', minViews: '', minRate: '', hashtag: '', sort: 'views'
+};
+
+/* One row of the library: the post, plus the creator and campaign it
+   belongs to and the figures derived from them. Derived once here so the
+   table, the sort and the CSV all agree. */
+function socialRows() {
+  return DB.socialContent.map((c) => {
+    const cr = byCreator[c.creatorId] || {};
+    const cp = byCampaign[c.campaignId] || null;
+    return {
+      c, cr, cp,
+      handle: cr.handle || c.username || '—',
+      campaignName: cp ? (cp.brand || cp.name || '') : '',
+      country: cr.country || '',
+      tier: cr.followers ? tierOf(cr.followers).id : '',
+      published: c.publishedAt || c.postedAt || '',
+      eng: socialEngagements(c),
+      rate: socialEngagementRate(c),
+      ratio: socialViewRatio(c, cr)
+    };
+  });
+}
+
+function socialFiltered(tab) {
+  const q = socialState.q.trim().toLowerCase();
+  const tags = (socialState.hashtag || '').trim().toLowerCase().replace(/^#/, '');
+  return socialRows().filter((r) => {
+    const st = r.c.matchStatus || 'unassigned';
+    if (tab === 'matched'    && !(st === 'confirmed' || st === 'auto_matched')) return false;
+    if (tab === 'review'     && st !== 'suggested') return false;
+    if (tab === 'unassigned' && !(st === 'unassigned' || st === 'excluded')) return false;
+
+    if (socialState.campaign && r.c.campaignId !== socialState.campaign) return false;
+    if (socialState.creator  && r.c.creatorId !== socialState.creator) return false;
+    if (socialState.platform && r.c.platform !== socialState.platform) return false;
+    if (socialState.country  && r.country !== socialState.country) return false;
+    if (socialState.tier     && r.tier !== socialState.tier) return false;
+    if (socialState.from && (!r.published || r.published < socialState.from)) return false;
+    if (socialState.to   && (!r.published || r.published > socialState.to)) return false;
+    if (socialState.minViews !== '' && (r.c.views || 0) < +socialState.minViews) return false;
+    /* a post with no views has no rate; a minimum rate has to exclude it
+       rather than treat "unknown" as zero */
+    if (socialState.minRate !== '' && (r.rate == null || r.rate < +socialState.minRate)) return false;
+
+    if (tags === '__none') { if ((r.c.hashtags || []).length) return false; }
+    else if (tags === '__any') { if (!(r.c.hashtags || []).length) return false; }
+    else if (tags && !(r.c.hashtags || []).some((h) => h.includes(tags))) return false;
+
+    if (q) {
+      const hay = [r.handle, r.campaignName, r.c.caption, (r.c.hashtags || []).join(' '),
+                   r.c.username, r.c.url].join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+const SOCIAL_SORTS = {
+  views:     (a, b) => (b.c.views || 0) - (a.c.views || 0),
+  eng:       (a, b) => b.eng - a.eng,
+  rate:      (a, b) => (b.rate == null ? -1 : b.rate) - (a.rate == null ? -1 : a.rate),
+  published: (a, b) => String(b.published).localeCompare(String(a.published)),
+  creator:   (a, b) => a.handle.localeCompare(b.handle)
+};
+
+function socialStatusPill(st) {
+  const m = SOCIAL_MATCH_STATUS[st] || SOCIAL_MATCH_STATUS.unassigned;
+  return `<span class="pill ${m.tone}" title="${esc(m.sub)}">${esc(m.label)}</span>`;
+}
+
+function renderSocial(view, item, tab) {
+  const rows = socialFiltered(tab || 'all').sort(SOCIAL_SORTS[socialState.sort] || SOCIAL_SORTS.views);
+  const countries = [...new Set(DB.creators.map((c) => c.country).filter(Boolean))].sort();
+  const platforms = [...new Set(DB.socialContent.map((c) => c.platform).filter(Boolean))].sort();
+  const opts = (list, cur, label) =>
+    `<option value="">${label}</option>` + list.map(([v, l]) =>
+      `<option value="${esc(v)}" ${cur === v ? 'selected' : ''}>${esc(l)}</option>`).join('');
+
+  const totalViews = rows.reduce((n, r) => n + (r.c.views || 0), 0);
+  const totalEng = rows.reduce((n, r) => n + r.eng, 0);
+  const measured = rows.filter((r) => r.rate != null);
+  const avgRate = measured.length ? measured.reduce((n, r) => n + r.rate, 0) / measured.length : null;
+
+  view.innerHTML = `
+    <div class="grid g4" style="margin-bottom:14px">
+      ${statCard('Videos', num(rows.length), { foot: `${DB.socialContent.length} in the library` })}
+      ${statCard('Views', kmb(totalViews), { foot: rows.length ? `${kmb(Math.round(totalViews / rows.length))} average` : '—' })}
+      ${statCard('Engagements', kmb(totalEng), { foot: 'likes · comments · shares · saves' })}
+      ${statCard('Engagement rate', avgRate == null ? '—' : avgRate.toFixed(2) + '%',
+        { foot: `${measured.length} of ${rows.length} have view counts` })}
+    </div>
+
+    <div class="card" style="margin-bottom:14px">
+      <div class="grid g4" style="gap:10px">
+        <div class="field" style="grid-column:1/-1"><label>Search</label>
+          <input type="search" id="soQ" placeholder="creator, campaign, caption or #hashtag" value="${esc(socialState.q)}"/></div>
+        <div class="field"><label>Campaign</label><select id="soCampaign">${
+          opts(DB.campaigns.map((c) => [c.id, c.brand || c.name]), socialState.campaign, 'Any campaign')}</select></div>
+        <div class="field"><label>Creator</label><select id="soCreator">${
+          opts(DB.creators.filter((c) => DB.socialContent.some((x) => x.creatorId === c.id))
+            .map((c) => [c.id, c.handle]), socialState.creator, 'Any creator')}</select></div>
+        <div class="field"><label>Platform</label><select id="soPlatform">${
+          opts(platforms.map((x) => [x, x]), socialState.platform, 'Any platform')}</select></div>
+        <div class="field"><label>Country</label><select id="soCountry">${
+          opts(countries.map((x) => [x, x]), socialState.country, 'Any country')}</select></div>
+        <div class="field"><label>Follower tier</label><select id="soTier">${
+          opts([['nano', 'Nano'], ['micro', 'Micro'], ['mid', 'Mid'], ['macro', 'Macro']], socialState.tier, 'Any tier')}</select></div>
+        <div class="field"><label>Published from</label><input type="date" id="soFrom" value="${esc(socialState.from)}"/></div>
+        <div class="field"><label>…until</label><input type="date" id="soTo" value="${esc(socialState.to)}"/></div>
+        <div class="field"><label>Min views</label><input type="number" id="soViews" min="0" step="100" value="${esc(socialState.minViews)}"/></div>
+        <div class="field"><label>Min engagement %</label><input type="number" id="soRate" min="0" step="0.1" value="${esc(socialState.minRate)}"/></div>
+        <div class="field"><label>Hashtag</label>
+          <input type="text" id="soTag" list="soTagList" placeholder="#vively · __any · __none" value="${esc(socialState.hashtag)}"/>
+          <datalist id="soTagList">${[...new Set(DB.socialContent.flatMap((c) => c.hashtags || []))]
+            .sort().map((h) => `<option value="${esc(h)}"></option>`).join('')}</datalist></div>
+        <div class="field"><label>Sort by</label><select id="soSort">${
+          [['views', 'Views'], ['eng', 'Engagements'], ['rate', 'Engagement rate'],
+           ['published', 'Newest'], ['creator', 'Creator']]
+            .map(([v, l]) => `<option value="${v}" ${socialState.sort === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button class="btn sm" id="soClear">Clear filters</button>
+        <button class="btn sm" id="soCsv">Export these (CSV)</button>
+      </div>
+    </div>
+
+    ${rows.length ? `<div class="card" style="padding:0"><div class="tbl-wrap" style="max-height:calc(100vh - 430px);overflow-y:auto">
+      <table class="tbl"><thead><tr>
+        <th>Creator</th><th>Campaign</th><th>Platform</th><th>Published</th>
+        <th class="num">Views</th><th class="num">Likes</th><th class="num">Comments</th>
+        <th class="num">Shares</th><th class="num">Saves</th>
+        <th class="num">Eng. rate</th><th class="num">Views/follower</th><th>Match</th>
+      </tr></thead><tbody>
+      ${rows.map((r) => `<tr class="row-link" data-sc="${esc(r.c.id)}" style="cursor:pointer">
+        <td><div style="display:flex;align-items:center;gap:8px">
+          <span style="width:26px;height:26px;border-radius:6px;flex:0 0 auto;background:${esc(r.c.thumbTint || avColor(r.handle))}"></span>
+          <span>${esc(r.handle)}${r.cr.country ? ` <span style="color:var(--text-3)">${esc(r.cr.country)}</span>` : ''}</span>
+        </div></td>
+        <td>${r.campaignName ? esc(r.campaignName) : '<span style="color:var(--text-3)">—</span>'}</td>
+        <td>${esc(r.c.platform)}</td>
+        <td>${esc(r.published || '—')}</td>
+        <td class="num">${r.c.views ? num(r.c.views) : '<span style="color:var(--text-3)">—</span>'}</td>
+        <td class="num">${num(r.c.likes || 0)}</td>
+        <td class="num">${num(r.c.comments || 0)}</td>
+        <td class="num">${num(r.c.shares || 0)}</td>
+        <td class="num">${num(r.c.saves || 0)}</td>
+        <td class="num">${r.rate == null ? '<span style="color:var(--text-3)">—</span>' : r.rate.toFixed(2) + '%'}</td>
+        <td class="num">${r.ratio == null ? '<span style="color:var(--text-3)">—</span>' : r.ratio.toFixed(2) + '×'}</td>
+        <td>${socialStatusPill(r.c.matchStatus)}</td>
+      </tr>`).join('')}
+      </tbody></table></div></div>`
+    : emptyState('Nothing matches those filters',
+        DB.socialContent.length
+          ? 'Loosen a filter, or clear them all. Every video is still in the library.'
+          : 'Add a content link on a creator in any campaign roster and it will appear here.',
+        { icon: '▶' })}
+  `;
+
+  const bind = (id, key, ev) => { const el = $('#' + id); if (el) el.addEventListener(ev || 'change', () => {
+    socialState[key] = el.value; render();
+  }); };
+  bind('soQ', 'q', 'input');
+  bind('soCampaign', 'campaign'); bind('soCreator', 'creator'); bind('soPlatform', 'platform');
+  bind('soCountry', 'country'); bind('soTier', 'tier'); bind('soFrom', 'from'); bind('soTo', 'to');
+  bind('soViews', 'minViews', 'input'); bind('soRate', 'minRate', 'input');
+  bind('soTag', 'hashtag', 'input'); bind('soSort', 'sort');
+
+  $('#soClear').addEventListener('click', () => {
+    Object.assign(socialState, { q: '', campaign: '', creator: '', platform: '', country: '',
+      tier: '', from: '', to: '', minViews: '', minRate: '', hashtag: '' });
+    render();
+  });
+  $('#soCsv').addEventListener('click', () => {
+    downloadFile('vively-content.csv', toCsv(
+      ['Creator', 'Country', 'Followers', 'Campaign', 'Platform', 'Published', 'URL',
+       'Views', 'Likes', 'Comments', 'Shares', 'Saves', 'Engagements', 'Engagement rate %',
+       'Views per follower', 'Match status', 'Match method', 'Confidence'],
+      rows.map((r) => [r.handle, r.country, r.cr.followers || '', r.campaignName, r.c.platform,
+        r.published, r.c.url || '', r.c.views || 0, r.c.likes || 0, r.c.comments || 0,
+        r.c.shares || 0, r.c.saves || 0, r.eng,
+        r.rate == null ? '' : r.rate.toFixed(2), r.ratio == null ? '' : r.ratio.toFixed(2),
+        (SOCIAL_MATCH_STATUS[r.c.matchStatus] || {}).label || '', r.c.matchMethod || '',
+        r.c.matchConfidence || ''])), 'text/csv');
+  });
+  $$('#view tr[data-sc]').forEach((tr) =>
+    tr.addEventListener('click', () => showSocialContent(tr.dataset.sc)));
+}
+
+/* ---- one video, in full ------------------------------------------- */
+function showSocialContent(id) {
+  const c = DB.socialContent.find((x) => x.id === id);
+  if (!c) return;
+  const cr = byCreator[c.creatorId] || {};
+  const cp = byCampaign[c.campaignId] || null;
+  const rate = socialEngagementRate(c);
+  const ratio = socialViewRatio(c, cr);
+  const snaps = (c.curve || []).filter((x) => x && x.at);
+
+  openDrawer(`${avatarHtml(cr.handle || c.username || '?')} <span style="margin-left:8px">${esc(cr.handle || c.username || 'Content')}</span>`, `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
+      ${socialStatusPill(c.matchStatus)}
+      <span class="pill grey">${esc(c.platform)}</span>
+      <span class="pill grey">${esc(c.format || 'Reel')}</span>
+      ${cr.followers ? tierPill(tierOf(cr.followers).id) : ''}
+      ${c.boosted ? '<span class="pill yellow">Boosted</span>' : ''}
+    </div>
+
+    <div class="grid g4" style="margin-bottom:16px">
+      ${statCard('Views', c.views ? num(c.views) : '—', { foot: c.paidViews ? `${num(c.organicViews || 0)} organic / ${num(c.paidViews)} paid` : '' })}
+      ${statCard('Engagements', num(socialEngagements(c)), { foot: `${num(c.likes || 0)} · ${num(c.comments || 0)} · ${num(c.shares || 0)} · ${num(c.saves || 0)}` })}
+      ${statCard('Engagement rate', rate == null ? '—' : rate.toFixed(2) + '%', { foot: rate == null ? 'no view count yet' : 'of views' })}
+      ${statCard('Views per follower', ratio == null ? '—' : ratio.toFixed(2) + '×', { foot: cr.followers ? `${kmb(cr.followers)} followers` : 'no follower count' })}
+    </div>
+
+    <dl class="kv" style="margin-bottom:18px">
+      <dt>Campaign</dt><dd>${cp ? `<a href="#/campaigns/${esc(cp.id)}/roster">${esc(cp.brand)} — ${esc(cp.name)}</a>` : '<span style="color:var(--text-3)">not assigned to a campaign</span>'}</dd>
+      <dt>Creator</dt><dd>${esc(cr.handle || c.username || '—')}${cr.country ? ' · ' + esc(cr.country) : ''}</dd>
+      <dt>Published</dt><dd>${esc(c.publishedAt || c.postedAt || '—')}</dd>
+      <dt>Post</dt><dd>${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(String(c.url).slice(0, 54))}…</a>` : '—'}</dd>
+      ${c.platformPostId ? `<dt>Post id</dt><dd><code>${esc(c.platformPostId)}</code></dd>` : ''}
+      ${c.caption ? `<dt>Caption</dt><dd style="white-space:pre-wrap">${esc(c.caption)}</dd>` : ''}
+      ${(c.hashtags || []).length ? `<dt>Hashtags</dt><dd>${c.hashtags.map((h) => `<span class="tag">${esc(h)}</span>`).join(' ')}</dd>` : ''}
+      ${(c.mentions || []).length ? `<dt>Mentions</dt><dd>${c.mentions.map((h) => `<span class="tag">${esc(h)}</span>`).join(' ')}</dd>` : ''}
+      <dt>Reach</dt><dd>${num(c.reach || 0)} · ${num(c.profileVisits || 0)} profile visits · ${num(c.followsGained || 0)} follows · ${num(c.linkClicks || 0)} link clicks</dd>
+      <dt>How it got its campaign</dt><dd>${c.matchMethod ? `${esc(c.matchMethod)} · confidence ${num(c.matchConfidence || 0)}` : '—'}</dd>
+      <dt>Where the numbers came from</dt><dd>${esc(c.dataSource || 'manual')}${c.metricsAt ? ` · as of ${esc(String(c.metricsAt).slice(0, 10))}` : ''}</dd>
+    </dl>
+
+    <div class="divider"></div>
+    <div class="lbl">Daily performance</div>
+    ${snaps.length > 1
+      ? '<div id="scCurve" style="height:180px"></div>'
+      : `<div class="note" style="margin-top:8px">
+           ${snaps.length === 1 ? 'One reading so far.' : 'No readings yet.'}
+           Growth is drawn from daily snapshots, which are only recorded from the day
+           capture is switched on — history before that cannot be reconstructed.
+         </div>`}
+  `, true);
+
+  if (snaps.length > 1) {
+    lineChart($('#scCurve'), {
+      labels: snaps.map((x) => String(x.at).slice(5, 10)),
+      series: [{ name: 'Views', values: snaps.map((x) => x.views || 0), color: SERIES_HEX[0], area: true }]
+    });
+  }
+}
 
 function renderAnalytics(view, item, tab) {
   const all = DB.campaigns;
@@ -4998,14 +5455,7 @@ async function openNotionMappingDrawer(cp) {
 function applyNotionContent(p, ap, cr) {
   const hasMetrics = Object.keys(ap.metrics || {}).length > 0;
   if (!ap.contentUrl && !hasMetrics) return 0;
-  if (!p.content) {
-    p.content = {
-      url: '', platform: ap.platform, format: 'Reel', postedAt: iso(TODAY), submittedAt: iso(TODAY),
-      views: 0, paidViews: 0, organicViews: 0, likes: 0, comments: 0, shares: 0, saves: 0,
-      reach: 0, profileVisits: 0, followsGained: 0, linkClicks: 0,
-      curve: [], boosted: false, viral: false, topCountries: [], thumbTint: avColor(cr.handle)
-    };
-  }
+  attachContent(p, cr, { platform: ap.platform, dataSource: 'notion' });
   let touched = 0;
   if (ap.contentUrl && p.content.url !== ap.contentUrl) { p.content.url = ap.contentUrl; touched++; }
   NOTION_METRIC_KEYS.forEach((k) => {
@@ -5840,14 +6290,7 @@ function commitNotionImport() {
       visitAt: r.visitAt || '', arrivingDate: '', importedStatus: r.statusRaw,
       notionPageId: r.notionPageId, content: null
     };
-    if (r.contentUrl) {
-      p.content = {
-        url: r.contentUrl, platform: r.platform, format: 'Reel', postedAt: iso(TODAY), submittedAt: iso(TODAY),
-        views: 0, paidViews: 0, organicViews: 0, likes: 0, comments: 0, shares: 0, saves: 0,
-        reach: 0, profileVisits: 0, followsGained: 0, linkClicks: 0,
-        curve: [], boosted: false, viral: false, topCountries: [], thumbTint: avColor(cr.handle)
-      };
-    }
+    if (r.contentUrl) attachContent(p, cr, { url: r.contentUrl, platform: r.platform, dataSource: 'import' });
     DB.participants.push(p);
   });
 
@@ -6132,15 +6575,9 @@ function commitImport() {
       otherSns: r.otherSns, importedStatus: r.statusRaw,
       content: null
     };
-    if (r.contentUrl) {
-      p.content = {
-        url: r.contentUrl, platform: r.platform, format: 'Reel',
-        postedAt: r.arrivingDate ? iso(r.arrivingDate) : iso(TODAY), submittedAt: iso(TODAY),
-        views: 0, paidViews: 0, organicViews: 0, likes: 0, comments: 0, shares: 0, saves: 0,
-        reach: 0, profileVisits: 0, followsGained: 0, linkClicks: 0,
-        curve: [], boosted: false, viral: false, topCountries: [], thumbTint: avColor(cr.handle)
-      };
-    }
+    if (r.contentUrl) attachContent(p, cr, { url: r.contentUrl, platform: r.platform, dataSource: 'import',
+      publishedAt: r.arrivingDate ? iso(r.arrivingDate) : iso(TODAY),
+      postedAt: r.arrivingDate ? iso(r.arrivingDate) : iso(TODAY) });
     DB.participants.push(p);
   });
 
@@ -7691,8 +8128,12 @@ async function restoreBackup(e) {
     DB.creators = db.creators; DB.campaigns = db.campaigns; DB.participants = db.participants || [];
     DB.appointments = db.appointments || [];
     DB.partnerLinks = db.partnerLinks || [];
+    DB.socialContent = db.socialContent || [];
     DB.creators.forEach((c) => (byCreator[c.id] = c));
     DB.campaigns.forEach((c) => (byCampaign[c.id] = c));
+    /* a backup taken before the split still has content on the rows;
+       linking adopts it rather than losing every video in the file */
+    linkSocialContent();
     if (saved.settings && typeof saved.settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = saved.settings.hideBlocked;
     persist(true);
     toast(`Restored ${DB.campaigns.length} campaigns and ${DB.creators.length} creators`);
@@ -8843,17 +9284,20 @@ const SECTIONS = [
   { id: 'creators',  icon: '◎', label: 'Creators', badge: () => DB.creators.length },
   { id: 'contracts', icon: '§', label: 'Contracts' },
   { id: 'analytics', icon: '◫', label: 'Analytics' },
+  { id: 'social',    icon: '▶', label: 'Social', badge: () => DB.socialContent.filter((c) => c.url).length },
   { id: 'settings',  icon: '⚙', label: 'Setup' }
 ];
 
 function defaultItem(section) {
   return { overview: 'summary', campaigns: 'all', creators: 'all', analytics: 'trend', contracts: 'msa',
-           settings: 'templates', messages: (activeCampaigns()[0] || DB.campaigns[0] || {}).id }[section] || '';
+           social: 'library', settings: 'templates',
+           messages: (activeCampaigns()[0] || DB.campaigns[0] || {}).id }[section] || '';
 }
 
 function tabsFor(section, item) {
   if (section === 'overview')  return OVERVIEW_TABS[item] || OVERVIEW_TABS.summary;
   if (section === 'analytics') return ANALYTICS_TABS[item] || ANALYTICS_TABS.trend;
+  if (section === 'social')    return SOCIAL_TABS;
   if (section === 'creators')  return CREATOR_TABS;
   if (section === 'contracts') return CONTRACT_TABS;
   if (section === 'messages')  return MSG_KINDS.map(([k, l]) => [k, l]);
@@ -8872,6 +9316,9 @@ function panelFor(section, item) {
 
   if (section === 'analytics')
     return { title: 'Analytics', groups: [{ items: ANALYTICS_ITEMS.map((o) => ({ id: o.id, title: o.label, sub: o.sub })) }] };
+
+  if (section === 'social')
+    return { title: 'Social media', groups: [{ items: SOCIAL_ITEMS.map((o) => ({ id: o.id, title: o.label, sub: o.sub })) }] };
 
   if (section === 'settings')
     return { title: 'Setup', groups: [{ items: SETTINGS_ITEMS.map((o) => ({ id: o.id, title: o.label, sub: o.sub })) }] };
@@ -8911,6 +9358,7 @@ function titleFor(section, item) {
   if (section === 'messages')  return (byCampaign[item] || {}).brand || 'Messages';
   if (section === 'creators')  return segmentOf(item).label;
   if (section === 'analytics') return (ANALYTICS_ITEMS.find((x) => x.id === item) || {}).label || 'Analytics';
+  if (section === 'social')    return (SOCIAL_ITEMS.find((x) => x.id === item) || {}).label || 'Social media';
   if (section === 'contracts') return (CONTRACT_DOCS[item] || CONTRACT_DOCS.msa).label;
   if (section === 'settings')  return (SETTINGS_ITEMS.find((x) => x.id === item) || {}).label || 'Setup';
   return (OVERVIEW_ITEMS.find((x) => x.id === item) || {}).label || 'Overview';
@@ -9022,6 +9470,7 @@ function render() {
   if (section === 'campaigns')      renderCampaignSection(view, item, tab);
   else if (section === 'creators')  renderCreators(view, item, tab);
   else if (section === 'analytics') renderAnalytics(view, item, tab);
+  else if (section === 'social')    renderSocial(view, item, tab);
   else if (section === 'messages')  renderMessagesSection(view, item, tab);
   else if (section === 'contracts') renderContracts(view, item, tab);
   else if (section === 'settings')  renderSettings(view, item);

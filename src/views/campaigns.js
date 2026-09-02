@@ -4,12 +4,12 @@ import { joinSlot, notionLinkedCampaigns, openNotionMappingDrawer, splitSlot, sy
 import { DAY, TODAY, addDays, dLabel, iso } from '../lib/dates.js';
 import { engagementsOf, kmb, money2, num, pct, won, wonK } from '../lib/format.js';
 import { recomputeCreatorStats } from '../model/creators.js';
-import { DB, SERVER, byCampaign, byCreator, notify, persist, serverSave } from '../model/db.js';
+import { DB, SERVER, byCampaign, byCreator, detachContent, notify, persist, serverSave, setContentUrl } from '../model/db.js';
 import { duplicateIdBanner, wireDuplicateIdBanner } from '../model/duplicates.js';
 import { SETTINGS, isBlocked, selectable } from '../model/settings.js';
 import { campaignStats, dailySeries, liveOf, partsOf, viralScore } from '../model/stats.js';
 import { suggestScore } from '../model/suggest.js';
-import { CAMPAIGN_STATUS, CATEGORIES, COUNTRIES, STAGES, STAGE_IDX, avColor, newId, stageOf, viewCurve } from '../model/vocab.js';
+import { CAMPAIGN_STATUS, CATEGORIES, COUNTRIES, STAGES, STAGE_IDX, newId, stageOf, viewCurve } from '../model/vocab.js';
 import { GCAL_PREFS } from '../sync/gcal.js';
 import { syncStageToNotion } from '../sync/notionWriteback.js';
 import { $, $$, esc } from '../ui/dom.js';
@@ -312,6 +312,8 @@ export function confirmDeleteCampaign(cp) {
 
 /* removes the campaign and its roster rows. Creators are deliberately left alone. */
 export function deleteCampaign(id) {
+  const goneRows = new Set(DB.participants.filter((p) => p.campaignId === id).map((p) => p.id));
+  DB.socialContent = DB.socialContent.filter((c) => !goneRows.has(c.participantId));
   DB.participants = DB.participants.filter((p) => p.campaignId !== id);
   DB.campaigns = DB.campaigns.filter((c) => c.id !== id);
   delete byCampaign[id];
@@ -570,18 +572,6 @@ export function stripPayout(db) {
 
 /* one place that writes a content URL, whether it came from Notion, a
    spreadsheet, or someone typing it into the drawer */
-export function setContentUrl(p, cr, url) {
-  if (!p.content) {
-    p.content = { url: '', platform: cr.platform || 'Instagram', format: 'Reel',
-      postedAt: iso(TODAY), submittedAt: iso(TODAY),
-      views: 0, paidViews: 0, organicViews: 0, likes: 0, comments: 0, shares: 0, saves: 0,
-      reach: 0, profileVisits: 0, followsGained: 0, linkClicks: 0,
-      curve: [], boosted: false, viral: false, topCountries: [], thumbTint: avColor(cr.handle) };
-  }
-  p.content.url = url;
-  return p.content;
-}
-
 export function showParticipant(pid) {
   const p = DB.participants.find((x) => x.id === pid);
   if (!p) return;
@@ -766,7 +756,7 @@ export function showParticipant(pid) {
 
     const url = $('#pdContentUrl').value.trim();
     if (url) setContentUrl(p, cr, url);
-    else if (p.content && !p.content.views) p.content = null;
+    else if (p.content && !p.content.views) detachContent(p);
 
     if ($('#pdStage').value !== p.stage) moveStage(p, $('#pdStage').value);
     closeDrawer(); notify(); toast('Saved');
