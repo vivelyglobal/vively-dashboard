@@ -1,3 +1,4 @@
+import { visitSlotOf } from '../import/notion.js';
 import { kmb } from '../lib/format.js';
 import { DB, byCampaign, byCreator, notify, serverSave } from '../model/db.js';
 import { $ } from '../ui/dom.js';
@@ -128,13 +129,16 @@ export function calendarItems() {
   const items = [], skipped = [];
 
   DB.participants.forEach((p) => {
-    if (!p.visitAt) return;
+    /* the confirmed slot when there is one, otherwise what they asked for —
+       so a booking moved by hand moves the Google event with it */
+    const slot = visitSlotOf(p);
+    if (!slot) return;
     const cr = byCreator[p.creatorId], cp = byCampaign[p.campaignId];
     if (!cr || !cp) return;
     if (p.stage === 'dropped') return;               /* dropped out, no booking */
     const tz = campaignTimeZone(cp);
-    const range = slotToRange(p.visitAt, tz, GCAL_PREFS.visitMinutes);
-    if (!range) { skipped.push({ kind: 'visit', why: 'unreadable', label: `${cr.handle} · ${cp.brand}`, raw: p.visitAt }); return; }
+    const range = slotToRange(slot, tz, GCAL_PREFS.visitMinutes);
+    if (!range) { skipped.push({ kind: 'visit', why: 'unreadable', label: `${cr.handle} · ${cp.brand}`, raw: slot }); return; }
     items.push({
       kind: 'visit', key: p.id, record: p,
       title: `${cr.handle} — ${cp.brand}`,
@@ -143,7 +147,7 @@ export function calendarItems() {
                     p.note && ('Note: ' + p.note)].filter(Boolean).join('\n'),
       location: cp.venue || cp.market || '',
       start: range.start, end: range.end, timeZone: tz,
-      campaignId: cp.id, participantId: p.id, wall: p.visitAt
+      campaignId: cp.id, participantId: p.id, wall: slot
     });
   });
 

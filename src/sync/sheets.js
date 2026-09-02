@@ -1,6 +1,5 @@
-import { TODAY, iso } from '../lib/dates.js';
+import { DB, byCampaign, byCreator, notify, persist } from '../model/db.js';
 import { avColor } from '../model/vocab.js';
-import { DB, byCreator, byCampaign, persist, notify } from '../model/db.js';
 import { $, esc } from '../ui/dom.js';
 import { toast } from '../ui/overlay.js';
 
@@ -57,7 +56,8 @@ export const SHEET_SCHEMA = {
     ['id','s'],['campaignId','s'],['creatorId','s'],['stage','s'],['source','s'],['fee','n'],
     ['contactedAt','s'],['repliedAt','s'],['confirmedAt','s'],['shippedAt','s'],['dropReason','s'],
     ['revisions','n'],['note','s'],['fullName','s'],['address','s'],['contact','s'],['nationality','s'],
-    ['visitAt','s'],['arrivingDate','s'],['otherSns','s'],['importedStatus','s'],['notionPageId','s'],
+    ['visitAt','s'],['confirmedVisitAt','s'],['pinnedCampaign','s'],
+    ['arrivingDate','s'],['otherSns','s'],['importedStatus','s'],['notionPageId','s'],
     ['content.url','s'],['content.platform','s'],['content.format','s'],['content.postedAt','s'],
     ['content.submittedAt','s'],['content.views','n'],['content.paidViews','n'],['content.organicViews','n'],
     ['content.likes','n'],['content.comments','n'],['content.shares','n'],['content.saves','n'],

@@ -126,6 +126,46 @@ export function parseVisitSlot(v) {
   return isNaN(d) ? null : d;
 }
 
+/* The slot a visit actually happens at.
+
+   What a creator puts on the form is a REQUEST — Notion calls the column
+   "Date & Time Availability" — and a mapped column is authoritative, so
+   every sync rewrites it. A slot confirmed by hand therefore cannot live in
+   the same field: the next person to press Sync would erase it without
+   anyone noticing. It gets its own field that the sync never touches, and
+   everything downstream of a booking — the calendar, Google, the partner
+   page, the confirmation message — reads through here, so the confirmed
+   time is what the outside world sees. The request is still on the row,
+   shown beside it when the two disagree. */
+export function visitSlotOf(p) {
+  return (p && (p.confirmedVisitAt || p.visitAt)) || '';
+}
+
+/* True when someone moved the booking off what the creator asked for. */
+export function visitSlotMoved(p) {
+  return !!(p && p.confirmedVisitAt && p.visitAt && p.confirmedVisitAt !== p.visitAt);
+}
+
+/* A stored slot split for the two <input>s that edit it. A date with no
+   time is legitimate — plenty of bookings are "that Tuesday" — so an
+   empty time is carried through rather than defaulted to midnight, which
+   would put a real 00:00 appointment on the calendar nobody asked for. */
+export function splitSlot(v) {
+  const m = String(v || '').trim().match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{1,2}:\d{2}))?/);
+  if (!m) return { date: '', time: '' };
+  const t = m[2] ? m[2].padStart(5, '0') : '';
+  return { date: m[1], time: t };
+}
+
+/* …and back again. Time without a date is not a slot, so it is dropped
+   rather than stored as something parseVisitSlot would refuse to read. */
+export function joinSlot(date, time) {
+  const d = String(date || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return '';
+  const t = String(time || '').trim();
+  return /^\d{1,2}:\d{2}$/.test(t) ? `${d} ${t.padStart(5, '0')}` : d;
+}
+
 /* Metrics come back as a Notion number, or as text a human typed ("12.3K",
    "1.2만", "4,530"). Returns null when the cell is empty so an untouched
    column never overwrites a figure already recorded. NOT parseFollowers —
@@ -371,7 +411,7 @@ export async function runNotionSync(cp, opts) {
     return { campaign: cp, error: err.message };
   }
 
-  let newRows = 0, updated = 0, newCreators = 0, matched = 0, skipped = 0, moved = 0, reslotted = 0, adopted = 0, metricsUpdated = 0, rehomed = 0;
+  let newRows = 0, updated = 0, newCreators = 0, matched = 0, skipped = 0, moved = 0, reslotted = 0, adopted = 0, metricsUpdated = 0, rehomed = 0, heldBack = 0;
   data.rows.forEach((row) => {
     const ap = notionRowToApplicant(row.properties, cp.notionMapping);
     if (!ap.handle) { skipped++; return; }
@@ -417,7 +457,7 @@ export async function runNotionSync(cp, opts) {
        belongs to this campaign whatever it currently says. Two campaigns
        that shared an id pooled their rosters under one campaignId; syncing
        either one now pulls its own rows back where they belong. */
-    if (p && p.campaignId !== cp.id) {
+    if (p && p.campaignId !== cp.id && !p.pinnedCampaign) {
       /* Only the campaign changes. The row's own id stays exactly as it is,
          because other things are keyed on it: a Google Calendar event's id is
          derived from it, and a partner's comments are filed against it.
@@ -426,6 +466,11 @@ export async function runNotionSync(cp, opts) {
          id — nothing reads it that way. */
       p.campaignId = cp.id;
       rehomed++;
+    } else if (p && p.campaignId !== cp.id) {
+      /* Pinned by hand. Left where it is on purpose, but counted and
+         reported — a row quietly missing from the campaign whose form it
+         came from is exactly the kind of drift nobody finds for a month. */
+      heldBack++;
     }
     if (!p) {
       const orphan = DB.participants.find((x) =>
@@ -502,7 +547,7 @@ export async function runNotionSync(cp, opts) {
     else if (!data.rows.some((r) => r.properties[mappedTo])) visitWarning = `“${mappedTo}” is empty for every row`;
   }
 
-  const stats = { campaign: cp, rows: data.rows.length, newRows, updated, moved, reslotted, skipped, newCreators, adopted, metricsUpdated, rehomed, visitWarning };
+  const stats = { campaign: cp, rows: data.rows.length, newRows, updated, moved, reslotted, skipped, newCreators, adopted, metricsUpdated, rehomed, heldBack, visitWarning };
   if (batch) return stats;
 
   notify();
@@ -510,6 +555,7 @@ export async function runNotionSync(cp, opts) {
   const summary = `Synced ${data.rows.length} Notion submission${data.rows.length === 1 ? '' : 's'} — ${newRows} new, ${updated + adopted} updated` +
     (adopted ? ` (${adopted} existing roster row${adopted === 1 ? '' : 's'} linked up)` : '') +
     (rehomed ? `, ${rehomed} moved back to this campaign` : '') +
+    (heldBack ? `, ${heldBack} left where you pinned ${heldBack === 1 ? 'it' : 'them'}` : '') +
     (moved ? `, ${moved} moved stage` : '') +
     (reslotted ? `, ${reslotted} visit date${reslotted === 1 ? '' : 's'}` : '') +
     (metricsUpdated ? `, ${metricsUpdated} content/metrics` : '') +

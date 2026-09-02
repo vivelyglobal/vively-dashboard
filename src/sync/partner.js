@@ -1,3 +1,4 @@
+import { visitSlotOf } from '../import/notion.js';
 import { DB, byCampaign, byCreator } from '../model/db.js';
 
 /* ============================================================
@@ -74,7 +75,7 @@ export function partnerRows(partner) {
     const cr = byCreator[p.creatorId] || {};
     const cp = byCampaign[p.campaignId] || {};
     const st = partnerStatus(p);
-    const slot = String(p.visitAt || '').trim();
+    const slot = String(visitSlotOf(p) || '').trim();
     const m = slot.match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{1,2}:\d{2}))?/);
     return {
       pid: p.id,

@@ -1153,14 +1153,26 @@ function mergeDuplicateCreators() {
     const better = (STAGE_IDX[p.stage] > STAGE_IDX[prev.stage]) || (p.content && !prev.content);
     if (better) {
       Object.keys(prev).forEach((key) => { if (!prev[key] && p[key]) prev[key] = p[key]; });
+      /* the survivor keeps its own id through the merge: Object.assign
+         would otherwise copy the loser's id over it, and the id is what a
+         calendar event and a partner's comments are filed against */
+      const keepId = prev.id;
       Object.assign(prev, p);
+      prev.id = keepId;
     } else {
       Object.keys(p).forEach((key) => { if (!prev[key] && p[key]) prev[key] = p[key]; });
     }
     mergedParticipants++;
   });
   DB.participants = keptRows;
-  DB.participants.forEach((p) => { p.id = p.campaignId + '-' + p.creatorId; });
+  /* This used to rebuild every id as campaignId + '-' + creatorId, on every
+     sync. A row's id is load-bearing — the Google Calendar event id is
+     derived from it, and a partner's comments are filed against it — so any
+     row that changed campaign quietly became a different row: a second
+     event for the same visit, and comments pointing at nothing. Re-homing
+     during a sync did it; moving a creator by hand would have done it too.
+     An id is now only ever filled in when there isn't one. */
+  DB.participants.forEach((p) => { if (!p.id) p.id = newId('p'); });
 
   const keepIds = new Set(Object.keys(byCreator));
   DB.creators = DB.creators.filter((c) => keepIds.has(c.id));
@@ -2005,9 +2017,10 @@ const dayKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2,
 function visitsByDay(campaignId) {
   const map = {};
   DB.participants.forEach((p) => {
-    if (!p.visitAt) return;
+    const slot = visitSlotOf(p);
+    if (!slot) return;
     if (campaignId && p.campaignId !== campaignId) return;
-    const d = parseVisitSlot(p.visitAt);
+    const d = parseVisitSlot(slot);
     if (!d) return;
     const cr = byCreator[p.creatorId], cp = byCampaign[p.campaignId];
     if (!cr || !cp) return;
@@ -2085,8 +2098,9 @@ function renderCampaignCalendar(view, scope) {
           return `<div class="cal-cell${isToday ? ' cal-today' : ''}${list.length ? ' cal-has' : ''}" data-day="${k}">
             <div class="cal-date">${d.getDate()}${list.length ? `<span class="cal-count">${list.length}</span>` : ''}</div>
             ${list.slice(0, 4).map((v) => {
-              const time = /\d{1,2}:\d{2}/.test(v.p.visitAt) ? v.p.visitAt.slice(-5) : '';
-              return `<div class="cal-item" title="${esc(v.cr.handle)} · ${esc(v.cp.brand)} — ${esc(v.p.visitAt)}" data-pid="${esc(v.p.id)}">
+              const vSlot = visitSlotOf(v.p);
+              const time = /\d{1,2}:\d{2}/.test(vSlot) ? vSlot.slice(-5) : '';
+              return `<div class="cal-item" title="${esc(v.cr.handle)} · ${esc(v.cp.brand)} — ${esc(vSlot)}${visitSlotMoved(v.p) ? ` (moved from ${esc(v.p.visitAt)})` : ''}" data-pid="${esc(v.p.id)}">
                 <span class="cal-dot" style="background:${avColor(v.cr.handle)}"></span>
                 <span class="cal-name">${time ? `<span class="cal-time">${time}</span> ` : ''}${esc(v.cr.handle)}</span>
               </div>`;
@@ -2133,7 +2147,8 @@ function upcomingVisitsStrip(cp) {
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-3)">${label}</span>
       ${show.map((v) => {
-        const time = /\d{1,2}:\d{2}/.test(v.p.visitAt) ? ' ' + v.p.visitAt.slice(-5) : '';
+        const vSlot = visitSlotOf(v.p);
+        const time = /\d{1,2}:\d{2}/.test(vSlot) ? ' ' + vSlot.slice(-5) : '';
         const day = v.at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
         return `<span class="cal-item" data-pid="${esc(v.p.id)}" style="width:auto;padding:3px 9px;border:1px solid var(--line);border-radius:20px">
           <span class="cal-dot" style="background:${avColor(v.cr.handle)}"></span>
@@ -2482,7 +2497,7 @@ function renderBoard(mount, cp) {
         return `<div class="kb-card" draggable="true" data-pid="${p.id}">
           ${whoHtml(cr)}
           <div class="kb-meta"><span>ER ${cr.er}%</span><span>${esc(cr.country)}</span>${p.fee ? `<span>${wonK(p.fee)}</span>` : ''}</div>
-          ${p.visitAt ? `<div style="font-size:11px;color:var(--text-2);margin-top:5px">🗓 ${esc(p.visitAt)}</div>` : ''}
+          ${visitSlotOf(p) ? `<div style="font-size:11px;color:var(--text-2);margin-top:5px">🗓 ${esc(visitSlotOf(p))}${p.confirmedVisitAt ? ' <span style="color:var(--text-3)">confirmed</span>' : ''}</div>` : ''}
           ${p.dropReason ? `<div style="font-size:11px;color:var(--text-3);margin-top:5px">${esc(p.dropReason)}</div>` : ''}
           ${p.content && p.content.views ? `<div style="font-size:11px;color:var(--text-2);margin-top:5px">${kmb(p.content.views)} views${p.content.metricsAt ? ` <span style="color:var(--text-3)">as of ${esc(String(p.content.metricsAt).slice(0, 10))}</span>` : ''}</div>` : ''}
         </div>`;
@@ -2711,7 +2726,8 @@ function showParticipant(pid) {
       <dt>Shipped / booked</dt><dd>${p.shippedAt || '—'}</dd>
       ${p.dropReason ? `<dt>Drop reason</dt><dd>${esc(p.dropReason)}</dd>` : ''}
       ${p.importedStatus ? `<dt>Sheet status</dt><dd><span class="tag">${esc(p.importedStatus)}</span></dd>` : ''}
-      ${p.visitAt ? `<dt>Visit slot</dt><dd>${esc(p.visitAt)}</dd>` : ''}
+      ${p.visitAt ? `<dt>Requested</dt><dd>${esc(p.visitAt)} <span style="color:var(--text-3)">— what they put on the form</span></dd>` : ''}
+      ${p.confirmedVisitAt ? `<dt>Confirmed visit</dt><dd><strong>${esc(p.confirmedVisitAt)}</strong>${visitSlotMoved(p) ? ` <span class="pill yellow">moved</span>` : ''}</dd>` : ''}
       ${p.arrivingDate ? `<dt>Arrived</dt><dd>${esc(p.arrivingDate)}</dd>` : ''}
       ${p.address ? `<dt>Address</dt><dd style="white-space:pre-wrap">${esc(p.address)}</dd>` : ''}
       ${p.contact ? `<dt>Kakao / phone</dt><dd>${esc(p.contact)}</dd>` : ''}
@@ -2725,6 +2741,23 @@ function showParticipant(pid) {
         <select id="pdGender">${['', 'F', 'M', 'Other'].map((g) => `<option value="${g}" ${(cr.gender || '') === g ? 'selected' : ''}>${g === '' ? '—' : g === 'F' ? '여성 · Female' : g === 'M' ? '남성 · Male' : '기타 · Other'}</option>`).join('')}</select></div>
       <div class="field"><label>Content link</label>
         <input type="url" id="pdContentUrl" placeholder="https://www.instagram.com/reel/…" value="${esc((c && c.url) || '')}"/></div>
+    </div>
+    <div class="grid g2" style="gap:10px">
+      <div class="field"><label>Confirmed visit — date</label>
+        <input type="date" id="pdVisitDate" value="${esc(splitSlot(p.confirmedVisitAt).date)}"/></div>
+      <div class="field"><label>Confirmed visit — time</label>
+        <input type="time" id="pdVisitTime" value="${esc(splitSlot(p.confirmedVisitAt).time)}"/></div>
+    </div>
+    <div class="note" style="margin:-4px 0 14px;font-size:12px">
+      ${p.visitAt
+        ? `They asked for <strong>${esc(p.visitAt)}</strong>. Setting a confirmed time here overrides it everywhere — calendar, partner page, messages — and a Notion sync will not undo it.`
+        : `Nothing came from the form for this row, so whatever you set here is the booking.`}
+      ${p.confirmedVisitAt ? `<br><button class="btn xs" id="pdVisitClear" type="button" style="margin-top:6px">Clear the confirmed time</button>` : ''}
+    </div>
+    <div class="field"><label>Campaign</label>
+      <select id="pdCampaign">${DB.campaigns.map((c) =>
+        `<option value="${esc(c.id)}" ${c.id === p.campaignId ? 'selected' : ''}>${esc(c.brand)} — ${esc(c.name)}</option>`).join('')}</select>
+      ${p.pinnedCampaign ? `<div style="font-size:12px;color:var(--text-3);margin-top:5px">Pinned here by hand — a Notion sync will not move it back. <button class="btn xs" id="pdUnpin" type="button">Unpin</button></div>` : ''}
     </div>
     <div class="field"><label>인원수 · People visiting <span style="color:var(--text-3);font-weight:400">— shown to the partner</span></label>
       <input type="text" id="pdHeadcount" placeholder="2" value="${esc(p.headcount || '')}"/></div>
@@ -2801,11 +2834,42 @@ function showParticipant(pid) {
     }
   });
 
+  /* clearing hands the row back to whatever the form says, rather than
+     leaving it stranded on a date nobody chose */
+  const visitClear = $('#pdVisitClear');
+  if (visitClear) visitClear.addEventListener('click', () => {
+    $('#pdVisitDate').value = ''; $('#pdVisitTime').value = '';
+  });
+  const unpin = $('#pdUnpin');
+  if (unpin) unpin.addEventListener('click', () => {
+    delete p.pinnedCampaign;
+    closeDrawer(); render();
+    toast('Unpinned — the next Notion sync decides where this row lives');
+  });
+
   $('#pdSave').addEventListener('click', () => {
     p.note = $('#pdNote').value;
     p.remark = $('#pdRemark').value.trim();
     p.headcount = $('#pdHeadcount').value.trim();
     cr.gender = $('#pdGender').value;
+
+    /* The confirmed slot is only ever set here, and the sync never writes
+       it, so it survives every later import. Storing '' rather than
+       deleting keeps the row's shape stable for the Sheet export. */
+    const slot = joinSlot($('#pdVisitDate').value, $('#pdVisitTime').value);
+    if (slot !== (p.confirmedVisitAt || '')) {
+      if (slot) p.confirmedVisitAt = slot; else delete p.confirmedVisitAt;
+    }
+
+    /* Moving pins the row. Without the pin the next sync of the campaign
+       whose Notion form this row came from would pull it straight back,
+       and the move would look like it silently failed. */
+    const toCampaign = $('#pdCampaign').value;
+    if (toCampaign && toCampaign !== p.campaignId && byCampaign[toCampaign]) {
+      p.campaignId = toCampaign;
+      if (p.notionPageId) p.pinnedCampaign = true;
+      recomputeCreatorStats();
+    }
 
     const mode = $('#pdPayMode').value;
     p.payment = {
@@ -3304,7 +3368,7 @@ function buildMessage(kind, cp, cr, tone, lang) {
   /* the slot this creator picked on the form, so the confirmation can quote
      it back at them instead of asking for a date they already gave */
   const part = cr ? DB.participants.find((x) => x.campaignId === cp.id && x.creatorId === cr.id) : null;
-  const slotRaw = (part && part.visitAt) || '';
+  const slotRaw = visitSlotOf(part);
   const slotDate = parseVisitSlot(slotRaw);
   const hasSlotTime = /\d{1,2}:\d{2}/.test(slotRaw);
   const slot = slotDate
@@ -4690,6 +4754,46 @@ function parseVisitSlot(v) {
   return isNaN(d) ? null : d;
 }
 
+/* The slot a visit actually happens at.
+
+   What a creator puts on the form is a REQUEST — Notion calls the column
+   "Date & Time Availability" — and a mapped column is authoritative, so
+   every sync rewrites it. A slot confirmed by hand therefore cannot live in
+   the same field: the next person to press Sync would erase it without
+   anyone noticing. It gets its own field that the sync never touches, and
+   everything downstream of a booking — the calendar, Google, the partner
+   page, the confirmation message — reads through here, so the confirmed
+   time is what the outside world sees. The request is still on the row,
+   shown beside it when the two disagree. */
+function visitSlotOf(p) {
+  return (p && (p.confirmedVisitAt || p.visitAt)) || '';
+}
+
+/* True when someone moved the booking off what the creator asked for. */
+function visitSlotMoved(p) {
+  return !!(p && p.confirmedVisitAt && p.visitAt && p.confirmedVisitAt !== p.visitAt);
+}
+
+/* A stored slot split for the two <input>s that edit it. A date with no
+   time is legitimate — plenty of bookings are "that Tuesday" — so an
+   empty time is carried through rather than defaulted to midnight, which
+   would put a real 00:00 appointment on the calendar nobody asked for. */
+function splitSlot(v) {
+  const m = String(v || '').trim().match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{1,2}:\d{2}))?/);
+  if (!m) return { date: '', time: '' };
+  const t = m[2] ? m[2].padStart(5, '0') : '';
+  return { date: m[1], time: t };
+}
+
+/* …and back again. Time without a date is not a slot, so it is dropped
+   rather than stored as something parseVisitSlot would refuse to read. */
+function joinSlot(date, time) {
+  const d = String(date || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return '';
+  const t = String(time || '').trim();
+  return /^\d{1,2}:\d{2}$/.test(t) ? `${d} ${t.padStart(5, '0')}` : d;
+}
+
 /* Metrics come back as a Notion number, or as text a human typed ("12.3K",
    "1.2만", "4,530"). Returns null when the cell is empty so an untouched
    column never overwrites a figure already recorded. NOT parseFollowers —
@@ -4935,7 +5039,7 @@ async function runNotionSync(cp, opts) {
     return { campaign: cp, error: err.message };
   }
 
-  let newRows = 0, updated = 0, newCreators = 0, matched = 0, skipped = 0, moved = 0, reslotted = 0, adopted = 0, metricsUpdated = 0, rehomed = 0;
+  let newRows = 0, updated = 0, newCreators = 0, matched = 0, skipped = 0, moved = 0, reslotted = 0, adopted = 0, metricsUpdated = 0, rehomed = 0, heldBack = 0;
   data.rows.forEach((row) => {
     const ap = notionRowToApplicant(row.properties, cp.notionMapping);
     if (!ap.handle) { skipped++; return; }
@@ -4981,7 +5085,7 @@ async function runNotionSync(cp, opts) {
        belongs to this campaign whatever it currently says. Two campaigns
        that shared an id pooled their rosters under one campaignId; syncing
        either one now pulls its own rows back where they belong. */
-    if (p && p.campaignId !== cp.id) {
+    if (p && p.campaignId !== cp.id && !p.pinnedCampaign) {
       /* Only the campaign changes. The row's own id stays exactly as it is,
          because other things are keyed on it: a Google Calendar event's id is
          derived from it, and a partner's comments are filed against it.
@@ -4990,6 +5094,11 @@ async function runNotionSync(cp, opts) {
          id — nothing reads it that way. */
       p.campaignId = cp.id;
       rehomed++;
+    } else if (p && p.campaignId !== cp.id) {
+      /* Pinned by hand. Left where it is on purpose, but counted and
+         reported — a row quietly missing from the campaign whose form it
+         came from is exactly the kind of drift nobody finds for a month. */
+      heldBack++;
     }
     if (!p) {
       const orphan = DB.participants.find((x) =>
@@ -5066,7 +5175,7 @@ async function runNotionSync(cp, opts) {
     else if (!data.rows.some((r) => r.properties[mappedTo])) visitWarning = `“${mappedTo}” is empty for every row`;
   }
 
-  const stats = { campaign: cp, rows: data.rows.length, newRows, updated, moved, reslotted, skipped, newCreators, adopted, metricsUpdated, rehomed, visitWarning };
+  const stats = { campaign: cp, rows: data.rows.length, newRows, updated, moved, reslotted, skipped, newCreators, adopted, metricsUpdated, rehomed, heldBack, visitWarning };
   if (batch) return stats;
 
   render();
@@ -5074,6 +5183,7 @@ async function runNotionSync(cp, opts) {
   const summary = `Synced ${data.rows.length} Notion submission${data.rows.length === 1 ? '' : 's'} — ${newRows} new, ${updated + adopted} updated` +
     (adopted ? ` (${adopted} existing roster row${adopted === 1 ? '' : 's'} linked up)` : '') +
     (rehomed ? `, ${rehomed} moved back to this campaign` : '') +
+    (heldBack ? `, ${heldBack} left where you pinned ${heldBack === 1 ? 'it' : 'them'}` : '') +
     (moved ? `, ${moved} moved stage` : '') +
     (reslotted ? `, ${reslotted} visit date${reslotted === 1 ? '' : 's'}` : '') +
     (metricsUpdated ? `, ${metricsUpdated} content/metrics` : '') +
@@ -6115,7 +6225,8 @@ const SHEET_SCHEMA = {
     ['id','s'],['campaignId','s'],['creatorId','s'],['stage','s'],['source','s'],['fee','n'],
     ['contactedAt','s'],['repliedAt','s'],['confirmedAt','s'],['shippedAt','s'],['dropReason','s'],
     ['revisions','n'],['note','s'],['fullName','s'],['address','s'],['contact','s'],['nationality','s'],
-    ['visitAt','s'],['arrivingDate','s'],['otherSns','s'],['importedStatus','s'],['notionPageId','s'],
+    ['visitAt','s'],['confirmedVisitAt','s'],['pinnedCampaign','s'],
+    ['arrivingDate','s'],['otherSns','s'],['importedStatus','s'],['notionPageId','s'],
     ['content.url','s'],['content.platform','s'],['content.format','s'],['content.postedAt','s'],
     ['content.submittedAt','s'],['content.views','n'],['content.paidViews','n'],['content.organicViews','n'],
     ['content.likes','n'],['content.comments','n'],['content.shares','n'],['content.saves','n'],
@@ -7908,7 +8019,7 @@ function partnerRows(partner) {
     const cr = byCreator[p.creatorId] || {};
     const cp = byCampaign[p.campaignId] || {};
     const st = partnerStatus(p);
-    const slot = String(p.visitAt || '').trim();
+    const slot = String(visitSlotOf(p) || '').trim();
     const m = slot.match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{1,2}:\d{2}))?/);
     return {
       pid: p.id,
@@ -8241,13 +8352,16 @@ function calendarItems() {
   const items = [], skipped = [];
 
   DB.participants.forEach((p) => {
-    if (!p.visitAt) return;
+    /* the confirmed slot when there is one, otherwise what they asked for —
+       so a booking moved by hand moves the Google event with it */
+    const slot = visitSlotOf(p);
+    if (!slot) return;
     const cr = byCreator[p.creatorId], cp = byCampaign[p.campaignId];
     if (!cr || !cp) return;
     if (p.stage === 'dropped') return;               /* dropped out, no booking */
     const tz = campaignTimeZone(cp);
-    const range = slotToRange(p.visitAt, tz, GCAL_PREFS.visitMinutes);
-    if (!range) { skipped.push({ kind: 'visit', why: 'unreadable', label: `${cr.handle} · ${cp.brand}`, raw: p.visitAt }); return; }
+    const range = slotToRange(slot, tz, GCAL_PREFS.visitMinutes);
+    if (!range) { skipped.push({ kind: 'visit', why: 'unreadable', label: `${cr.handle} · ${cp.brand}`, raw: slot }); return; }
     items.push({
       kind: 'visit', key: p.id, record: p,
       title: `${cr.handle} — ${cp.brand}`,
@@ -8256,7 +8370,7 @@ function calendarItems() {
                     p.note && ('Note: ' + p.note)].filter(Boolean).join('\n'),
       location: cp.venue || cp.market || '',
       start: range.start, end: range.end, timeZone: tz,
-      campaignId: cp.id, participantId: p.id, wall: p.visitAt
+      campaignId: cp.id, participantId: p.id, wall: slot
     });
   });
 

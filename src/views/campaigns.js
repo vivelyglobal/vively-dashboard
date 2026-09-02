@@ -1,6 +1,6 @@
 import { SERIES_HEX, barsH, fitHeight, lineChart, sparkSvg, splitBar } from '../charts/index.js';
 import { openMetricsImport } from '../import/metrics.js';
-import { notionLinkedCampaigns, openNotionMappingDrawer, syncAllNotionCampaigns } from '../import/notion.js';
+import { joinSlot, notionLinkedCampaigns, openNotionMappingDrawer, splitSlot, syncAllNotionCampaigns, visitSlotMoved, visitSlotOf } from '../import/notion.js';
 import { DAY, TODAY, addDays, dLabel, iso } from '../lib/dates.js';
 import { engagementsOf, kmb, money2, num, pct, won, wonK } from '../lib/format.js';
 import { recomputeCreatorStats } from '../model/creators.js';
@@ -372,7 +372,7 @@ export function renderBoard(mount, cp) {
         return `<div class="kb-card" draggable="true" data-pid="${p.id}">
           ${whoHtml(cr)}
           <div class="kb-meta"><span>ER ${cr.er}%</span><span>${esc(cr.country)}</span>${p.fee ? `<span>${wonK(p.fee)}</span>` : ''}</div>
-          ${p.visitAt ? `<div style="font-size:11px;color:var(--text-2);margin-top:5px">🗓 ${esc(p.visitAt)}</div>` : ''}
+          ${visitSlotOf(p) ? `<div style="font-size:11px;color:var(--text-2);margin-top:5px">🗓 ${esc(visitSlotOf(p))}${p.confirmedVisitAt ? ' <span style="color:var(--text-3)">confirmed</span>' : ''}</div>` : ''}
           ${p.dropReason ? `<div style="font-size:11px;color:var(--text-3);margin-top:5px">${esc(p.dropReason)}</div>` : ''}
           ${p.content && p.content.views ? `<div style="font-size:11px;color:var(--text-2);margin-top:5px">${kmb(p.content.views)} views${p.content.metricsAt ? ` <span style="color:var(--text-3)">as of ${esc(String(p.content.metricsAt).slice(0, 10))}</span>` : ''}</div>` : ''}
         </div>`;
@@ -601,7 +601,8 @@ export function showParticipant(pid) {
       <dt>Shipped / booked</dt><dd>${p.shippedAt || '—'}</dd>
       ${p.dropReason ? `<dt>Drop reason</dt><dd>${esc(p.dropReason)}</dd>` : ''}
       ${p.importedStatus ? `<dt>Sheet status</dt><dd><span class="tag">${esc(p.importedStatus)}</span></dd>` : ''}
-      ${p.visitAt ? `<dt>Visit slot</dt><dd>${esc(p.visitAt)}</dd>` : ''}
+      ${p.visitAt ? `<dt>Requested</dt><dd>${esc(p.visitAt)} <span style="color:var(--text-3)">— what they put on the form</span></dd>` : ''}
+      ${p.confirmedVisitAt ? `<dt>Confirmed visit</dt><dd><strong>${esc(p.confirmedVisitAt)}</strong>${visitSlotMoved(p) ? ` <span class="pill yellow">moved</span>` : ''}</dd>` : ''}
       ${p.arrivingDate ? `<dt>Arrived</dt><dd>${esc(p.arrivingDate)}</dd>` : ''}
       ${p.address ? `<dt>Address</dt><dd style="white-space:pre-wrap">${esc(p.address)}</dd>` : ''}
       ${p.contact ? `<dt>Kakao / phone</dt><dd>${esc(p.contact)}</dd>` : ''}
@@ -615,6 +616,23 @@ export function showParticipant(pid) {
         <select id="pdGender">${['', 'F', 'M', 'Other'].map((g) => `<option value="${g}" ${(cr.gender || '') === g ? 'selected' : ''}>${g === '' ? '—' : g === 'F' ? '여성 · Female' : g === 'M' ? '남성 · Male' : '기타 · Other'}</option>`).join('')}</select></div>
       <div class="field"><label>Content link</label>
         <input type="url" id="pdContentUrl" placeholder="https://www.instagram.com/reel/…" value="${esc((c && c.url) || '')}"/></div>
+    </div>
+    <div class="grid g2" style="gap:10px">
+      <div class="field"><label>Confirmed visit — date</label>
+        <input type="date" id="pdVisitDate" value="${esc(splitSlot(p.confirmedVisitAt).date)}"/></div>
+      <div class="field"><label>Confirmed visit — time</label>
+        <input type="time" id="pdVisitTime" value="${esc(splitSlot(p.confirmedVisitAt).time)}"/></div>
+    </div>
+    <div class="note" style="margin:-4px 0 14px;font-size:12px">
+      ${p.visitAt
+        ? `They asked for <strong>${esc(p.visitAt)}</strong>. Setting a confirmed time here overrides it everywhere — calendar, partner page, messages — and a Notion sync will not undo it.`
+        : `Nothing came from the form for this row, so whatever you set here is the booking.`}
+      ${p.confirmedVisitAt ? `<br><button class="btn xs" id="pdVisitClear" type="button" style="margin-top:6px">Clear the confirmed time</button>` : ''}
+    </div>
+    <div class="field"><label>Campaign</label>
+      <select id="pdCampaign">${DB.campaigns.map((c) =>
+        `<option value="${esc(c.id)}" ${c.id === p.campaignId ? 'selected' : ''}>${esc(c.brand)} — ${esc(c.name)}</option>`).join('')}</select>
+      ${p.pinnedCampaign ? `<div style="font-size:12px;color:var(--text-3);margin-top:5px">Pinned here by hand — a Notion sync will not move it back. <button class="btn xs" id="pdUnpin" type="button">Unpin</button></div>` : ''}
     </div>
     <div class="field"><label>인원수 · People visiting <span style="color:var(--text-3);font-weight:400">— shown to the partner</span></label>
       <input type="text" id="pdHeadcount" placeholder="2" value="${esc(p.headcount || '')}"/></div>
@@ -691,11 +709,42 @@ export function showParticipant(pid) {
     }
   });
 
+  /* clearing hands the row back to whatever the form says, rather than
+     leaving it stranded on a date nobody chose */
+  const visitClear = $('#pdVisitClear');
+  if (visitClear) visitClear.addEventListener('click', () => {
+    $('#pdVisitDate').value = ''; $('#pdVisitTime').value = '';
+  });
+  const unpin = $('#pdUnpin');
+  if (unpin) unpin.addEventListener('click', () => {
+    delete p.pinnedCampaign;
+    closeDrawer(); notify();
+    toast('Unpinned — the next Notion sync decides where this row lives');
+  });
+
   $('#pdSave').addEventListener('click', () => {
     p.note = $('#pdNote').value;
     p.remark = $('#pdRemark').value.trim();
     p.headcount = $('#pdHeadcount').value.trim();
     cr.gender = $('#pdGender').value;
+
+    /* The confirmed slot is only ever set here, and the sync never writes
+       it, so it survives every later import. Storing '' rather than
+       deleting keeps the row's shape stable for the Sheet export. */
+    const slot = joinSlot($('#pdVisitDate').value, $('#pdVisitTime').value);
+    if (slot !== (p.confirmedVisitAt || '')) {
+      if (slot) p.confirmedVisitAt = slot; else delete p.confirmedVisitAt;
+    }
+
+    /* Moving pins the row. Without the pin the next sync of the campaign
+       whose Notion form this row came from would pull it straight back,
+       and the move would look like it silently failed. */
+    const toCampaign = $('#pdCampaign').value;
+    if (toCampaign && toCampaign !== p.campaignId && byCampaign[toCampaign]) {
+      p.campaignId = toCampaign;
+      if (p.notionPageId) p.pinnedCampaign = true;
+      recomputeCreatorStats();
+    }
 
     const mode = $('#pdPayMode').value;
     p.payment = {

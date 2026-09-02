@@ -1,5 +1,5 @@
 import { funnelView } from '../charts/index.js';
-import { parseVisitSlot } from '../import/notion.js';
+import { parseVisitSlot, visitSlotOf } from '../import/notion.js';
 import { dLabel } from '../lib/dates.js';
 import { num, pct, won, wonK } from '../lib/format.js';
 import { DB, byCampaign, byCreator } from '../model/db.js';
@@ -65,7 +65,7 @@ export function buildMessage(kind, cp, cr, tone, lang) {
   /* the slot this creator picked on the form, so the confirmation can quote
      it back at them instead of asking for a date they already gave */
   const part = cr ? DB.participants.find((x) => x.campaignId === cp.id && x.creatorId === cr.id) : null;
-  const slotRaw = (part && part.visitAt) || '';
+  const slotRaw = visitSlotOf(part);
   const slotDate = parseVisitSlot(slotRaw);
   const hasSlotTime = /\d{1,2}:\d{2}/.test(slotRaw);
   const slot = slotDate

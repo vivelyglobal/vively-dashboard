@@ -1,4 +1,4 @@
-import { TODAY, DAY } from '../lib/dates.js';
+import { DAY, TODAY } from '../lib/dates.js';
 
 /* auto-suggest scoring: how well a creator fits a campaign */
 export function suggestScore(cr, cp) {

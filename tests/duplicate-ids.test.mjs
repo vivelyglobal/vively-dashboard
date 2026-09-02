@@ -109,13 +109,21 @@ test('duplicate creators and roster rows are caught too', () => {
    booking has an id derived from it, and a partner's comments are filed
    against it. Change it and you get a second event for the same visit and
    comments attached to nothing. */
-const rehomeSrc = src.slice(src.indexOf('    if (p && p.campaignId !== cp.id) {'),
+const rehomeSrc = src.slice(src.indexOf('    if (p && p.campaignId !== cp.id'),
                             src.indexOf('rehomed++;') + 'rehomed++;\n    }'.length);
 
 test('re-homing a row to its real campaign does not change the row id', () => {
   assert.ok(/p\.campaignId = cp\.id;/.test(rehomeSrc), 'it should set the campaign');
   assert.ok(!/p\.id\s*=/.test(rehomeSrc),
     'the row id must not be reassigned — a calendar event and any partner comments are keyed on it');
+});
+
+/* A row moved to another campaign by hand is pinned, and the sync of the
+   campaign whose Notion form it came from must leave it alone — otherwise
+   the move silently undoes itself the next time anyone presses Sync. */
+test('re-homing skips a row pinned by hand', () => {
+  assert.ok(/!p\.pinnedCampaign/.test(rehomeSrc),
+    'the re-home must not run on a row someone pinned deliberately');
 });
 
 test('a re-homed booking keeps the calendar event it already has', () => {
@@ -155,4 +163,27 @@ test('the repair leaves every other record untouched', () => {
   makeCtx(db).api.repairDuplicateIds();
   assert.equal(JSON.stringify({ a: db.campaigns[0], c: db.creators[0], p: db.participants[0] }), snapshot,
     'only the colliding record should have been touched');
+});
+
+/* --- the same mistake, found in a second place -----------------------------
+   mergeDuplicateCreators runs at the end of every Notion sync, and it used
+   to close with `p.id = p.campaignId + '-' + p.creatorId`. Any row that had
+   changed campaign — re-homed by the sync itself, or moved by hand — came
+   out the far side with a different id, so its Google Calendar event was
+   orphaned and a second one created, and a partner's comments pointed at a
+   row that no longer existed. Nothing about that was visible on screen. */
+const mergeSrc = src.slice(src.indexOf('function mergeDuplicateCreators()'),
+                           src.indexOf('const keepIds = new Set('));
+
+test('the de-duplicater does not rebuild row ids from the campaign', () => {
+  assert.ok(!/p\.id = p\.campaignId/.test(mergeSrc),
+    'a row that changes campaign must keep its id — a calendar event and any partner comments are keyed on it');
+  assert.ok(/if \(!p\.id\)/.test(mergeSrc),
+    'an id should only ever be filled in when the row has none');
+});
+
+test('a merged row keeps the surviving id, not the loser’s', () => {
+  /* Object.assign(prev, p) copies p.id over prev.id unless it is put back */
+  assert.ok(/const keepId = prev\.id;[\s\S]{0,200}prev\.id = keepId;/.test(mergeSrc),
+    'the survivor must keep its own id across the merge');
 });

@@ -1,10 +1,9 @@
-import { $, esc } from './dom.js';
-import { toast } from './overlay.js';
-import { TODAY, DAY } from '../lib/dates.js';
+import { DAY, TODAY } from '../lib/dates.js';
 import { kmb } from '../lib/format.js';
-import { stageOf, CAMPAIGN_STATUS, avColor, initials } from '../model/vocab.js';
 import { DB } from '../model/db.js';
-import { selectable } from '../model/settings.js';
+import { CAMPAIGN_STATUS, avColor, initials, stageOf } from '../model/vocab.js';
+import { esc } from './dom.js';
+import { toast } from './overlay.js';
 
 export function avatarHtml(handle, big) {
   return `<div class="av${big ? ' lg' : ''}" style="background:${avColor(handle)}">${initials(handle)}</div>`;

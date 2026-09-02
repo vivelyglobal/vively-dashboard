@@ -1,6 +1,5 @@
 import { TODAY, iso } from '../lib/dates.js';
 import { nf } from '../lib/format.js';
-import { $ } from '../ui/dom.js';
 
 /* ============================================================
    CONTRACTS

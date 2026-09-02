@@ -1,5 +1,5 @@
-import { STAGE_IDX, tierOf } from './vocab.js';
 import { DB, byCreator } from './db.js';
+import { STAGE_IDX, newId, tierOf } from './vocab.js';
 
 /* ------------------------------------------------------------------
    One creator, one row. Handles arrive from spreadsheets in every
@@ -84,14 +84,26 @@ export function mergeDuplicateCreators() {
     const better = (STAGE_IDX[p.stage] > STAGE_IDX[prev.stage]) || (p.content && !prev.content);
     if (better) {
       Object.keys(prev).forEach((key) => { if (!prev[key] && p[key]) prev[key] = p[key]; });
+      /* the survivor keeps its own id through the merge: Object.assign
+         would otherwise copy the loser's id over it, and the id is what a
+         calendar event and a partner's comments are filed against */
+      const keepId = prev.id;
       Object.assign(prev, p);
+      prev.id = keepId;
     } else {
       Object.keys(p).forEach((key) => { if (!prev[key] && p[key]) prev[key] = p[key]; });
     }
     mergedParticipants++;
   });
   DB.participants = keptRows;
-  DB.participants.forEach((p) => { p.id = p.campaignId + '-' + p.creatorId; });
+  /* This used to rebuild every id as campaignId + '-' + creatorId, on every
+     sync. A row's id is load-bearing — the Google Calendar event id is
+     derived from it, and a partner's comments are filed against it — so any
+     row that changed campaign quietly became a different row: a second
+     event for the same visit, and comments pointing at nothing. Re-homing
+     during a sync did it; moving a creator by hand would have done it too.
+     An id is now only ever filled in when there isn't one. */
+  DB.participants.forEach((p) => { if (!p.id) p.id = newId('p'); });
 
   const keepIds = new Set(Object.keys(byCreator));
   DB.creators = DB.creators.filter((c) => keepIds.has(c.id));

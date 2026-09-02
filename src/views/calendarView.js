@@ -1,4 +1,4 @@
-import { notionLinkedCampaigns, parseVisitSlot, syncAllNotionCampaigns } from '../import/notion.js';
+import { notionLinkedCampaigns, parseVisitSlot, syncAllNotionCampaigns, visitSlotMoved, visitSlotOf } from '../import/notion.js';
 import { TODAY } from '../lib/dates.js';
 import { dayKey, visitsByDay } from '../model/calendar.js';
 import { DB, notify } from '../model/db.js';
@@ -75,8 +75,9 @@ export function renderCampaignCalendar(view, scope) {
           return `<div class="cal-cell${isToday ? ' cal-today' : ''}${list.length ? ' cal-has' : ''}" data-day="${k}">
             <div class="cal-date">${d.getDate()}${list.length ? `<span class="cal-count">${list.length}</span>` : ''}</div>
             ${list.slice(0, 4).map((v) => {
-              const time = /\d{1,2}:\d{2}/.test(v.p.visitAt) ? v.p.visitAt.slice(-5) : '';
-              return `<div class="cal-item" title="${esc(v.cr.handle)} · ${esc(v.cp.brand)} — ${esc(v.p.visitAt)}" data-pid="${esc(v.p.id)}">
+              const vSlot = visitSlotOf(v.p);
+              const time = /\d{1,2}:\d{2}/.test(vSlot) ? vSlot.slice(-5) : '';
+              return `<div class="cal-item" title="${esc(v.cr.handle)} · ${esc(v.cp.brand)} — ${esc(vSlot)}${visitSlotMoved(v.p) ? ` (moved from ${esc(v.p.visitAt)})` : ''}" data-pid="${esc(v.p.id)}">
                 <span class="cal-dot" style="background:${avColor(v.cr.handle)}"></span>
                 <span class="cal-name">${time ? `<span class="cal-time">${time}</span> ` : ''}${esc(v.cr.handle)}</span>
               </div>`;
@@ -123,7 +124,8 @@ export function upcomingVisitsStrip(cp) {
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-3)">${label}</span>
       ${show.map((v) => {
-        const time = /\d{1,2}:\d{2}/.test(v.p.visitAt) ? ' ' + v.p.visitAt.slice(-5) : '';
+        const vSlot = visitSlotOf(v.p);
+        const time = /\d{1,2}:\d{2}/.test(vSlot) ? ' ' + vSlot.slice(-5) : '';
         const day = v.at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
         return `<span class="cal-item" data-pid="${esc(v.p.id)}" style="width:auto;padding:3px 9px;border:1px solid var(--line);border-radius:20px">
           <span class="cal-dot" style="background:${avColor(v.cr.handle)}"></span>

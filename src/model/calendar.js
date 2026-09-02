@@ -1,5 +1,5 @@
-import { DB, byCreator, byCampaign } from './db.js';
-import { parseVisitSlot } from '../import/notion.js';
+import { parseVisitSlot, visitSlotOf } from '../import/notion.js';
+import { DB, byCampaign, byCreator } from './db.js';
 
 /* ============================================================
    VISIT CALENDAR
@@ -14,9 +14,10 @@ export const dayKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padS
 export function visitsByDay(campaignId) {
   const map = {};
   DB.participants.forEach((p) => {
-    if (!p.visitAt) return;
+    const slot = visitSlotOf(p);
+    if (!slot) return;
     if (campaignId && p.campaignId !== campaignId) return;
-    const d = parseVisitSlot(p.visitAt);
+    const d = parseVisitSlot(slot);
     if (!d) return;
     const cr = byCreator[p.creatorId], cp = byCampaign[p.campaignId];
     if (!cr || !cp) return;

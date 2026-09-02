@@ -70,9 +70,18 @@ campaigns.forEach((c) => { if (c.fulfilment === 'visit') { c.venue = c.brand + '
    shown to actually scope rather than merely be intended to */
 /* the SPLABAB campaigns are Notion-linked, with a Status column mapped, so
    the write-back has something to write to */
-campaigns.forEach((c) => {
-  c.notionDatabaseId = 'ds-' + c.id;
-  c.notionMapping = { 'Full Name ': 'fullName', 'Status': 'status',
+/* A data-source id has to be uuid-shaped: the server normalises it before
+   calling Notion and refuses anything else, so 'ds-cp1' never reached the
+   API at all — every browser sync failed at the first step and the
+   harnesses around it were passing on a sync that never ran. */
+const dsId = (n) => `d5000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+campaigns.forEach((c, i) => {
+  c.notionDatabaseId = dsId(i + 1);
+  /* Without a column that identifies the creator, runNotionSync skips every
+     row before it does anything ("8 skipped, 0 updated") — so every harness
+     that pressed Sync was measuring a sync that did no work. */
+  c.notionMapping = { 'Instagram Link (URL)': 'handle',
+                      'Full Name ': 'fullName', 'Status': 'status',
                       'Date & Time Availability ': 'visitAt', 'Remark': 'remark',
                       'Number of people visiting ': 'headcount', 'Notes': 'formNotes' };
 });
@@ -123,7 +132,7 @@ participants.forEach((p, i) => {
   const clash = JSON.parse(JSON.stringify(campaigns[1]));
   clash.brand = 'Sushisora'; clash.name = 'Sushisora';
   clash.id = campaigns[1].id;                      /* the same id as Juno Seoul */
-  clash.notionDatabaseId = 'ds-clash';
+  clash.notionDatabaseId = dsId(90);               /* its own form, not Juno's */
   clash.partner = campaigns[1].partner;            /* same partner, so partner
                                                       scoping stays testable */
   campaigns.push(clash);

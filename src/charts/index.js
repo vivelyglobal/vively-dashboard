@@ -1,6 +1,5 @@
-import { $ } from '../ui/dom.js';
 import { dLabel } from '../lib/dates.js';
-import { num, kmb, pct } from '../lib/format.js';
+import { kmb, num, pct } from '../lib/format.js';
 
 /* ============================================================
    CHARTS — hand-rolled SVG. Rules from the dataviz skill:
