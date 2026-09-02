@@ -32,6 +32,17 @@ await p.waitForTimeout(2600);
 const before = await gstate();
 const issuesBefore = await p.$$eval('#view .note', (n) => n.map((x) => x.innerText.replace(/\s+/g, ' ').trim()));
 console.log(`     calendar before: ${before.count} events, ${issuesBefore.length} issue(s) already flagged`);
+/* Without this the whole calendar half of the harness passes on nothing:
+   start the server without GOOGLE_SERVICE_ACCOUNT and the sync quietly does
+   no work, so "before" and "after" are both zero and the comparison holds
+   for the wrong reason. Refuse to report a pass on an empty calendar. */
+if (!before.count) {
+  console.log('FAIL the calendar never got any events \u2014 this run proves nothing.');
+  console.log('     start the server with GOOGLE_SERVICE_ACCOUNT, GOOGLE_CALENDAR_ID and');
+  console.log('     GOOGLE_CALENDAR_API pointed at tools/fake-google.cjs, then run again.');
+  await b.close();
+  process.exit(1);
+}
 
 await step('the repair does not disturb the calendar', async () => {
   await p.evaluate(() => { location.hash = '#/campaigns/all/all'; });
