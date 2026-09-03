@@ -62,6 +62,98 @@ test('the signature covers the exact bytes, not the equivalent JSON', () => {
   assert.equal(wh.verifySignature(reserialised, sign(sent), SECRET), false);
 });
 
+/* ---- which secret would have worked ------------------------------------ */
+
+const BASIC = 'the-basic-app-secret';
+const IGSEC = 'the-instagram-app-secret';
+const both = { basic: BASIC, instagram: IGSEC };
+
+test('a refusal is attributed to the candidate that would have verified it', () => {
+  const body = Buffer.from('{"object":"instagram"}');
+  assert.equal(wh.whichSecretMatched(body, sign(body, BASIC), both), 'basic');
+  assert.equal(wh.whichSecretMatched(body, sign(body, IGSEC), both), 'instagram');
+});
+
+test('a signature from neither candidate is "none", not a near miss', () => {
+  const body = Buffer.from('{"object":"instagram"}');
+  assert.equal(wh.whichSecretMatched(body, sign(body, 'some-third-app'), both), 'none');
+});
+
+test('an unset candidate is skipped, never matched', () => {
+  /* the trap: an empty secret must not be tried at all. If it were, an
+     unconfigured slot could be reported as the answer and send someone
+     off to copy a value that is not the problem. */
+  const body = Buffer.from('{}');
+  for (const empty of ['', undefined, null]) {
+    assert.equal(wh.whichSecretMatched(body, sign(body, BASIC), { basic: empty, instagram: IGSEC }), 'none');
+  }
+  assert.equal(wh.whichSecretMatched(body, sign(body, BASIC), {}), 'none');
+  assert.equal(wh.whichSecretMatched(body, sign(body, BASIC), null), 'none');
+});
+
+test('the answer is only ever a name — never a digest, never a secret', () => {
+  /* this is the whole safety property of the diagnostic: it may say
+     WHICH secret worked and must never say anything about the value */
+  const body = Buffer.from('{"object":"instagram"}');
+  for (const header of [sign(body, BASIC), sign(body, IGSEC), sign(body, 'other'), 'garbage', undefined]) {
+    const out = wh.whichSecretMatched(body, header, both);
+    assert.ok(['basic', 'instagram', 'none'].includes(out), JSON.stringify(out));
+    assert.ok(!/[0-9a-f]{16,}/i.test(out), 'a digest leaked into the answer');
+    assert.ok(!out.includes(BASIC) && !out.includes(IGSEC), 'a secret leaked into the answer');
+  }
+});
+
+test('an unsignable body answers "none" rather than throwing', () => {
+  for (const b of [null, undefined, '{"object":"instagram"}', { object: 'instagram' }]) {
+    assert.equal(wh.whichSecretMatched(b, 'sha256=' + 'a'.repeat(64), both), 'none');
+  }
+});
+
+test('the same value in both slots resolves to one answer, not an error', () => {
+  /* entirely plausible while someone is hunting for the right secret */
+  const body = Buffer.from('{}');
+  assert.equal(wh.whichSecretMatched(body, sign(body, BASIC), { basic: BASIC, instagram: BASIC }), 'basic');
+});
+
+/* ---- who the delivery was for ------------------------------------------ */
+
+const OURS = '17841400000000000';
+const envelope = (id) => ({ object: 'instagram', entry: [{ id, time: 1789000000000 }] });
+
+test('a delivery for our own account is told apart from one for another', () => {
+  assert.equal(wh.accountVerdict(envelope(OURS), OURS), 'match');
+  assert.equal(wh.accountVerdict(envelope('17841499999999999'), OURS), 'different');
+});
+
+test('a verdict is given even when there is nothing to compare', () => {
+  assert.equal(wh.accountVerdict(envelope(OURS), ''), 'unconfigured');
+  assert.equal(wh.accountVerdict({ object: 'instagram' }, OURS), 'absent');
+  assert.equal(wh.accountVerdict({ object: 'instagram', entry: [] }, OURS), 'absent');
+  assert.equal(wh.accountVerdict(null, OURS), 'absent');
+  assert.equal(wh.accountVerdict({ entry: [{}] }, OURS), 'absent');
+});
+
+test('the account id itself never comes back — only the verdict', () => {
+  /* it is read out of a body that failed verification, so the id is
+     compared and dropped rather than returned and stored */
+  for (const p of [envelope(OURS), envelope('17841499999999999')]) {
+    const v = wh.accountVerdict(p, OURS);
+    assert.ok(['match', 'different', 'absent', 'unconfigured'].includes(v));
+    assert.ok(!v.includes('1784'), 'an id came back inside the verdict');
+  }
+});
+
+test('the object of a delivery is reported from a fixed vocabulary', () => {
+  /* it comes out of an unverified body, so an unknown value must not be
+     passed through — that is a stranger writing into our diagnostics */
+  assert.equal(wh.objectKind({ object: 'instagram' }), 'instagram');
+  assert.equal(wh.objectKind({ object: 'page' }), 'page');
+  assert.equal(wh.objectKind({ object: '<script>alert(1)</script>' }), 'other');
+  assert.equal(wh.objectKind({ object: 'x'.repeat(5000) }), 'other');
+  assert.equal(wh.objectKind({}), '');
+  assert.equal(wh.objectKind(null), '');
+});
+
 /* ---- verify token ------------------------------------------------------ */
 
 test('the verify token matches only itself', () => {

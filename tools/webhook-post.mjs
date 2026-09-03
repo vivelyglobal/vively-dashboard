@@ -4,12 +4,29 @@
    The unit tests prove the signature function is correct. This proves
    the request ever reaches it with the bytes intact — which is the
    part the global express.json() would silently break, and which no
-   amount of unit testing would catch. */
+   amount of unit testing would catch.
+
+   The server under test has to be started with all five of these, and
+   the three secrets have to be DIFFERENT from each other — several
+   steps turn on a delivery signed by a candidate still being refused,
+   which proves nothing if the candidate is also the real secret:
+
+     META_APP_SECRET=harness-app-secret
+     META_WEBHOOK_VERIFY_TOKEN=harness-verify-token
+     META_APP_BASIC_SECRET=harness-basic-secret
+     META_INSTAGRAM_APP_SECRET=harness-instagram-secret
+     INSTAGRAM_ACCOUNT_ID=17841400000000000   # matches entry[].id below
+
+   (tmp/start-webhook.sh does this; tmp/ is not in the repo.) */
 import crypto from 'node:crypto';
 
 const BASE = process.argv[2] || 'http://localhost:3121';
 const SECRET = process.env.META_APP_SECRET || 'harness-app-secret';
 const VERIFY = process.env.META_WEBHOOK_VERIFY_TOKEN || 'harness-verify-token';
+/* the two diagnostic candidates the server holds but must never accept */
+const BASIC = process.env.META_APP_BASIC_SECRET || 'harness-basic-secret';
+const IGSEC = process.env.META_INSTAGRAM_APP_SECRET || 'harness-instagram-secret';
+const OUR_ACCOUNT = process.env.INSTAGRAM_ACCOUNT_ID || '17841400000000000';
 
 const errs = [];
 const step = async (n, fn) => {
@@ -242,6 +259,113 @@ await step('a repeated refusal is counted once, not once per retry', async () =>
   await post(body, sign(body, 'the-wrong-secret'));
   const b = (await status()).last24h.rejected;
   if (b !== a) throw new Error(`the same refused body counted twice (${a} -> ${b})`);
+});
+
+/* ---- which secret would have worked ------------------------------------ */
+
+/* A refused body, unique per run so the content-addressed dedup does not
+   swallow it, and addressed to whichever account the server was told is
+   ours unless the caller wants otherwise. */
+const refusable = (tag, accountId = OUR_ACCOUNT) => Buffer.from(JSON.stringify({
+  object: 'instagram',
+  entry: [{ id: accountId, time: Date.now(), messaging: [] }],
+  tag: tag + '-' + Date.now() + '-' + Math.random()
+}));
+
+await step('a refusal signed with the Basic candidate is named as basic', async () => {
+  const before = (await status()).signatureCandidates;
+  const body = refusable('BASIC');
+  const r = await post(body, sign(body, BASIC));
+  if (r.status !== 403) throw new Error('a candidate secret was ACCEPTED — status ' + r.status);
+  const after = (await status()).signatureCandidates;
+  if (after.basic !== before.basic + 1)
+    throw new Error(`basic went ${before.basic} -> ${after.basic}`);
+  if (after.none !== before.none) throw new Error('it was also counted as unattributed');
+});
+
+await step('a refusal signed with the Instagram candidate is named as instagram', async () => {
+  const before = (await status()).signatureCandidates;
+  const body = refusable('IG');
+  const r = await post(body, sign(body, IGSEC));
+  if (r.status !== 403) throw new Error('a candidate secret was ACCEPTED — status ' + r.status);
+  const after = (await status()).signatureCandidates;
+  if (after.instagram !== before.instagram + 1)
+    throw new Error(`instagram went ${before.instagram} -> ${after.instagram}`);
+});
+
+await step('a refusal signed with neither is named as none', async () => {
+  const before = (await status()).signatureCandidates;
+  const body = refusable('THIRD');
+  await post(body, sign(body, 'a-third-app-entirely'));
+  const after = (await status()).signatureCandidates;
+  if (after.none !== before.none + 1) throw new Error(`none went ${before.none} -> ${after.none}`);
+  if (after.basic !== before.basic || after.instagram !== before.instagram)
+    throw new Error('an unattributed refusal was blamed on a candidate');
+});
+
+await step('the diagnostic is re-stated when the same body is refused again', async () => {
+  /* the dedup key is the body, so the retry of a refusal inserts
+     nothing. Send one body signed by nobody, then the SAME body signed
+     by a candidate: the verdict has to move, or the diagnosis is only
+     ever recorded for bodies never seen before — which, after several
+     Meta test deliveries, is none of them. */
+  const body = refusable('RESTATE');
+  await post(body, sign(body, 'a-third-app-entirely'));
+  const mid = (await status()).signatureCandidates;
+  await post(body, sign(body, BASIC));
+  const after = (await status()).signatureCandidates;
+  if (after.basic !== mid.basic + 1 || after.none !== mid.none - 1)
+    throw new Error(`the verdict did not move: none ${mid.none}->${after.none}, basic ${mid.basic}->${after.basic}`);
+});
+
+await step('a refused delivery is checked against the account we configured', async () => {
+  const before = (await status()).rejectedAccountCheck;
+  const mine = refusable('MINE', OUR_ACCOUNT);
+  await post(mine, sign(mine, 'nobody'));
+  const theirs = refusable('THEIRS', '17849999999999999');
+  await post(theirs, sign(theirs, 'nobody'));
+  const after = (await status()).rejectedAccountCheck;
+  if (after.match !== before.match + 1)
+    throw new Error(`match went ${before.match} -> ${after.match}`);
+  if (after.different !== before.different + 1)
+    throw new Error(`different went ${before.different} -> ${after.different}`);
+});
+
+await step('the reading names the secret to use, rather than just "it failed"', async () => {
+  const st = await status();
+  if (!st.reading) throw new Error('no reading');
+  if (st.last24h.rejected && !st.last24h.stored && !st.last24h.unrecognised &&
+      st.signatureCandidates.basic && !/Basic app secret/.test(st.reading))
+    throw new Error('a matched candidate is not mentioned in the reading: ' + st.reading);
+  if (!st.appIdNote || !/no app id/i.test(st.appIdNote))
+    throw new Error('nothing says whether the app id can be established');
+});
+
+await step('neither candidate secret can get a delivery accepted', async () => {
+  /* the diagnostic must not have widened what is trusted: exactly one
+     secret decides, and it is still META_APP_SECRET */
+  for (const [name, secret] of [['basic', BASIC], ['instagram', IGSEC]]) {
+    const body = delivery('mid.CANDIDATE.' + name + '.' + Date.now(), 'hello');
+    const r = await post(body, sign(body, secret));
+    if (r.status !== 403) throw new Error(`the ${name} candidate was accepted — status ${r.status}`);
+  }
+  const good = delivery('mid.STILLGOOD.' + Date.now(), 'https://www.instagram.com/reel/STILLGOOD/');
+  if ((await post(good, sign(good))).status !== 200)
+    throw new Error('the real secret stopped working');
+});
+
+await step('no secret and no signature appears anywhere in the status', async () => {
+  const st = await status();
+  const body = JSON.stringify(st);
+  for (const [name, s] of [['app', SECRET], ['basic', BASIC], ['instagram', IGSEC], ['verify', VERIFY]])
+    if (body.includes(s)) throw new Error('the ' + name + ' secret is in the status');
+  /* and no digest either — a calculated signature is as good as an
+     oracle for anyone who can post bodies at us */
+  const hex = body.match(/[0-9a-f]{32,}/i);
+  if (hex) throw new Error('something digest-shaped is in the status: ' + hex[0].slice(0, 12) + '…');
+  for (const k of ['basic', 'instagram'])
+    if (!['set', 'missing'].includes(st.candidateSecrets[k]))
+      throw new Error(`candidateSecrets.${k} reported ${JSON.stringify(st.candidateSecrets[k])}`);
 });
 
 await step('the status endpoint reports configuration without revealing it', async () => {

@@ -45,6 +45,27 @@ const META_APP_SECRET = readEnv("META_APP_SECRET");
 const META_WEBHOOK_VERIFY_TOKEN = readEnv("META_WEBHOOK_VERIFY_TOKEN");
 const INSTAGRAM_ACCESS_TOKEN = readEnv("INSTAGRAM_ACCESS_TOKEN");
 const INSTAGRAM_ACCOUNT_ID = readEnv("INSTAGRAM_ACCOUNT_ID");
+
+/* Two more secrets, DIAGNOSTIC ONLY.
+
+   Meta shows a Basic app secret under App Settings, and an app using
+   Instagram Login has a second, different Instagram app secret. A
+   delivery carries nothing that says which app signed it, so when the
+   signature fails there is no way to tell "wrong secret" from "wrong
+   app" by looking at the request. Holding both candidates lets a
+   refused delivery be tested against each, and the answer becomes a
+   name instead of a guess.
+
+   META_APP_SECRET remains the ONLY secret that decides accept or
+   reject. Setting either of these changes nothing about what is
+   accepted — a delivery signed with a candidate is still refused.
+   Leaving them unset only means a refusal is reported without that
+   extra detail. */
+const META_APP_BASIC_SECRET = readEnv("META_APP_BASIC_SECRET");
+const META_INSTAGRAM_APP_SECRET = readEnv("META_INSTAGRAM_APP_SECRET");
+const SIGNATURE_CANDIDATES = { basic: META_APP_BASIC_SECRET, instagram: META_INSTAGRAM_APP_SECRET };
+const HAVE_CANDIDATES = !!(META_APP_BASIC_SECRET || META_INSTAGRAM_APP_SECRET);
+
 const igWebhook = require("./server/instagram-webhook.js");
 
 let mongoClientPromise = null;
@@ -1155,6 +1176,20 @@ async function storeInstagramEvent(doc) {
   }
 }
 
+/* Re-state the diagnosis on a refusal already on record. Only fields we
+   worked out ourselves — a verdict and a name — are ever written here;
+   nothing out of the unverified body, which is why the caller keeps
+   passing the same small object it logged. */
+async function noteRejectedDelivery(id, fields) {
+  const col = await instagramEventsCollection();
+  if (!col) {
+    const doc = igMemoryEvents.get(id);
+    if (doc) Object.assign(doc, fields);
+    return;
+  }
+  await col.updateOne({ _id: id }, { $set: fields });
+}
+
 /* GET — the one-time handshake when the subscription is created. */
 app.get("/api/webhooks/instagram", (req, res) => {
   if (!META_WEBHOOK_VERIFY_TOKEN) {
@@ -1185,10 +1220,35 @@ app.post("/api/webhooks/instagram", async (req, res) => {
   }
 
   const raw = Buffer.isBuffer(req.body) ? req.body : null;
-  if (!igWebhook.verifySignature(raw, req.get("x-hub-signature-256"), META_APP_SECRET)) {
+  const signature = req.get("x-hub-signature-256");
+  if (!igWebhook.verifySignature(raw, signature, META_APP_SECRET)) {
     /* the header itself is never logged: it is a keyed digest of the
        body and there is no reason to write it down */
     console.error("Instagram webhook: bad or missing signature — rejected.");
+
+    /* Which of the secrets we hold WOULD have verified this. The answer
+       is a name — "basic", "instagram" or "none" — and nothing else. No
+       secret, no digest, no header. With neither candidate configured
+       there is nothing to test with, and saying "none" would read as a
+       finding rather than an absence, so it says so instead. */
+    const candidateMatch = HAVE_CANDIDATES
+      ? igWebhook.whichSecretMatched(raw, signature, SIGNATURE_CANDIDATES)
+      : "notChecked";
+
+    /* And what the envelope claims about who the delivery was for. This
+       is read out of a body that failed verification, so only the
+       verdict survives — the account id itself is compared and dropped. */
+    let accountMatch = "unreadable";
+    let deliveryObject = "";
+    try {
+      const peek = JSON.parse((raw || Buffer.alloc(0)).toString("utf8"));
+      accountMatch = igWebhook.accountVerdict(peek, INSTAGRAM_ACCOUNT_ID);
+      deliveryObject = igWebhook.objectKind(peek);
+    } catch (e) { /* not JSON — there is nothing to say about it */ }
+
+    console.error("Instagram webhook: refused delivery — candidate secret: %s, account: %s, object: %s.",
+      candidateMatch, accountMatch, deliveryObject || "?");
+
     /* Leave a trace, but NOT the payload. This body failed the signature
        check, so it is unverified input from an unknown sender and storing
        it would be storing whatever a stranger posted at us. The hash is
@@ -1196,14 +1256,23 @@ app.post("/api/webhooks/instagram", async (req, res) => {
        Diagnostics must never be the reason a 403 fails to happen, so a
        problem writing it is swallowed. */
     try {
-      await storeInstagramEvent({
-        _id: "rej:" + crypto.createHash("sha256").update(raw || Buffer.alloc(0)).digest("hex").slice(0, 32),
+      const rejectionId = "rej:" +
+        crypto.createHash("sha256").update(raw || Buffer.alloc(0)).digest("hex").slice(0, 32);
+      const diagnosis = { candidateMatch, accountMatch, deliveryObject };
+      const outcome = await storeInstagramEvent(Object.assign({
+        _id: rejectionId,
         kind: "rejected",
-        reason: req.get("x-hub-signature-256") ? "signature did not match" : "no signature header",
+        reason: signature ? "signature did not match" : "no signature header",
         bytes: raw ? raw.length : 0,
         receivedAt: new Date(),
         processedAt: null
-      });
+      }, diagnosis));
+      /* The dedup key is the body, so a Meta retry — or the same test
+         sent again after a secret was changed — lands on the record we
+         already have and inserts nothing. Without this the diagnosis
+         would only ever be written for a body we had never seen before,
+         which after several test deliveries is none of them. */
+      if (outcome === "duplicate") await noteRejectedDelivery(rejectionId, diagnosis);
     } catch (e) { /* diagnostics only */ }
     return res.status(403).json({ error: "Invalid signature." });
   }
@@ -1295,8 +1364,19 @@ app.get("/api/webhooks/instagram/status", async (req, res) => {
      to a zero was unreadable. They are counted apart now. */
   const emptyTally = { received: 0, messages: 0, changes: 0, unrecognised: 0, rejected: 0 };
   const tally = Object.assign({}, emptyTally);
+  /* Refusals, broken down by the two things that can be established
+     about them: which secret would have verified the delivery, and
+     whether it was addressed to the Instagram account we configured. */
+  const candidates = { basic: 0, instagram: 0, none: 0, notChecked: 0 };
+  const accounts = { match: 0, different: 0, absent: 0, unconfigured: 0, unreadable: 0, notChecked: 0 };
   let lastDeliveryAt = null;
   let counted = true;
+
+  /* refusals recorded before the diagnostic existed carry neither field */
+  const bump = (bucket, value) => {
+    const key = Object.prototype.hasOwnProperty.call(bucket, value) ? value : "notChecked";
+    bucket[key] += 1;
+  };
 
   try {
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -1315,6 +1395,16 @@ app.get("/api/webhooks/instagram/status", async (req, res) => {
         tally.received += r.n;
         if (r.newest && (!lastDeliveryAt || r.newest > lastDeliveryAt)) lastDeliveryAt = r.newest;
       });
+      const refusals = await col.aggregate([
+        { $match: { kind: "rejected", receivedAt: { $gte: since } } },
+        { $group: { _id: { candidate: "$candidateMatch", account: "$accountMatch" }, n: { $sum: 1 } } }
+      ]).toArray();
+      refusals.forEach((r) => {
+        for (let i = 0; i < r.n; i++) {
+          bump(candidates, String((r._id && r._id.candidate) || ""));
+          bump(accounts, String((r._id && r._id.account) || ""));
+        }
+      });
     } else {
       [...igMemoryEvents.values()].forEach((d) => {
         if (!d.receivedAt || d.receivedAt < since) return;
@@ -1324,6 +1414,10 @@ app.get("/api/webhooks/instagram/status", async (req, res) => {
           : d.kind === "rejected" ? "rejected" : null;
         if (key) tally[key] += 1;
         tally.received += 1;
+        if (d.kind === "rejected") {
+          bump(candidates, String(d.candidateMatch || ""));
+          bump(accounts, String(d.accountMatch || ""));
+        }
         if (!lastDeliveryAt || d.receivedAt > lastDeliveryAt) lastDeliveryAt = d.receivedAt;
       });
     }
@@ -1332,6 +1426,28 @@ app.get("/api/webhooks/instagram/status", async (req, res) => {
   }
 
   const stored = tally.messages + tally.changes;
+
+  /* The one sentence worth reading. Refusals are the interesting case
+     now that there is something to say about them: the diagnostic turns
+     "the signature did not match" into which secret would have. */
+  const refusalReading = () => {
+    if (candidates.basic)
+      return "Deliveries are arriving and being refused, and the Basic app secret verifies them — " +
+        "META_APP_SECRET is holding the other one. Set it to the Basic app secret.";
+    if (candidates.instagram)
+      return "Deliveries are arriving and being refused, and the Instagram app secret verifies them — " +
+        "META_APP_SECRET is holding the other one. Set it to the Instagram app secret.";
+    if (candidates.none)
+      return META_APP_BASIC_SECRET && META_INSTAGRAM_APP_SECRET
+        ? "Deliveries are arriving and being refused, and neither the Basic nor the Instagram app secret " +
+          "verifies them — whatever signed these is a third secret. Either the secret was regenerated after " +
+          "it was copied, or the subscription belongs to a different Meta app."
+        : "Deliveries are arriving and being refused, and the one candidate secret configured does not " +
+          "verify them either. Set both META_APP_BASIC_SECRET and META_INSTAGRAM_APP_SECRET to test both.";
+    return "Deliveries are arriving and being refused — META_APP_SECRET does not match the app secret in " +
+      "Meta. Set META_APP_BASIC_SECRET and META_INSTAGRAM_APP_SECRET to find out which one it should be.";
+  };
+
   res.json({
     ok: true,
     verifyToken: META_WEBHOOK_VERIFY_TOKEN ? "set" : "missing",
@@ -1351,11 +1467,28 @@ app.get("/api/webhooks/instagram/status", async (req, res) => {
       rejected: tally.rejected
     } : null,
     lastDeliveryAt: lastDeliveryAt || null,
+
+    /* ---- the refusal diagnostic ----------------------------------- */
+    /* Which secret WOULD have verified each refused delivery. Names
+       only — no digests, and nothing that could be worked back into a
+       secret. These two secrets are diagnostic: neither of them can
+       cause a delivery to be accepted. */
+    candidateSecrets: {
+      basic: META_APP_BASIC_SECRET ? "set" : "missing",
+      instagram: META_INSTAGRAM_APP_SECRET ? "set" : "missing"
+    },
+    signatureCandidates: counted ? candidates : null,
+    rejectedAccountCheck: counted ? accounts : null,
+    appIdNote: "A Meta webhook delivery carries no app id, so the signing app cannot be read off the " +
+      "request. It can only be inferred from which secret verifies the signature, which is what " +
+      "signatureCandidates reports. rejectedAccountCheck answers the narrower question the envelope " +
+      "does allow: whether entry[].id is the Instagram account in INSTAGRAM_ACCOUNT_ID.",
+
     reading: counted
       ? (tally.received === 0
           ? "Nothing has reached this endpoint in 24h — Meta is not sending, or not to this URL."
           : tally.rejected && !stored && !tally.unrecognised
-            ? "Deliveries are arriving and being refused — META_APP_SECRET does not match the app secret in Meta."
+            ? refusalReading()
             : tally.unrecognised && !stored
               ? "Signed deliveries are arriving in a shape we do not parse yet — stored for inspection."
               : "Deliveries are arriving and being stored.")

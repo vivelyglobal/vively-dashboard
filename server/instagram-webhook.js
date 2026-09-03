@@ -40,6 +40,59 @@ function verifySignature(rawBody, header, appSecret) {
   return crypto.timingSafeEqual(given, expected);
 }
 
+/* ---- which secret would have worked (diagnostic only) -------------- */
+
+/* A Meta delivery carries no app id. When the signature fails there is
+   therefore nothing in the request that says "this was signed by app
+   X", and "wrong secret" is indistinguishable from "wrong app" by
+   inspection alone. The one thing that CAN be established is which of
+   the secrets we hold would have verified it — so hold both candidates
+   and ask.
+
+   This never decides whether a delivery is accepted. It returns a
+   name — a key of `candidates`, or "none" — and nothing else: not a
+   digest, not a secret, not the header. A candidate with no value set
+   is skipped rather than tried, so an unset secret can never be the
+   thing that "matched". */
+function whichSecretMatched(rawBody, header, candidates) {
+  const list = (candidates && typeof candidates === "object") ? candidates : {};
+  for (const name of Object.keys(list)) {
+    if (!list[name]) continue;
+    if (verifySignature(rawBody, header, list[name])) return name;
+  }
+  return "none";
+}
+
+/* ---- who a delivery was for (diagnostic only) ---------------------- */
+
+/* The other half of "is this even ours". There is no app id in the
+   envelope, but there is entry[].id — the Instagram account the
+   subscription belongs to — and we know which account we configured.
+   That answers a narrower question than "which app", but a real one:
+   whether these deliveries are for our inbox at all.
+
+   Called on bodies that FAILED verification, so it returns a verdict
+   and never the id itself. Nothing out of an unverified body is kept. */
+function accountVerdict(payload, configuredAccountId) {
+  const entries = (payload && Array.isArray(payload.entry)) ? payload.entry : [];
+  const ids = entries.map((e) => String((e && e.id) || "")).filter(Boolean);
+  if (!ids.length) return "absent";
+  if (!configuredAccountId) return "unconfigured";
+  return ids.includes(String(configuredAccountId)) ? "match" : "different";
+}
+
+/* `object` says which product the subscription is on — "instagram" for
+   an Instagram-Login app, "page" for one routed through a Facebook
+   Page — which is worth knowing when deliveries are being refused. It
+   comes out of an unverified body, so it is matched against a fixed
+   vocabulary rather than stored as sent. */
+const KNOWN_OBJECTS = ["instagram", "page", "user", "application", "permissions"];
+function objectKind(payload) {
+  const o = String((payload && payload.object) || "");
+  if (!o) return "";
+  return KNOWN_OBJECTS.includes(o) ? o : "other";
+}
+
 /* The verify-token comparison is constant-time too. Lower stakes than
    the signature, but it is still a secret being compared. */
 function tokensMatch(given, expected) {
@@ -185,6 +238,7 @@ function logLineFor(ev) {
 
 module.exports = {
   verifySignature, tokensMatch,
+  whichSecretMatched, accountVerdict, objectKind,
   extractPostUrls, instagramPostId,
   parseWebhookPayload, dedupKeyFor, logLineFor, iso
 };
