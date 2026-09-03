@@ -829,6 +829,30 @@ function resolvePartnerToken(doc, token) {
   return hit ? hit.partner : null;
 }
 
+/* The slot the visit actually happens at, server-side.
+
+   This has to agree with visitSlotOf() in the dashboard, and it did
+   not: the browser was updated to prefer the confirmed time and this
+   was left reading the creator's original request, so a time someone
+   confirmed by hand never reached the partner. Two copies of one rule,
+   and only one of them changed.
+
+   A partner is booking a table. What they need is the time that was
+   agreed, not the time that was asked for. */
+function partnerVisitSlot(p) {
+  return String((p && (p.confirmedVisitAt || p.visitAt)) || "").trim();
+}
+
+/* A published post used to hang off the roster row. It now lives in
+   db.socialContent, so this reads there first and falls back to the
+   old shape — a workspace saved before that change still has to render. */
+function partnerContentUrl(db, p) {
+  const lib = (db && db.socialContent) || [];
+  const rec = lib.find((c) => c && c.participantId === p.id);
+  if (rec && (rec.url || rec.postUrl)) return rec.url || rec.postUrl;
+  return (p.content && p.content.url) || "";
+}
+
 function buildPartnerRows(db, partner) {
   const byCreator = Object.fromEntries((db.creators || []).map((c) => [c.id, c]));
   const byCampaign = Object.fromEntries((db.campaigns || []).map((c) => [c.id, c]));
@@ -855,7 +879,7 @@ function buildPartnerRows(db, partner) {
     const cr = byCreator[p.creatorId] || {};
     const cp = byCampaign[p.campaignId] || {};
     const st = partnerStatusOf(p);
-    const m = String(p.visitAt || "").trim().match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{1,2}:\d{2}))?/);
+    const m = partnerVisitSlot(p).match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{1,2}:\d{2}))?/);
     const handle = cr.handle || "";
     return {
       pid: p.id,
@@ -871,7 +895,7 @@ function buildPartnerRows(db, partner) {
       followers: cr.followers || 0,
       remark: p.remark || "",
       headcount: p.headcount || "",
-      contentUrl: (p.content && p.content.url) || "",
+      contentUrl: partnerContentUrl(db, p),
       nationality: p.nationality || cr.nationality || cr.country || "",
       notes: p.formNotes || "",
       otherSns: p.otherSns || ""

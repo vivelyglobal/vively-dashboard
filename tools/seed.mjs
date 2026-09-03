@@ -144,6 +144,42 @@ const partnerLinks = [
   { partner: 'GONE',    token: 'tok-revoked-test', createdAt: new Date().toISOString(), revokedAt: new Date().toISOString() }
 ];
 
+/* ------------------------------------------------------------------
+   Two fixtures the partner page needs, and did not have.
+
+   The partner payload is built on the SERVER, in its own copy of the
+   rules — so a change made only in the dashboard's copy goes unnoticed
+   until a partner is looking at the wrong time. These two rows exist
+   so that a harness can see through the server's eyes.
+   ------------------------------------------------------------------ */
+const splababRows = participants.filter((x) => {
+  const cp = campaigns.find((c) => c.id === x.campaignId);
+  return cp && cp.partner === 'SPLABAB' && x.visitAt && x.stage !== 'dropped';
+});
+
+/* one booking moved off what the creator asked for */
+const rescheduled = splababRows[0];
+if (rescheduled) {
+  rescheduled.visitAt = '2026-09-05 19:00';
+  rescheduled.confirmedVisitAt = '2026-09-11 12:30';
+}
+
+/* and one post stored the way it is stored now — in the library, with
+   nothing left on the roster row */
+const socialContent = [];
+const moved = splababRows.find((x) => x !== rescheduled && x.content && x.content.url);
+if (moved) {
+  socialContent.push(Object.assign({}, moved.content, {
+    id: 'sc-partner-fixture',
+    participantId: moved.id,
+    campaignId: moved.campaignId,
+    creatorId: moved.creatorId,
+    postUrl: moved.content.url,
+    matchStatus: 'confirmed'
+  }));
+  delete moved.content;
+}
+
 const appointments = [{
   id: 'ap-shoot', title: 'Sushikoji — filming day', date: mk(5), endDate: '', startTime: '10:00',
   endTime: '16:00', timezone: 'Asia/Seoul', location: 'https://meet.google.com/abc-defg-hij',
@@ -151,4 +187,5 @@ const appointments = [{
 }];
 
 console.log(JSON.stringify({ savedAt: new Date().toISOString(),
-  db: { creators, campaigns, participants, appointments, partnerLinks }, settings: { hideBlocked: true } }));
+  db: { creators, campaigns, participants, appointments, partnerLinks, socialContent },
+  settings: { hideBlocked: true } }));

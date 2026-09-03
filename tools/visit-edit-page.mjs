@@ -68,7 +68,11 @@ await p.waitForTimeout(1500);
 /* Pick a row that came from Notion and already has a requested slot, so
    the confirmed value has something real to override. */
 const db0 = await store();
-const target = db0.participants.find((x) => x.visitAt && x.notionPageId && x.stage !== 'dropped');
+/* and nothing confirmed yet — the seed now ships one row already
+   rescheduled, for the partner-page harness, and this one needs a
+   blank field to type into */
+const target = db0.participants.find((x) =>
+  x.visitAt && x.notionPageId && x.stage !== 'dropped' && !x.confirmedVisitAt);
 if (!target) { console.log('the seed has no Notion row with a visit slot — nothing to test'); await b.close(); process.exit(1); }
 /* Not one of the deliberately-clashing pair — the seed carries two
    campaigns on one id on purpose, and moving a row onto a contested id

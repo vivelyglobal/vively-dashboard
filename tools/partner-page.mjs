@@ -158,6 +158,57 @@ await step('one partner cannot comment on another partner\'s row', async () => {
   if (res.status !== 400) throw new Error('accepted with status ' + res.status);
 });
 
+/* ---- what the partner is actually booking against ---------------------
+   The payload is built server-side, in its own copy of the rules. The
+   dashboard's copy was taught to prefer a confirmed time and this one
+   was not, so a booking someone moved by hand went on showing the
+   creator's original request — to the one audience that turns it into
+   a table reservation. These read through the server. */
+
+await step('the partner sees the confirmed time, not what the creator asked for', async () => {
+  const row = seed.participants.find((x) => x.confirmedVisitAt);
+  if (!row) throw new Error('the seed has no rescheduled booking to check');
+  const [date, time] = row.confirmedVisitAt.split(' ');
+  const [wasDate, wasTime] = row.visitAt.split(' ');
+
+  const payload = buildPartnerRows(seed, 'SPLABAB');
+  const got = payload.rows.find((r) => r.pid === row.id);
+  if (!got) throw new Error('the rescheduled row is not in the partner payload at all');
+  if (got.visitDate !== date || got.visitTime !== time)
+    throw new Error(`payload says ${got.visitDate} ${got.visitTime}, confirmed is ${date} ${time}`);
+  if (got.visitDate === wasDate && got.visitTime === wasTime)
+    throw new Error('it is still showing the original request');
+
+  /* and on the page itself, not just in the JSON */
+  await p.goto('http://localhost:3199/partner/tok-splabab-test', { waitUntil: 'networkidle' });
+  const text = await p.$eval('body', (e) => e.innerText);
+  if (!text.includes(date)) throw new Error(`the page never shows ${date}`);
+});
+
+await step('the old time is gone from the page, not sitting beside the new one', async () => {
+  const row = seed.participants.find((x) => x.confirmedVisitAt);
+  const text = await p.$eval('body', (e) => e.innerText);
+  const [wasDate] = row.visitAt.split(' ');
+  const [nowDate] = row.confirmedVisitAt.split(' ');
+  /* only meaningful when the two fall on different days, which the
+     fixture guarantees — two dates for one booking is worse than one
+     wrong date, because nobody knows which to trust */
+  if (wasDate !== nowDate && text.includes(wasDate))
+    throw new Error(`both ${wasDate} and ${nowDate} are on screen`);
+});
+
+await step('a post stored in the library still reaches the partner', async () => {
+  /* content used to hang off the roster row; it now lives in
+     db.socialContent, and the server was still reading the old place */
+  const rec = (seed.socialContent || [])[0];
+  if (!rec) throw new Error('the seed has no split-out post to check');
+  const got = buildPartnerRows(seed, 'SPLABAB').rows.find((r) => r.pid === rec.participantId);
+  if (!got) throw new Error('that row is not in the partner payload');
+  if (!got.contentUrl) throw new Error('the video link is empty — the server is reading the old shape');
+  if (got.contentUrl !== (rec.url || rec.postUrl))
+    throw new Error(`got ${got.contentUrl}, expected ${rec.url || rec.postUrl}`);
+});
+
 console.log('\nerrors:', errs.length ? '\n  ' + errs.join('\n  ') : 'none');
 await b.close(); srv.close();
 process.exit(errs.length ? 1 : 0);
