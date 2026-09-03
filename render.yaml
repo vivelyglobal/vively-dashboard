@@ -2,7 +2,13 @@ services:
   - type: web
     name: vively-dashboard
     runtime: node
-    plan: free
+    # No plan line on purpose. Render only manages the instance type from
+    # this file when it is named here, so leaving it out means the tier set
+    # in the dashboard is the one that sticks — and this file cannot quietly
+    # pull a paid service back down to free on the next blueprint sync.
+    # A brand new service created from this blueprint would need the plan
+    # chosen in the dashboard, or a `plan:` line added back with the exact
+    # id from Settings -> Instance Type.
     buildCommand: npm install && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
