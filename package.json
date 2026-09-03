@@ -18,7 +18,8 @@
     "check:ids": "node tools/seed.mjs > tmp/seed.json && node tools/duplicate-ids-page.mjs && node tools/rehome-safety.mjs",
     "check:visit": "node tools/seed.mjs > tmp/seed.json && node tools/visit-edit-page.mjs",
     "check:social": "node tools/seed.mjs > tmp/seed.json && node tools/social-page.mjs",
-    "check:webhook": "node tools/webhook-post.mjs"
+    "check:webhook": "node tools/webhook-post.mjs",
+    "check:collabdiag": "node tools/collab-diag-http.mjs"
   },
   "engines": {
     "node": ">=18"

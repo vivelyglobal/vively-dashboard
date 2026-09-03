@@ -66,7 +66,17 @@ const META_INSTAGRAM_APP_SECRET = readEnv("META_INSTAGRAM_APP_SECRET");
 const SIGNATURE_CANDIDATES = { basic: META_APP_BASIC_SECRET, instagram: META_INSTAGRAM_APP_SECRET };
 const HAVE_CANDIDATES = !!(META_APP_BASIC_SECRET || META_INSTAGRAM_APP_SECRET);
 
+/* The collab diagnostic runs server-side so INSTAGRAM_ACCESS_TOKEN
+   never has to leave Render. Nothing else on this API is authenticated,
+   so this route carries its own key: without DIAGNOSTIC_KEY set it does
+   not answer at all, which is the safe default for a route that spends
+   our Meta rate limit and returns our media. */
+const DIAGNOSTIC_KEY = readEnv("DIAGNOSTIC_KEY");
+/* only ever set in tests, to point the probe at a stub instead of Meta */
+const IG_PROBE_BASE = readEnv("IG_PROBE_BASE");
+
 const igWebhook = require("./server/instagram-webhook.js");
+const igCollabProbe = require("./server/instagram-collab-probe.js");
 
 let mongoClientPromise = null;
 function getMongoClient() {
@@ -1494,6 +1504,99 @@ app.get("/api/webhooks/instagram/status", async (req, res) => {
               : "Deliveries are arriving and being stored.")
       : "Could not read the delivery log."
   });
+});
+
+/* ==================================================================
+   COLLAB DIAGNOSTIC
+
+   Answers one question — does Meta hand us insights for a Reel we were
+   invited to collaborate on? — using the token already in Render, so
+   it never has to be copied anywhere.
+
+   Read-only in every direction: every Meta call is a GET, and the only
+   thing read from the database is the list of post URLs we already
+   track, so the report can say how many of them are reachable. Nothing
+   is written.
+
+   Registered above the "*" catch-all, or a GET here would return
+   index.html with a 200.
+   ================================================================== */
+
+/* One at a time, with a cooldown. The route is on the public internet
+   and each run spends ~20 calls of a shared hourly Meta budget, so
+   hammering it would cost real quota. */
+let probeRunning = false;
+let probeLastRunAt = 0;
+/* A minute between runs in production. The harness turns it down so a
+   suite can run twice; it is a rate-limit courtesy, not a security
+   control, so an override is safe to expose. */
+const PROBE_COOLDOWN_MS = Number(readEnv("PROBE_COOLDOWN_MS")) || 60 * 1000;
+
+app.get("/api/diagnostics/instagram-collab", async (req, res) => {
+  /* No key configured means the diagnostic is off. Failing closed
+     matters more than usual here: nothing else on this API is
+     authenticated, so an ungated route would let anyone read our media
+     and drain the rate limit. */
+  if (!DIAGNOSTIC_KEY) {
+    return res.status(404).json({ error: "Not found." });
+  }
+  const given = req.get("x-diagnostic-key") || req.query.key || "";
+  if (!igWebhook.tokensMatch(given, DIAGNOSTIC_KEY)) {
+    console.error("Collab diagnostic: refused, bad or missing key.");
+    return res.status(403).json({ error: "Forbidden." });
+  }
+  if (!INSTAGRAM_ACCESS_TOKEN) {
+    return res.status(503).json({ error: "INSTAGRAM_ACCESS_TOKEN is not set on this service." });
+  }
+  if (probeRunning) {
+    return res.status(429).json({ error: "A probe is already running. Try again in a moment." });
+  }
+  const since = Date.now() - probeLastRunAt;
+  if (probeLastRunAt && since < PROBE_COOLDOWN_MS) {
+    return res.status(429).json({
+      error: "Cooling down so we do not spend the Meta rate limit.",
+      retryInSeconds: Math.ceil((PROBE_COOLDOWN_MS - since) / 1000)
+    });
+  }
+
+  probeRunning = true;
+  probeLastRunAt = Date.now();
+  try {
+    /* the URLs we already track, read straight out of the workspace —
+       a read, and the only database access this route makes */
+    let knownUrls = [];
+    try {
+      const doc = await loadWorkspaceDoc();
+      knownUrls = (((doc && doc.db) || {}).socialContent || [])
+        .filter((c) => c && /^https?:\/\//.test(String(c.url || "")))
+        .map((c) => ({ url: c.url, handle: c.username || null }));
+    } catch (e) {
+      console.error("Collab diagnostic: could not read tracked URLs:", e.message);
+    }
+
+    const report = await igCollabProbe.runProbe({
+      token: INSTAGRAM_ACCESS_TOKEN,
+      base: IG_PROBE_BASE || undefined,
+      knownUrls,
+      maxPages: Math.min(Number(req.query.pages) || 4, 10),
+      allInsights: req.query.all === "1",
+      mediaId: req.query.media || null,
+      deadlineMs: 45000
+    });
+
+    /* the summary line is the only thing that reaches stdout — no
+       token, no captions, no permalinks */
+    console.log("Collab diagnostic: %s · %d media · %d owned by others · %d calls",
+      report.verdict || report.fatal || "no verdict", report.mediaReturned || 0,
+      (report.ownership && report.ownership.ownedByOthers) || 0, report.calls || 0);
+
+    res.json(report);
+  } catch (err) {
+    console.error("Collab diagnostic failed:", err.message);
+    res.status(500).json({ error: "The probe did not complete." });
+  } finally {
+    probeRunning = false;
+  }
 });
 
 app.get("*", (req, res) => {
