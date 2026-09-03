@@ -167,6 +167,83 @@ await step('a signed delivery with no events still answers 200', async () => {
   if (r.status !== 200) throw new Error('status ' + r.status);
 });
 
+/* ---- the four states must not look like one ---------------------------- */
+
+const status = async () => (await fetch(BASE + '/api/webhooks/instagram/status')).json();
+
+await step('a signed delivery in a shape we do not parse is kept, not silently dropped', async () => {
+  /* exactly what Meta's Test button sends: a bare sample, no entry[]
+     envelope. This used to answer 200 and leave nothing behind, which
+     is why "Test successful" sat next to a count of zero. */
+  const before = (await status()).last24h;
+  const body = Buffer.from(JSON.stringify({
+    field: 'messages',
+    /* unique per run: the dedup is content-addressed, so a fixed fixture
+       is a duplicate the second time and the step fails against its own
+       earlier success */
+    run: Date.now(),
+    value: {
+      sender: { id: '12334' }, recipient: { id: '23245' },
+      timestamp: '1527459824', message: { mid: 'random_mid', text: 'random_text' }
+    }
+  }));
+  const r = await post(body, sign(body));
+  if (r.status !== 200) throw new Error('status ' + r.status);
+  const out = await r.json();
+  if (out.received !== 0) throw new Error('it should parse no events, got ' + out.received);
+  if (out.unrecognised !== 1) throw new Error('it was not kept: unrecognised=' + out.unrecognised);
+
+  const after = (await status()).last24h;
+  if (after.unrecognised !== before.unrecognised + 1)
+    throw new Error(`unrecognised went ${before.unrecognised} -> ${after.unrecognised}`);
+  if (after.stored !== before.stored)
+    throw new Error('an unparsed delivery must not be counted as a stored event');
+});
+
+await step('a refused delivery is counted, without keeping what was sent', async () => {
+  const before = (await status()).last24h;
+  const body = Buffer.from(JSON.stringify({ object: 'instagram', entry: [], secret: 'attacker-payload-' + Date.now() }));
+  const r = await post(body, sign(body, 'the-wrong-secret'));
+  if (r.status !== 403) throw new Error('status ' + r.status);
+
+  const after = (await status()).last24h;
+  if (after.rejected !== before.rejected + 1)
+    throw new Error(`rejected went ${before.rejected} -> ${after.rejected}`);
+  if (after.stored !== before.stored || after.unrecognised !== before.unrecognised)
+    throw new Error('a refused delivery must not count as received content');
+});
+
+await step('the body of a refused delivery is not stored anywhere', async () => {
+  /* it failed the signature, so it is unverified input from an unknown
+     sender — counting it is useful, keeping it is not */
+  const marker = 'attacker-payload-' + Date.now();
+  const body = Buffer.from(JSON.stringify({ object: 'instagram', evil: marker }));
+  await post(body, sign(body, 'the-wrong-secret'));
+  const st = await status();
+  if (JSON.stringify(st).includes(marker)) throw new Error('the refused body leaked into the status');
+});
+
+await step('the four states are each reported separately', async () => {
+  const st = await status();
+  for (const k of ['received', 'stored', 'unrecognised', 'rejected'])
+    if (typeof st.last24h[k] !== 'number') throw new Error('missing count: ' + k);
+  const { received, stored, unrecognised, rejected } = st.last24h;
+  if (received !== stored + unrecognised + rejected)
+    throw new Error(`received ${received} != ${stored} + ${unrecognised} + ${rejected}`);
+  if (!st.reading) throw new Error('no plain-language reading');
+});
+
+await step('a repeated refusal is counted once, not once per retry', async () => {
+  /* this one is deliberately the same body twice WITHIN the run — that is
+     what it is testing — but different between runs */
+  const body = Buffer.from(JSON.stringify({ object: 'instagram', repeated: 'refusal-' + Date.now() }));
+  await post(body, sign(body, 'the-wrong-secret'));
+  const a = (await status()).last24h.rejected;
+  await post(body, sign(body, 'the-wrong-secret'));
+  const b = (await status()).last24h.rejected;
+  if (b !== a) throw new Error(`the same refused body counted twice (${a} -> ${b})`);
+});
+
 await step('the status endpoint reports configuration without revealing it', async () => {
   const r = await fetch(BASE + '/api/webhooks/instagram/status');
   const out = await r.json();

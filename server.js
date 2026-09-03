@@ -1189,6 +1189,22 @@ app.post("/api/webhooks/instagram", async (req, res) => {
     /* the header itself is never logged: it is a keyed digest of the
        body and there is no reason to write it down */
     console.error("Instagram webhook: bad or missing signature — rejected.");
+    /* Leave a trace, but NOT the payload. This body failed the signature
+       check, so it is unverified input from an unknown sender and storing
+       it would be storing whatever a stranger posted at us. The hash is
+       enough to dedup a repeat and to tell one refused caller from many.
+       Diagnostics must never be the reason a 403 fails to happen, so a
+       problem writing it is swallowed. */
+    try {
+      await storeInstagramEvent({
+        _id: "rej:" + crypto.createHash("sha256").update(raw || Buffer.alloc(0)).digest("hex").slice(0, 32),
+        kind: "rejected",
+        reason: req.get("x-hub-signature-256") ? "signature did not match" : "no signature header",
+        bytes: raw ? raw.length : 0,
+        receivedAt: new Date(),
+        processedAt: null
+      });
+    } catch (e) { /* diagnostics only */ }
     return res.status(403).json({ error: "Invalid signature." });
   }
 
@@ -1234,10 +1250,34 @@ app.post("/api/webhooks/instagram", async (req, res) => {
     return res.status(503).json({ error: "Could not store the event." });
   }
 
+  /* A validly signed delivery whose shape we do not parse used to answer
+     200 and leave nothing behind — which is exactly what Meta's Test
+     button sends, and why "Test successful" sat next to a count of zero
+     with no way to tell the two apart. It is signed, so it genuinely
+     came from Meta: keep the whole thing, and keep it visibly separate
+     from the events we understand. */
+  let unrecognised = 0;
   if (!parsed.events.length) {
-    console.log("Instagram webhook: signed delivery with no events in it (object=%s).", parsed.object || "?");
+    console.log("Instagram webhook: signed delivery in a shape we do not parse (object=%s) — stored for inspection.",
+      parsed.object || "?");
+    try {
+      const outcome = await storeInstagramEvent({
+        _id: "unk:" + crypto.createHash("sha256").update(raw).digest("hex").slice(0, 32),
+        kind: "unrecognised",
+        object: parsed.object || "",
+        topLevelKeys: Object.keys(payload || {}),
+        bytes: raw.length,
+        receivedAt: new Date(),
+        processedAt: null,
+        raw: payload
+      });
+      if (outcome === "duplicate") duplicate++; else unrecognised++;
+    } catch (err) {
+      console.error("Instagram webhook: could not store an unrecognised delivery:", err.message);
+      return res.status(503).json({ error: "Could not store the event." });
+    }
   }
-  res.status(200).json({ ok: true, received: parsed.events.length, stored, duplicate });
+  res.status(200).json({ ok: true, received: parsed.events.length, stored, unrecognised, duplicate });
 
   /* Phase 2 hangs off here — matching a link to a participant, and
      the reply. Deliberately after the response, and deliberately
@@ -1249,15 +1289,49 @@ app.post("/api/webhooks/instagram", async (req, res) => {
    revealing any of it. Says whether each secret is present, never
    what it is. */
 app.get("/api/webhooks/instagram/status", async (req, res) => {
-  let recent = null;
+  /* Four states used to look like one number. A delivery that was
+     refused, one that arrived in a shape we do not parse, and one that
+     never arrived at all all showed as zero — so "Test successful" next
+     to a zero was unreadable. They are counted apart now. */
+  const emptyTally = { received: 0, messages: 0, changes: 0, unrecognised: 0, rejected: 0 };
+  const tally = Object.assign({}, emptyTally);
+  let lastDeliveryAt = null;
+  let counted = true;
+
   try {
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const col = await instagramEventsCollection();
-    recent = col
-      ? await col.countDocuments({ receivedAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } })
-      : igMemoryEvents.size;
+    if (col) {
+      const rows = await col.aggregate([
+        { $match: { receivedAt: { $gte: since } } },
+        { $group: { _id: "$kind", n: { $sum: 1 }, newest: { $max: "$receivedAt" } } }
+      ]).toArray();
+      rows.forEach((r) => {
+        const key = r._id === "message" ? "messages"
+          : r._id === "change" ? "changes"
+          : r._id === "unrecognised" ? "unrecognised"
+          : r._id === "rejected" ? "rejected" : null;
+        if (key) tally[key] += r.n;
+        tally.received += r.n;
+        if (r.newest && (!lastDeliveryAt || r.newest > lastDeliveryAt)) lastDeliveryAt = r.newest;
+      });
+    } else {
+      [...igMemoryEvents.values()].forEach((d) => {
+        if (!d.receivedAt || d.receivedAt < since) return;
+        const key = d.kind === "message" ? "messages"
+          : d.kind === "change" ? "changes"
+          : d.kind === "unrecognised" ? "unrecognised"
+          : d.kind === "rejected" ? "rejected" : null;
+        if (key) tally[key] += 1;
+        tally.received += 1;
+        if (!lastDeliveryAt || d.receivedAt > lastDeliveryAt) lastDeliveryAt = d.receivedAt;
+      });
+    }
   } catch (e) {
-    recent = null;
+    counted = false;
   }
+
+  const stored = tally.messages + tally.changes;
   res.json({
     ok: true,
     verifyToken: META_WEBHOOK_VERIFY_TOKEN ? "set" : "missing",
@@ -1265,7 +1339,27 @@ app.get("/api/webhooks/instagram/status", async (req, res) => {
     instagramAccessToken: INSTAGRAM_ACCESS_TOKEN ? "set" : "missing",
     instagramAccountId: INSTAGRAM_ACCOUNT_ID ? "set" : "missing",
     storage: MONGODB_URI ? "database" : "memory (development only)",
-    deliveriesLast24h: recent
+    /* kept so anything already reading this field still works — it has
+       always meant "events we recognised and stored" */
+    deliveriesLast24h: counted ? stored : null,
+    last24h: counted ? {
+      received: tally.received,
+      stored,
+      messages: tally.messages,
+      changes: tally.changes,
+      unrecognised: tally.unrecognised,
+      rejected: tally.rejected
+    } : null,
+    lastDeliveryAt: lastDeliveryAt || null,
+    reading: counted
+      ? (tally.received === 0
+          ? "Nothing has reached this endpoint in 24h — Meta is not sending, or not to this URL."
+          : tally.rejected && !stored && !tally.unrecognised
+            ? "Deliveries are arriving and being refused — META_APP_SECRET does not match the app secret in Meta."
+            : tally.unrecognised && !stored
+              ? "Signed deliveries are arriving in a shape we do not parse yet — stored for inspection."
+              : "Deliveries are arriving and being stored.")
+      : "Could not read the delivery log."
   });
 });
 
