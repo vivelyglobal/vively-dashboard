@@ -27,6 +27,26 @@ const MONGODB_URI = process.env.MONGODB_URI || "";
 const MONGODB_DB = process.env.MONGODB_DB || "vively";
 const WORKSPACE_ID = "shared"; // one shared workspace for the whole team, same as today's Google Sheet sync
 
+/* ------------------------------------------------------------------
+   Instagram webhook.
+
+   META_APP_SECRET signs every delivery; META_WEBHOOK_VERIFY_TOKEN is
+   the string Meta echoes back once, when the subscription is first
+   set up. The two INSTAGRAM_* values are not needed to RECEIVE an
+   event — they are for fetching metrics later — so a missing one must
+   not stop a webhook from being accepted.
+
+   None of these are ever logged. read() exists so a stray copy-paste
+   with whitespace does not silently produce a signature mismatch that
+   looks like an attack.
+   ------------------------------------------------------------------ */
+const readEnv = (k) => String(process.env[k] || "").trim();
+const META_APP_SECRET = readEnv("META_APP_SECRET");
+const META_WEBHOOK_VERIFY_TOKEN = readEnv("META_WEBHOOK_VERIFY_TOKEN");
+const INSTAGRAM_ACCESS_TOKEN = readEnv("INSTAGRAM_ACCESS_TOKEN");
+const INSTAGRAM_ACCOUNT_ID = readEnv("INSTAGRAM_ACCOUNT_ID");
+const igWebhook = require("./server/instagram-webhook.js");
+
 let mongoClientPromise = null;
 function getMongoClient() {
   if (!MONGODB_URI) return null;
@@ -448,6 +468,15 @@ function publicUser(user) {
     createdAt: user.createdAt
   };
 }
+
+/* The signature is an HMAC over the bytes Meta actually sent, so this
+   one path keeps its raw Buffer. It has to be registered BEFORE the
+   global JSON parser below: once express.json() has run, the original
+   bytes are gone and re-serialising req.body yields different ones —
+   a check written that way passes hand-made test payloads and fails
+   real traffic. body-parser skips a request whose body is already
+   set, so nothing downstream double-parses. */
+app.use("/api/webhooks/instagram", express.raw({ type: "*/*", limit: "1mb" }));
 
 app.use(express.json({ limit: "10mb" }));
 
@@ -1044,6 +1073,176 @@ app.post("/api/login", async (req, res) => {
     console.error("POST /api/login failed:", err.message);
     return res.status(502).json({ error: "Could not reach the database." });
   }
+});
+
+
+/* ==================================================================
+   INSTAGRAM WEBHOOK
+
+   Registered above the "*" catch-all on purpose. Without that, a GET
+   here would fall through and return index.html with a 200, and Meta's
+   verification would fail in a way that looks like a success.
+   ================================================================== */
+
+/* Raw deliveries live in their own collection, never in the workspace
+   document: that document is saved with an optimistic revision check,
+   so a webhook writing into it would collide with whoever has the
+   dashboard open. Same reason partner comments have their own home. */
+async function instagramEventsCollection() {
+  const client = await getMongoClient();
+  if (!client) return null;
+  const col = client.db(MONGODB_DB).collection("instagram_events");
+  if (!instagramEventsCollection._ready) {
+    instagramEventsCollection._ready = true;
+    /* A raw delivery is evidence, not a record we keep forever. Thirty
+       days is long enough to debug a bad week and short enough that a
+       person's messages are not stored indefinitely. */
+    col.createIndex({ receivedAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 30 })
+      .catch((e) => console.error("instagram_events TTL index:", e.message));
+    col.createIndex({ processedAt: 1 })
+      .catch((e) => console.error("instagram_events index:", e.message));
+  }
+  return col;
+}
+
+/* Without a database configured the webhook still has to be testable,
+   so deliveries are held in memory instead. Dev only, and it says so:
+   the process forgets everything on restart, which is exactly why it
+   is not what production runs on. */
+const igMemoryEvents = new Map();
+
+async function storeInstagramEvent(doc) {
+  const col = await instagramEventsCollection();
+  if (!col) {
+    if (igMemoryEvents.has(doc._id)) return "duplicate";
+    igMemoryEvents.set(doc._id, doc);
+    /* bounded, so a long dev session cannot grow without limit */
+    if (igMemoryEvents.size > 500) igMemoryEvents.delete(igMemoryEvents.keys().next().value);
+    return "stored";
+  }
+  try {
+    await col.insertOne(doc);
+    return "stored";
+  } catch (err) {
+    /* the unique _id IS the dedup — a Meta retry lands here and is a
+       no-op rather than a second copy of the same message */
+    if (err && err.code === 11000) return "duplicate";
+    throw err;
+  }
+}
+
+/* GET — the one-time handshake when the subscription is created. */
+app.get("/api/webhooks/instagram", (req, res) => {
+  if (!META_WEBHOOK_VERIFY_TOKEN) {
+    console.error("Instagram webhook verify attempted, but META_WEBHOOK_VERIFY_TOKEN is not set.");
+    return res.status(503).type("text/plain").send("Not configured");
+  }
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+
+  if (mode === "subscribe" && igWebhook.tokensMatch(token, META_WEBHOOK_VERIFY_TOKEN)) {
+    console.log("Instagram webhook verified.");
+    /* echoed back as plain text, exactly as sent — Meta compares the
+       body byte for byte, so no JSON wrapper and no trailing newline */
+    return res.status(200).type("text/plain").send(String(challenge == null ? "" : challenge));
+  }
+  console.error("Instagram webhook verification refused (mode=%s).", String(mode || ""));
+  return res.status(403).type("text/plain").send("Forbidden");
+});
+
+/* POST — deliveries. Verify, persist, answer 200, then do the slow
+   part. Nothing slow exists yet; the shape is here so that when it
+   does, Meta is never waiting on it. */
+app.post("/api/webhooks/instagram", async (req, res) => {
+  if (!META_APP_SECRET) {
+    console.error("Instagram webhook delivery refused: META_APP_SECRET is not set.");
+    return res.status(503).json({ error: "Not configured." });
+  }
+
+  const raw = Buffer.isBuffer(req.body) ? req.body : null;
+  if (!igWebhook.verifySignature(raw, req.get("x-hub-signature-256"), META_APP_SECRET)) {
+    /* the header itself is never logged: it is a keyed digest of the
+       body and there is no reason to write it down */
+    console.error("Instagram webhook: bad or missing signature — rejected.");
+    return res.status(403).json({ error: "Invalid signature." });
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(raw.toString("utf8"));
+  } catch (err) {
+    console.error("Instagram webhook: signed body was not JSON.");
+    return res.status(400).json({ error: "Malformed payload." });
+  }
+
+  const parsed = igWebhook.parseWebhookPayload(payload);
+  const receivedAt = new Date();
+  let stored = 0, duplicate = 0;
+
+  try {
+    for (const ev of parsed.events) {
+      const outcome = await storeInstagramEvent({
+        _id: ev.dedupKey,
+        object: parsed.object,
+        kind: ev.kind,
+        entryId: ev.entryId,
+        senderId: ev.senderId || null,
+        recipientId: ev.recipientId || null,
+        messageId: ev.messageId || null,
+        field: ev.field || null,
+        isEcho: !!ev.isEcho,
+        text: ev.text || "",
+        attachments: ev.attachments || [],
+        postUrls: ev.postUrls || [],
+        sentAt: ev.timestamp || null,
+        receivedAt,
+        processedAt: null,
+        raw: ev.raw
+      });
+      if (outcome === "duplicate") duplicate++; else stored++;
+      console.log("Instagram webhook: %s [%s]", igWebhook.logLineFor(ev), outcome);
+    }
+  } catch (err) {
+    /* Answering 200 on a failed write would lose the delivery for
+       good. A 503 asks Meta to send it again, which is recoverable. */
+    console.error("Instagram webhook: could not store delivery:", err.message);
+    return res.status(503).json({ error: "Could not store the event." });
+  }
+
+  if (!parsed.events.length) {
+    console.log("Instagram webhook: signed delivery with no events in it (object=%s).", parsed.object || "?");
+  }
+  res.status(200).json({ ok: true, received: parsed.events.length, stored, duplicate });
+
+  /* Phase 2 hangs off here — matching a link to a participant, and
+     the reply. Deliberately after the response, and deliberately
+     empty for now. */
+  setImmediate(() => {});
+});
+
+/* A quiet way to see whether the plumbing is configured, without
+   revealing any of it. Says whether each secret is present, never
+   what it is. */
+app.get("/api/webhooks/instagram/status", async (req, res) => {
+  let recent = null;
+  try {
+    const col = await instagramEventsCollection();
+    recent = col
+      ? await col.countDocuments({ receivedAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } })
+      : igMemoryEvents.size;
+  } catch (e) {
+    recent = null;
+  }
+  res.json({
+    ok: true,
+    verifyToken: META_WEBHOOK_VERIFY_TOKEN ? "set" : "missing",
+    appSecret: META_APP_SECRET ? "set" : "missing",
+    instagramAccessToken: INSTAGRAM_ACCESS_TOKEN ? "set" : "missing",
+    instagramAccountId: INSTAGRAM_ACCOUNT_ID ? "set" : "missing",
+    storage: MONGODB_URI ? "database" : "memory (development only)",
+    deliveriesLast24h: recent
+  });
 });
 
 app.get("*", (req, res) => {
