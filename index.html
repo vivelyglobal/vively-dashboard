@@ -9275,6 +9275,766 @@ function settingsCalendar(view) {
 }
 
 /* ============================================================
+   SOCIAL STATS — every number the Overview shows
+
+   Deliberately free of the DOM: the Overview reads these, the tests
+   read these, and nothing here knows a chart exists. Where the data
+   cannot answer a question the answer is null or a stated gap, never
+   a zero dressed up as a measurement — 54 of 97 posts currently have
+   no metrics at all, and a chart that folds them into "under 1K"
+   would be lying about the distribution.
+   ============================================================ */
+
+/* Creator nationality is free text typed into a Notion form, and it
+   shows: Japan arrives as Japan, JAPAN, japan, 日本, 일본 and 🇯🇵, all
+   of which are the same market. Left raw, the market chart splits one
+   country into six slivers and reads as noise.
+
+   This map is display-only. It never rewrites the creator record or
+   anything in Notion — the roster keeps whatever was typed, and the
+   Overview groups it on the way past. Canonical name first, then
+   every spelling seen in the data. */
+const COUNTRY_ALIASES = {
+  Japan: ['japan', '日本', '일본', '🇯🇵', 'jp', 'japanese'],
+  India: ['india', 'indian'],
+  Indonesia: ['indonesia', 'indonesian'],
+  Iran: ['iran', 'iranian', 'persian'],
+  Morocco: ['morocco', 'moroccan', 'korean moroccan'],
+  Egypt: ['egypt', 'egyptian'],
+  'United States': ['usa', 'us', 'u.s.', 'united states', 'american'],
+  Korea: ['korea', 'south korea', 'republic of korea', 'repbulic of korea', 'korean', '한국'],
+  Philippines: ['philippines', 'philippines (filipino)', 'filipino'],
+  Ukraine: ['ukraine', 'ukrainian'],
+  Russia: ['russia', 'russian'],
+  Uzbekistan: ['uzbekistan', 'uzbek'],
+  Tajikistan: ['tajikistan', 'tajik'],
+  Colombia: ['colombia', 'colombian'],
+  Sweden: ['sweden', 'swedish'],
+  Nepal: ['nepal', 'nepali'],
+  Pakistan: ['pakistan', 'pakistani'],
+  Thailand: ['thailand', 'thai'],
+  Bahrain: ['bahrain', 'bahraini'],
+  Turkey: ['turkey', 'turkish'],
+  Malaysia: ['malaysia', 'malaysian'],
+  Uganda: ['uganda', 'ugandan'],
+  Spain: ['spain', 'spanish'],
+  France: ['france', 'french'],
+  Singapore: ['singapore', 'singapore citizen', 'singaporean']
+};
+
+const COUNTRY_LOOKUP = (() => {
+  const out = {};
+  Object.keys(COUNTRY_ALIASES).forEach((canon) => {
+    out[canon.toLowerCase()] = canon;
+    COUNTRY_ALIASES[canon].forEach((a) => { out[a] = canon; });
+  });
+  return out;
+})();
+
+/* An unrecognised value is title-cased and kept rather than dropped —
+   a market we have not mapped is still a market, and swallowing it
+   would quietly shrink the totals. */
+function normaliseCountry(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return '';
+  const hit = COUNTRY_LOOKUP[s.toLowerCase()];
+  if (hit) return hit;
+  return s.length <= 3 ? s.toUpperCase() : s[0].toUpperCase() + s.slice(1).toLowerCase();
+}
+
+/* Which raw spellings the map does not cover, so it can be kept up to
+   date instead of silently rotting as new creators are added. */
+function unmappedCountries(creators) {
+  const seen = new Map();
+  (creators || []).forEach((cr) => {
+    const raw = String((cr && cr.nationality) || '').trim();
+    if (!raw) return;
+    if (COUNTRY_LOOKUP[raw.toLowerCase()]) return;
+    seen.set(raw, (seen.get(raw) || 0) + 1);
+  });
+  return [...seen.entries()].map(([value, n]) => ({ value, n })).sort((a, b) => b.n - a.n);
+}
+
+/* A post counts as measured when someone recorded a view count for it.
+   Everything that averages or buckets views works off this, so an
+   unmeasured post never drags a mean towards zero. */
+const isMeasured = (c) => Number(c && c.views) > 0;
+
+/* The date the Overview plots against.
+
+   `postedAt` looked like the obvious choice and is not: it carries
+   only three distinct values across all 97 posts and matches the
+   campaign start date on three of the four campaigns, so it is a
+   fallback rather than a record of when anything was published.
+   `metricsAt` — the Metrics Updated column the team fills in — has 27
+   distinct dates over four weeks. It means "when we measured", which
+   is a weaker claim than "when it went up" but a true one. */
+function contentDate(c, mode) {
+  if (!c) return '';
+  /* Strict per axis, with no falling back to the other one. An earlier
+     draft let a post with no metricsAt borrow its postedAt, which put
+     posts nobody has ever measured onto an axis labelled "measurement
+     date" — a reading that was never taken, drawn as if it had been.
+     A post with no date on the chosen axis simply is not on it. */
+  const pick = mode === 'posted' ? (c.postedAt || c.publishedAt) : c.metricsAt;
+  return String(pick || '').slice(0, 10);
+}
+
+/* One row per post with everything the page needs already resolved, so
+   the KPI row, the charts and the cards cannot disagree. */
+function overviewRows(db) {
+  const d = db || DB;
+  const creators = d.creators || [];
+  const campaigns = d.campaigns || [];
+  const crById = {}; creators.forEach((c) => { crById[c.id] = c; });
+  const cpById = {}; campaigns.forEach((c) => { cpById[c.id] = c; });
+
+  return (d.socialContent || []).map((c) => {
+    const cr = crById[c.creatorId] || null;
+    const cp = cpById[c.campaignId] || null;
+    const views = Number(c.views) || 0;
+    const eng = (Number(c.likes) || 0) + (Number(c.comments) || 0) +
+                (Number(c.shares) || 0) + (Number(c.saves) || 0);
+    const followers = Number(cr && cr.followers) || 0;
+    return {
+      c, cr, cp,
+      id: c.id,
+      handle: c.username || (cr && cr.handle) || '',
+      platform: c.platform || 'Other',
+      campaignId: c.campaignId || '',
+      campaignName: (cp && (cp.name || cp.brand)) || 'Unassigned',
+      market: normaliseCountry(cr && cr.nationality),
+      views,
+      measured: isMeasured(c),
+      engagements: eng,
+      /* rate over views, and only where views exist — dividing by zero
+         produced Infinity in an earlier draft and painted a full bar */
+      rate: views > 0 ? (eng / views) * 100 : null,
+      followers,
+      viewsPerFollower: followers > 0 && views > 0 ? views / followers : null
+    };
+  });
+}
+
+function overviewFilter(rows, f) {
+  const q = f || {};
+  return rows.filter((r) => {
+    if (q.campaign && r.campaignId !== q.campaign) return false;
+    if (q.platform && r.platform !== q.platform) return false;
+    if (q.market && r.market !== q.market) return false;
+    if (q.from || q.to) {
+      const d = contentDate(r.c, q.dateMode);
+      if (!d) return false;
+      if (q.from && d < q.from) return false;
+      if (q.to && d > q.to) return false;
+    }
+    return true;
+  });
+}
+
+/* The KPI row. avgViews divides by measured posts, not by all of them:
+   550,118 over 43 measured is 12,793, over all 97 it is 5,671, and the
+   second number describes our data entry rather than our content. The
+   coverage is returned alongside so the card can show it rather than
+   burying it in the denominator. */
+function overviewKpis(rows) {
+  const measured = rows.filter((r) => r.measured);
+  const views = rows.reduce((a, r) => a + r.views, 0);
+  const engagements = rows.reduce((a, r) => a + r.engagements, 0);
+  const measuredViews = measured.reduce((a, r) => a + r.views, 0);
+  return {
+    content: rows.length,
+    views,
+    engagements,
+    rate: measuredViews > 0 ? (engagements / measuredViews) * 100 : null,
+    avgViews: measured.length ? measuredViews / measured.length : null,
+    creators: new Set(rows.map((r) => r.c.creatorId).filter(Boolean)).size,
+    measuredCount: measured.length,
+    coverage: rows.length ? measured.length / rows.length : 0
+  };
+}
+
+const OVERVIEW_METRICS = {
+  views:   { label: 'Views',       of: (g) => g.views },
+  eng:     { label: 'Engagement',  of: (g) => g.engagements },
+  rate:    { label: 'Eng. rate',   of: (g) => (g.measuredViews > 0 ? (g.engagements / g.measuredViews) * 100 : 0) },
+  content: { label: 'Content',     of: (g) => g.content },
+  creators:{ label: 'Creators',    of: (g) => g.creators }
+};
+
+/* Group rows by any key and roll up every metric once, so switching the
+   metric selector never re-reads the source rows. */
+function groupRollup(rows, keyOf, labelOf) {
+  const map = new Map();
+  rows.forEach((r) => {
+    const key = keyOf(r);
+    if (key == null || key === '') return;
+    if (!map.has(key)) {
+      map.set(key, { key, label: labelOf ? labelOf(r) : key, content: 0, views: 0,
+        engagements: 0, measured: 0, measuredViews: 0, creatorIds: new Set() });
+    }
+    const g = map.get(key);
+    g.content += 1;
+    g.views += r.views;
+    g.engagements += r.engagements;
+    if (r.measured) { g.measured += 1; g.measuredViews += r.views; }
+    if (r.c.creatorId) g.creatorIds.add(r.c.creatorId);
+  });
+  return [...map.values()].map((g) => Object.assign(g, { creators: g.creatorIds.size }));
+}
+
+const byCampaignRollup = (rows) => groupRollup(rows, (r) => r.campaignId, (r) => r.campaignName);
+const byMarketRollup   = (rows) => groupRollup(rows, (r) => r.market, (r) => r.market);
+const byPlatformRollup = (rows) => groupRollup(rows, (r) => r.platform, (r) => r.platform);
+
+/* The time axis. Every date present is a point; there is no
+   interpolation, because a straight line between two measurements
+   would invent readings that were never taken. */
+function overviewSeries(rows, mode) {
+  const map = new Map();
+  rows.forEach((r) => {
+    const d = contentDate(r.c, mode);
+    if (!d) return;
+    if (!map.has(d)) map.set(d, { date: d, views: 0, engagements: 0, content: 0 });
+    const g = map.get(d);
+    g.views += r.views;
+    g.engagements += r.engagements;
+    g.content += 1;
+  });
+  return [...map.values()].sort((a, b) => (a.date < b.date ? -1 : 1));
+}
+
+/* The buckets asked for, plus the one that has to exist: posts nobody
+   has measured. Keeping them out of "under 1K" is the entire point of
+   showing a distribution rather than an average. */
+const VIEW_BUCKETS = [
+  { id: 'lt1k',   label: '<1K',      min: 1,      max: 1000 },
+  { id: '1k5k',   label: '1–5K',     min: 1000,   max: 5000 },
+  { id: '5k10k',  label: '5–10K',    min: 5000,   max: 10000 },
+  { id: '10k50k', label: '10–50K',   min: 10000,  max: 50000 },
+  { id: '50k100k',label: '50–100K',  min: 50000,  max: 100000 },
+  { id: 'gt100k', label: '100K+',    min: 100000, max: Infinity }
+];
+
+function viewDistribution(rows) {
+  const buckets = VIEW_BUCKETS.map((b) => Object.assign({}, b, { n: 0, views: 0 }));
+  let unmeasured = 0;
+  rows.forEach((r) => {
+    if (!r.measured) { unmeasured += 1; return; }
+    const hit = buckets.find((b) => r.views >= b.min && r.views < b.max);
+    if (hit) { hit.n += 1; hit.views += r.views; }
+  });
+  return { buckets, unmeasured, measured: rows.length - unmeasured };
+}
+
+/* Likes, comments and shares are real. Saves is zero on every record
+   because the Notion form has no Saves column — that is missing, not
+   nothing, and the card says so rather than drawing an empty bar and
+   letting someone read it as "nobody saves our content". */
+function engagementSplit(rows) {
+  const sum = (k) => rows.reduce((a, r) => a + (Number(r.c[k]) || 0), 0);
+  const parts = [
+    { id: 'likes',    label: 'Likes',    value: sum('likes') },
+    { id: 'comments', label: 'Comments', value: sum('comments') },
+    { id: 'shares',   label: 'Shares',   value: sum('shares') },
+    { id: 'saves',    label: 'Saves',    value: sum('saves') }
+  ];
+  const total = parts.reduce((a, p) => a + p.value, 0);
+  return {
+    parts: parts.map((p) => Object.assign(p, {
+      share: total > 0 ? p.value / total : 0,
+      /* a metric nobody has ever recorded is unavailable, not zero */
+      unavailable: p.value === 0 && rows.length > 0
+    })),
+    total
+  };
+}
+
+function topContent(rows, n) {
+  return rows.filter((r) => r.measured)
+    .sort((a, b) => b.views - a.views)
+    .slice(0, n || 6);
+}
+
+/* What the page cannot see yet, gathered in one place instead of an
+   amber footnote on every card. */
+function overviewCoverage(rows, db) {
+  const d = db || DB;
+  const creators = d.creators || [];
+  const campaignsWithContent = new Set(rows.map((r) => r.campaignId).filter(Boolean));
+  const measuredCampaigns = new Set(rows.filter((r) => r.measured).map((r) => r.campaignId).filter(Boolean));
+  return [
+    { label: 'Posts with view counts', have: rows.filter((r) => r.measured).length, of: rows.length },
+    { label: 'Campaigns measured', have: measuredCampaigns.size, of: campaignsWithContent.size },
+    { label: 'Creators with followers', have: creators.filter((c) => Number(c.followers) > 0).length, of: creators.length },
+    { label: 'Daily view history', have: rows.filter((r) => (r.c.curve || []).length).length, of: rows.length,
+      note: 'needs the collector' },
+    { label: 'Thumbnails', have: rows.filter((r) => r.c.thumbnailUrl).length, of: rows.length,
+      note: 'needs creator authorisation' }
+  ];
+}
+
+/* ============================================================
+   TWO CHART SHAPES THE LIBRARY DID NOT HAVE
+
+   Everything else on the Overview reuses lineChart, barsH and
+   splitBar. Only these two are new, and they are kept small and
+   dependency-free for the same reason as the rest: one visual
+   language, no second charting stack.
+   ============================================================ */
+
+/* A ring with the count in the middle. Falls back to a table like the
+   other charts do, so the numbers survive when the shape does not. */
+function donutChart(mount, parts, opt) {
+  opt = opt || {};
+  const live = parts.filter((p) => p.value > 0);
+  const total = live.reduce((a, p) => a + p.value, 0);
+  const wrap = document.createElement('div');
+  wrap.className = 'viz';
+
+  if (!total) {
+    wrap.innerHTML = '<div class="empty" style="padding:18px">Nothing to show yet.</div>';
+    mount.appendChild(wrap);
+    return wrap;
+  }
+
+  const R = 45, C = 2 * Math.PI * R;
+  let offset = 0;
+  const arcs = live.map((p) => {
+    const len = (p.value / total) * C;
+    const seg = `<circle cx="59" cy="59" r="${R}" fill="none" stroke="${p.color}" stroke-width="17"
+      stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}"
+      stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 59 59)"><title>${esc(p.label)}: ${num(p.value)}</title></circle>`;
+    offset += len;
+    return seg;
+  }).join('');
+
+  wrap.innerHTML = `<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+    <svg viewBox="0 0 118 118" style="width:118px;height:118px;flex:0 0 118px" role="img"
+         aria-label="${esc(opt.aria || 'breakdown')}">
+      <circle cx="59" cy="59" r="${R}" fill="none" stroke="var(--surface-3)" stroke-width="17"></circle>
+      ${arcs}
+      <text x="59" y="55" text-anchor="middle" style="font:500 21px 'Roboto Mono',monospace;fill:var(--text)">${kmb(total)}</text>
+      <text x="59" y="70" text-anchor="middle" style="font:400 9px 'Roboto Mono',monospace;fill:var(--text-3)">${esc(opt.centreLabel || 'TOTAL')}</text>
+    </svg>
+    <div style="flex:1;min-width:150px;display:flex;flex-direction:column;gap:7px">
+      ${parts.map((p) => `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12.5px;${p.value ? '' : 'opacity:.5'}">
+        <span style="display:flex;align-items:center;gap:7px;min-width:0">
+          <i style="width:8px;height:8px;border-radius:2px;background:${p.value ? p.color : 'var(--surface-3)'};flex:0 0 8px"></i>
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.label)}</span>
+        </span>
+        <span style="font-variant-numeric:tabular-nums;color:var(--text-2);white-space:nowrap">${p.value ? num(p.value) + ' · ' + pct(p.value / total, 1) : '—'}</span>
+      </div>`).join('')}
+    </div>
+  </div>`;
+
+  wrap.appendChild(tableFallback([opt.labelHead || 'Segment', 'Count', 'Share'],
+    live.map((p) => [p.label, num(p.value), pct(p.value / total)])));
+  mount.appendChild(wrap);
+  return wrap;
+}
+
+/* Vertical columns, for a distribution where the buckets have a
+   natural order that a horizontal list would obscure. */
+function columnChart(mount, rows, opt) {
+  opt = opt || {};
+  const H = 190, padL = 34, padB = 34, padT = 18;
+  const W = 340;
+  const max = Math.max(1, ...rows.map((r) => r.value));
+  const innerH = H - padT - padB;
+  const bw = Math.max(10, (W - padL - 10) / rows.length - 14);
+  const step = (W - padL - 10) / rows.length;
+
+  const bars = rows.map((r, i) => {
+    const h = (r.value / max) * innerH;
+    const x = padL + i * step + (step - bw) / 2;
+    const y = padT + innerH - h;
+    return `<rect x="${x.toFixed(1)}" y="${(r.value ? y : padT + innerH - 2).toFixed(1)}" width="${bw.toFixed(1)}"
+       height="${(r.value ? Math.max(h, 2) : 2).toFixed(1)}" rx="2"
+       fill="${r.value ? (r.color || 'var(--s1)') : 'var(--surface-3)'}"><title>${esc(r.label)}: ${num(r.value)}</title></rect>
+      <text x="${(x + bw / 2).toFixed(1)}" y="${(r.value ? y - 5 : padT + innerH - 7).toFixed(1)}" text-anchor="middle"
+        style="font:500 10px 'Roboto Mono',monospace;fill:${r.value ? 'var(--text-2)' : 'var(--text-3)'}">${r.value}</text>
+      <text x="${(x + bw / 2).toFixed(1)}" y="${H - 14}" text-anchor="middle"
+        style="font:400 10px 'Roboto Mono',monospace;fill:var(--text-3)">${esc(r.label)}</text>`;
+  }).join('');
+
+  const wrap = document.createElement('div');
+  wrap.className = 'viz';
+  wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto" role="img" aria-label="${esc(opt.aria || 'distribution')}">
+    <line x1="${padL}" y1="${padT + innerH}" x2="${W - 4}" y2="${padT + innerH}" stroke="var(--axis)"></line>
+    <line x1="${padL}" y1="${padT}" x2="${W - 4}" y2="${padT}" stroke="var(--grid)"></line>
+    <text x="${padL - 6}" y="${padT + 4}" text-anchor="end" style="font:400 10px 'Roboto Mono',monospace;fill:var(--text-3)">${max}</text>
+    <text x="${padL - 6}" y="${padT + innerH + 4}" text-anchor="end" style="font:400 10px 'Roboto Mono',monospace;fill:var(--text-3)">0</text>
+    ${bars}
+  </svg>${opt.foot ? `<div style="font:400 11px/1.4 'Roboto Mono',monospace;color:var(--warning);margin-top:2px">${esc(opt.foot)}</div>` : ''}`;
+  wrap.appendChild(tableFallback([opt.labelHead || 'Bucket', 'Posts'], rows.map((r) => [r.label, num(r.value)])));
+  mount.appendChild(wrap);
+  return wrap;
+}
+
+/* ============================================================
+   SOCIAL — OVERVIEW
+
+   Performance at a glance. The Content page next door stays the
+   searchable operational database; this one exists to be read, not
+   worked in, so there is no table on it.
+
+   Both read the same DB.socialContent array and neither writes.
+   ============================================================ */
+
+const soOverview = { from: '', to: '', campaign: '', platform: '', market: '', metric: 'views', dateMode: 'metrics' };
+
+/* Injected once from here rather than added to the document head — the
+   head is outside the region this module occupies, and editing it
+   would shift every other module's anchors. */
+function ensureOverviewStyles() {
+  if (document.getElementById('soOverviewCss')) return;
+  const s = document.createElement('style');
+  s.id = 'soOverviewCss';
+  s.textContent = `
+  .so-grid{display:grid;grid-template-columns:repeat(12,1fr);gap:14px;align-items:start}
+  .so-grid > .card{min-width:0;margin:0}
+  .so-c12{grid-column:span 12}.so-c8{grid-column:span 8}.so-c7{grid-column:span 7}
+  .so-c5{grid-column:span 5}.so-c4{grid-column:span 4}.so-c2{grid-column:span 2}
+  .so-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:10px}
+  .so-head h4{margin:0;font-size:13px;font-weight:500}
+  .so-hint{font:400 11px/1.35 'Roboto Mono',monospace;color:var(--text-3)}
+  .so-kpi .label{font:500 10.5px/1.2 'Roboto Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3)}
+  .so-kpi .value{font-size:23px;font-weight:400;letter-spacing:-.02em;margin-top:7px;line-height:1.1}
+  .so-kpi .foot{margin-top:7px;min-height:29px;font:400 11px/1.3 'Roboto Mono',monospace;color:var(--text-3)}
+  .so-meter{height:3px;border-radius:2px;background:var(--surface-3);overflow:hidden;margin-top:8px}
+  .so-meter i{display:block;height:100%;background:var(--blue)}
+  .so-seg{display:flex;gap:1px;background:var(--surface-2);border-radius:999px;padding:2px}
+  .so-seg button{font:500 10.5px/1 Roboto,sans-serif;padding:5px 10px;border-radius:999px;border:0;
+    background:transparent;color:var(--text-3);cursor:pointer}
+  .so-seg button[aria-pressed="true"]{background:var(--surface-3);color:var(--text)}
+  .so-filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+  /* width:auto is doing real work — the app's global form rule sets
+     inputs to 100%, which stacked the whole strip into one control per
+     row and turned a compact filter bar into a giant form */
+  .so-filters select,.so-filters input{background:var(--surface);border:1px solid var(--line);color:var(--text);
+    border-radius:999px;padding:7px 12px;font-size:12.5px;font-family:inherit;
+    width:auto;max-width:230px;margin:0;flex:0 0 auto}
+  .so-filters .on{border-color:var(--blue);background:var(--blue-soft)}
+  .so-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .so-tc{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;overflow:hidden;
+    display:flex;flex-direction:column;cursor:pointer;text-align:left;padding:0;font:inherit;color:inherit}
+  .so-tc:hover{border-color:var(--line-strong)}
+  .so-tc:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+  .so-tc .plate{aspect-ratio:4/3;position:relative;display:flex;align-items:flex-end;padding:9px}
+  .so-tc .plate .big{font:500 19px/1 'Roboto Mono',monospace;color:#fff;text-shadow:0 1px 6px rgba(0,0,0,.6)}
+  .so-tc .plate .tag{position:absolute;top:8px;left:8px;font:500 9.5px/1 'Roboto Mono',monospace;
+    background:rgba(0,0,0,.42);color:#fff;border-radius:3px;padding:4px 5px;letter-spacing:.04em}
+  .so-tc .body{padding:9px 10px 11px;display:flex;flex-direction:column;gap:6px}
+  .so-tc .h{font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .so-tc .m{font:400 10.5px/1.35 'Roboto Mono',monospace;color:var(--text-3)}
+  .so-tc .st{display:flex;gap:10px}
+  .so-tc .st div{font:400 10px/1.3 'Roboto Mono',monospace;color:var(--text-3)}
+  .so-tc .st b{display:block;font:500 12px/1.2 'Roboto Mono',monospace;color:var(--text)}
+  .so-gap{font:500 10px/1 'Roboto Mono',monospace;color:var(--warning);border:1px solid rgba(250,178,25,.35);
+    background:rgba(250,178,25,.08);border-radius:3px;padding:3px 5px;white-space:nowrap}
+  .so-row{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;font-size:12px}
+  @media(max-width:1000px){.so-grid{grid-template-columns:repeat(6,1fr)}
+    .so-c12,.so-c8,.so-c7,.so-c5,.so-c4{grid-column:span 6}.so-c2{grid-column:span 3}
+    .so-cards{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:640px){.so-grid{grid-template-columns:1fr}
+    .so-c12,.so-c8,.so-c7,.so-c5,.so-c4,.so-c2{grid-column:span 1}
+    .so-cards{grid-template-columns:1fr}}`;
+  document.head.appendChild(s);
+}
+
+const SOCIAL_OVERVIEW_ITEMS = [
+  { id: 'overview', label: 'Overview', sub: 'performance at a glance' }
+];
+
+/* Instagram truncated to two letters reads as "IN", which is not a
+   platform anyone recognises. */
+const PLATFORM_TAGS = { Instagram: 'IG', TikTok: 'TT', YouTube: 'YT' };
+function platformTag(name) {
+  return PLATFORM_TAGS[name] || String(name || '?').slice(0, 2).toUpperCase();
+}
+
+function soCard(cls, title, hint, bodyId) {
+  return `<div class="card ${cls}">
+    <div class="so-head"><h4>${esc(title)}</h4>${hint ? `<span class="so-hint">${esc(hint)}</span>` : ''}</div>
+    <div id="${bodyId}"></div>
+  </div>`;
+}
+
+function renderSocialOverview(view) {
+  ensureOverviewStyles();
+  const all = overviewRows(DB);
+
+  if (!all.length) {
+    view.innerHTML = emptyState('No published content yet',
+      'Once creators submit links and someone records the numbers, this page fills in. ' +
+      'The Content page next door is where individual posts are managed.');
+    return;
+  }
+
+  const rows = overviewFilter(all, soOverview);
+  const k = overviewKpis(rows);
+  const campaignOpts = [...new Map(all.map((r) => [r.campaignId, r.campaignName])).entries()]
+    .filter(([id]) => id).sort((a, b) => a[1].localeCompare(b[1]));
+  const platformOpts = [...new Set(all.map((r) => r.platform))].sort();
+  const marketOpts = [...new Set(all.map((r) => r.market).filter(Boolean))].sort();
+
+  const sel = (id, label, value, opts) =>
+    `<select id="${id}" class="${value ? 'on' : ''}" aria-label="${esc(label)}">
+      <option value="">${esc(label)}: all</option>
+      ${opts.map(([v, l]) => `<option value="${esc(v)}"${v === value ? ' selected' : ''}>${esc(l)}</option>`).join('')}
+    </select>`;
+
+  view.innerHTML = `
+    <div class="so-filters">
+      <input type="date" id="soFrom" value="${esc(soOverview.from)}" class="${soOverview.from ? 'on' : ''}" aria-label="From"/>
+      <input type="date" id="soTo" value="${esc(soOverview.to)}" class="${soOverview.to ? 'on' : ''}" aria-label="To"/>
+      ${sel('soCampaign', 'Campaign', soOverview.campaign, campaignOpts)}
+      ${sel('soPlatform', 'Platform', soOverview.platform, platformOpts.map((p) => [p, p]))}
+      ${sel('soMarket', 'Market', soOverview.market, marketOpts.map((m) => [m, m]))}
+      <button class="btn sm" id="soReset">Reset</button>
+      <span class="so-hint">${num(rows.length)} of ${num(all.length)} posts</span>
+    </div>
+
+    <div class="so-grid">
+      <div class="card stat so-kpi so-c2"><div class="label">Total content</div>
+        <div class="value">${num(k.content)}</div>
+        <div class="foot">${num(new Set(rows.map((r) => r.campaignId).filter(Boolean)).size)} campaigns</div></div>
+
+      <div class="card stat so-kpi so-c2"><div class="label">Total views</div>
+        <div class="value">${num(k.views)}</div>
+        <div class="foot">${num(k.measuredCount)} of ${num(k.content)} measured</div>
+        <div class="so-meter"><i style="width:${(k.coverage * 100).toFixed(1)}%"></i></div></div>
+
+      <div class="card stat so-kpi so-c2"><div class="label">Engagements</div>
+        <div class="value">${num(k.engagements)}</div>
+        <div class="foot">likes · comments · shares</div></div>
+
+      <div class="card stat so-kpi so-c2"><div class="label">Avg eng. rate</div>
+        <div class="value">${k.rate == null ? '—' : k.rate.toFixed(2) + '<span style="font-size:13px;color:var(--text-2)">%</span>'}</div>
+        <div class="foot">of measured views</div></div>
+
+      <div class="card stat so-kpi so-c2"><div class="label">Avg views / post</div>
+        <div class="value">${k.avgViews == null ? '—' : num(k.avgViews)}</div>
+        <div class="foot">measured only <span class="so-gap">÷${num(k.measuredCount)}</span></div></div>
+
+      <div class="card stat so-kpi so-c2"><div class="label">Creators activated</div>
+        <div class="value">${num(k.creators)}</div>
+        <div class="foot">of ${num((DB.creators || []).length)} on the roster</div>
+        <div class="so-meter"><i style="width:${((DB.creators || []).length ? k.creators / DB.creators.length * 100 : 0).toFixed(1)}%"></i></div></div>
+
+      <div class="card so-c8">
+        <div class="so-head">
+          <div><h4>Performance over time</h4>
+            <div class="so-hint" style="margin-top:3px" id="soTimeNote"></div></div>
+          <div class="so-seg" id="soMetricSeg">
+            <button data-m="views" aria-pressed="${soOverview.metric === 'views'}">Views</button>
+            <button data-m="eng" aria-pressed="${soOverview.metric === 'eng'}">Engagement</button>
+            <button data-m="content" aria-pressed="${soOverview.metric === 'content'}">Published</button>
+          </div>
+        </div>
+        <div id="soTime"></div>
+        <div class="so-seg" id="soDateSeg" style="margin-top:10px;width:max-content">
+          <button data-d="metrics" aria-pressed="${soOverview.dateMode === 'metrics'}">By measurement date</button>
+          <button data-d="posted" aria-pressed="${soOverview.dateMode === 'posted'}">By publish date</button>
+        </div>
+      </div>
+
+      ${soCard('so-c4', 'Platform breakdown', '', 'soPlatformViz')}
+      ${soCard('so-c7', 'Campaign performance', 'click to open', 'soCampaignViz')}
+      ${soCard('so-c5', 'Engagement breakdown', '', 'soEngViz')}
+      ${soCard('so-c5', 'View distribution', '', 'soDistViz')}
+      ${soCard('so-c7', 'Top performing content', 'click opens the post', 'soTopViz')}
+      ${soCard('so-c7', 'Market performance', 'by creator nationality', 'soMarketViz')}
+      ${soCard('so-c5', 'Measurement coverage', "what this page can't see yet", 'soCoverageViz')}
+    </div>`;
+
+  /* ---- filters drive everything ---- */
+  const bind = (id, key) => {
+    const el = $('#' + id);
+    if (el) el.addEventListener('change', () => { soOverview[key] = el.value; render(); });
+  };
+  bind('soFrom', 'from'); bind('soTo', 'to');
+  bind('soCampaign', 'campaign'); bind('soPlatform', 'platform'); bind('soMarket', 'market');
+  const reset = $('#soReset');
+  if (reset) reset.addEventListener('click', () => {
+    Object.assign(soOverview, { from: '', to: '', campaign: '', platform: '', market: '' });
+    render();
+  });
+  $$('#soMetricSeg button').forEach((b) => b.addEventListener('click', () => {
+    soOverview.metric = b.dataset.m; render();
+  }));
+  $$('#soDateSeg button').forEach((b) => b.addEventListener('click', () => {
+    soOverview.dateMode = b.dataset.d; render();
+  }));
+
+  /* ---- time ---- */
+  const series = overviewSeries(rows, soOverview.dateMode);
+  const withCurve = rows.filter((r) => (r.c.curve || []).length).length;
+  const note = $('#soTimeNote');
+  if (note) {
+    note.textContent = withCurve
+      ? `${num(withCurve)} posts have daily history`
+      : `${series.length} ${soOverview.dateMode === 'posted' ? 'publish' : 'measurement'} date${series.length === 1 ? '' : 's'}` +
+        ' · daily accrual not collected yet';
+  }
+  const timeMount = $('#soTime');
+  if (timeMount) {
+    if (!series.length) {
+      timeMount.innerHTML = '<div class="empty" style="padding:26px">No dated posts in this selection.</div>';
+    } else {
+      const key = soOverview.metric === 'eng' ? 'engagements' : soOverview.metric === 'content' ? 'content' : 'views';
+      lineChart(timeMount, {
+        labels: series.map((p) => p.date.slice(5)),
+        series: [{ name: OVERVIEW_METRICS[soOverview.metric === 'eng' ? 'eng' : soOverview.metric].label,
+                   values: series.map((p) => p[key]), color: SERIES_HEX[0], area: true }],
+        height: 240,
+        format: soOverview.metric === 'content' ? num : kmb
+      });
+    }
+  }
+
+  /* ---- platform ---- */
+  const platMount = $('#soPlatformViz');
+  if (platMount) {
+    const seen = byPlatformRollup(rows);
+    const order = ['Instagram', 'TikTok', 'YouTube', 'Other'];
+    const parts = order.map((name, i) => {
+      const g = seen.find((s) => s.key === name);
+      return { label: name, value: g ? g.content : 0, color: SERIES_HEX[i] };
+    });
+    seen.filter((s) => !order.includes(s.key))
+      .forEach((s, i) => parts.push({ label: s.key, value: s.content, color: SERIES_HEX[(order.length + i) % 7] }));
+    donutChart(platMount, parts, { centreLabel: 'POSTS', aria: 'posts by platform', labelHead: 'Platform' });
+  }
+
+  /* ---- campaigns ---- */
+  const cMount = $('#soCampaignViz');
+  if (cMount) {
+    const metric = OVERVIEW_METRICS[soOverview.metric] || OVERVIEW_METRICS.views;
+    const groups = byCampaignRollup(rows).sort((a, b) => metric.of(b) - metric.of(a));
+    if (!groups.length) {
+      cMount.innerHTML = '<div class="empty" style="padding:18px">No campaigns in this selection.</div>';
+    } else {
+      barsH(cMount, groups.map((g) => ({
+        label: g.label,
+        value: Math.round(metric.of(g) * (soOverview.metric === 'rate' ? 100 : 1)) / (soOverview.metric === 'rate' ? 100 : 1),
+        sub: g.measured ? '' : `${g.content} posts · no metrics entered`,
+        color: g.measured ? 'var(--s1)' : 'var(--surface-3)'
+      })), { labelWidth: '150px', labelHead: 'Campaign', valueHead: metric.label,
+             format: soOverview.metric === 'rate' ? (v) => v.toFixed(2) + '%' : kmb });
+      /* the bars are the navigation — clicking one filters the page to
+         that campaign, which is what a reader reaches for next */
+      [...cMount.querySelectorAll('div[title]')].forEach((row, i) => {
+        if (!groups[i]) return;
+        row.style.cursor = 'pointer';
+        row.addEventListener('click', () => { soOverview.campaign = groups[i].key; render(); });
+      });
+    }
+  }
+
+  /* ---- engagement ---- */
+  const eMount = $('#soEngViz');
+  if (eMount) {
+    const split = engagementSplit(rows);
+    eMount.innerHTML = `<div style="display:flex;flex-direction:column;gap:11px">${
+      split.parts.map((p, i) => `<div style="${p.unavailable ? 'opacity:.62' : ''}">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:5px;font-size:12px">
+          <span>${esc(p.label)}</span>
+          ${p.unavailable
+            ? `<span class="so-gap">${p.id === 'saves' ? 'not in the Notion form' : 'none recorded'}</span>`
+            : `<span style="font:500 11.5px/1 'Roboto Mono',monospace;color:var(--text-2)">${num(p.value)} · ${pct(p.share, 1)}</span>`}
+        </div>
+        <div style="height:9px;border-radius:3px;overflow:hidden;background:${p.unavailable
+          ? 'repeating-linear-gradient(135deg,var(--surface-2) 0 5px,var(--surface-3) 5px 10px)'
+          : 'var(--surface-2)'}">
+          ${p.unavailable ? '' : `<i style="display:block;height:100%;width:${(p.share * 100).toFixed(1)}%;background:${SERIES_HEX[i]}"></i>`}
+        </div></div>`).join('')}
+      <div class="so-hint" style="padding-top:8px;border-top:1px solid var(--line)">${num(split.total)} engagements in total</div>
+    </div>`;
+  }
+
+  /* ---- distribution ---- */
+  const dMount = $('#soDistViz');
+  if (dMount) {
+    const dist = viewDistribution(rows);
+    columnChart(dMount, dist.buckets.map((b) => ({ label: b.label, value: b.n })), {
+      aria: 'posts by view count', labelHead: 'View bucket',
+      foot: dist.unmeasured ? `+ ${num(dist.unmeasured)} posts not measured — kept out of the buckets` : ''
+    });
+  }
+
+  /* ---- top content ---- */
+  const tMount = $('#soTopViz');
+  if (tMount) {
+    const top = topContent(rows, 6);
+    if (!top.length) {
+      tMount.innerHTML = '<div class="empty" style="padding:18px">No measured posts in this selection.</div>';
+    } else {
+      tMount.innerHTML = `<div class="so-cards">${top.map((r) => {
+        /* no thumbnails exist — thumbnailUrl is empty on every record,
+           because Instagram will not serve one without the creator's
+           authorisation. The record's own tint stands in, so the card
+           still reads as a piece of content rather than a table row. */
+        const tint = r.c.thumbTint || SERIES_HEX[0];
+        return `<button class="so-tc" data-id="${esc(r.id)}">
+          <span class="plate" style="background:linear-gradient(150deg,${esc(tint)},rgba(0,0,0,.55))">
+            <span class="tag">${esc(platformTag(r.platform))} ${esc((r.c.format || 'POST').toUpperCase())}</span>
+            <span class="big">${kmb(r.views)}</span>
+          </span>
+          <span class="body">
+            <span class="h">${esc(r.handle || 'unknown')}</span>
+            <span class="m">${esc(r.campaignName)}${r.market ? ' · ' + esc(r.market) : ''}</span>
+            <span class="st">
+              <div>ER<b>${r.rate == null ? '—' : r.rate.toFixed(2) + '%'}</b></div>
+              <div>vs followers<b>${r.viewsPerFollower == null ? '—' : r.viewsPerFollower.toFixed(1) + '×'}</b></div>
+            </span>
+          </span>
+        </button>`;
+      }).join('')}</div>`;
+      $$('#soTopViz .so-tc').forEach((b) => b.addEventListener('click', () => showSocialContent(b.dataset.id)));
+    }
+  }
+
+  /* ---- markets ---- */
+  const mMount = $('#soMarketViz');
+  if (mMount) {
+    const groups = byMarketRollup(rows).sort((a, b) => b.views - a.views).slice(0, 8);
+    if (!groups.length) {
+      mMount.innerHTML = '<div class="empty" style="padding:18px">No creator nationalities recorded.</div>';
+    } else {
+      barsH(mMount, groups.map((g) => ({
+        label: g.label, value: g.views,
+        sub: g.measured ? '' : `${g.content} posts · no metrics entered`,
+        color: g.measured ? 'var(--s1)' : 'var(--surface-3)'
+      })), { labelWidth: '120px', labelHead: 'Market', valueHead: 'Views' });
+      const unmapped = unmappedCountries(DB.creators || []);
+      if (unmapped.length) {
+        const n = document.createElement('div');
+        n.className = 'so-hint';
+        n.style.cssText = 'margin-top:11px;padding-top:10px;border-top:1px solid var(--line)';
+        n.textContent = `${unmapped.length} nationality spelling${unmapped.length === 1 ? '' : 's'} not in the map yet: ` +
+          unmapped.slice(0, 4).map((u) => u.value).join(', ') + (unmapped.length > 4 ? '…' : '');
+        mMount.appendChild(n);
+      }
+    }
+  }
+
+  /* ---- coverage ---- */
+  const covMount = $('#soCoverageViz');
+  if (covMount) {
+    covMount.innerHTML = overviewCoverage(rows, DB).map((c) => `
+      <div style="margin-bottom:10px">
+        <div class="so-row" style="${c.have ? '' : 'color:var(--text-3)'}">
+          <span>${esc(c.label)}${c.note ? ` <span class="so-hint">· ${esc(c.note)}</span>` : ''}</span>
+          <span style="font:500 11.5px/1 'Roboto Mono',monospace;color:var(--text-2)">${num(c.have)} / ${num(c.of)}</span>
+        </div>
+        <div class="so-meter"><i style="width:${c.of ? (c.have / c.of * 100).toFixed(1) : 0}%"></i></div>
+      </div>`).join('');
+  }
+}
+
+/* ============================================================
    SHELL — three layers
    ============================================================ */
 const SECTIONS = [
@@ -9289,15 +10049,19 @@ const SECTIONS = [
 ];
 
 function defaultItem(section) {
+  /* Social lands on the Overview: it is the page you read, and the
+     Content library is where you go once you know what to look at. */
   return { overview: 'summary', campaigns: 'all', creators: 'all', analytics: 'trend', contracts: 'msa',
-           social: 'library', settings: 'templates',
+           social: 'overview', settings: 'templates',
            messages: (activeCampaigns()[0] || DB.campaigns[0] || {}).id }[section] || '';
 }
 
 function tabsFor(section, item) {
   if (section === 'overview')  return OVERVIEW_TABS[item] || OVERVIEW_TABS.summary;
   if (section === 'analytics') return ANALYTICS_TABS[item] || ANALYTICS_TABS.trend;
-  if (section === 'social')    return SOCIAL_TABS;
+  /* the Overview has no sub-tabs — its filter strip is the control
+     surface, and the library's All/Needs review tabs mean nothing here */
+  if (section === 'social')    return item === 'overview' ? [] : SOCIAL_TABS;
   if (section === 'creators')  return CREATOR_TABS;
   if (section === 'contracts') return CONTRACT_TABS;
   if (section === 'messages')  return MSG_KINDS.map(([k, l]) => [k, l]);
@@ -9318,7 +10082,7 @@ function panelFor(section, item) {
     return { title: 'Analytics', groups: [{ items: ANALYTICS_ITEMS.map((o) => ({ id: o.id, title: o.label, sub: o.sub })) }] };
 
   if (section === 'social')
-    return { title: 'Social media', groups: [{ items: SOCIAL_ITEMS.map((o) => ({ id: o.id, title: o.label, sub: o.sub })) }] };
+    return { title: 'Social media', groups: [{ items: SOCIAL_OVERVIEW_ITEMS.concat(SOCIAL_ITEMS).map((o) => ({ id: o.id, title: o.label, sub: o.sub })) }] };
 
   if (section === 'settings')
     return { title: 'Setup', groups: [{ items: SETTINGS_ITEMS.map((o) => ({ id: o.id, title: o.label, sub: o.sub })) }] };
@@ -9358,7 +10122,7 @@ function titleFor(section, item) {
   if (section === 'messages')  return (byCampaign[item] || {}).brand || 'Messages';
   if (section === 'creators')  return segmentOf(item).label;
   if (section === 'analytics') return (ANALYTICS_ITEMS.find((x) => x.id === item) || {}).label || 'Analytics';
-  if (section === 'social')    return (SOCIAL_ITEMS.find((x) => x.id === item) || {}).label || 'Social media';
+  if (section === 'social')    return (SOCIAL_OVERVIEW_ITEMS.concat(SOCIAL_ITEMS).find((x) => x.id === item) || {}).label || 'Social media';
   if (section === 'contracts') return (CONTRACT_DOCS[item] || CONTRACT_DOCS.msa).label;
   if (section === 'settings')  return (SETTINGS_ITEMS.find((x) => x.id === item) || {}).label || 'Setup';
   return (OVERVIEW_ITEMS.find((x) => x.id === item) || {}).label || 'Overview';
@@ -9470,7 +10234,7 @@ function render() {
   if (section === 'campaigns')      renderCampaignSection(view, item, tab);
   else if (section === 'creators')  renderCreators(view, item, tab);
   else if (section === 'analytics') renderAnalytics(view, item, tab);
-  else if (section === 'social')    renderSocial(view, item, tab);
+  else if (section === 'social')    (item === 'overview' ? renderSocialOverview : renderSocial)(view, item, tab);
   else if (section === 'messages')  renderMessagesSection(view, item, tab);
   else if (section === 'contracts') renderContracts(view, item, tab);
   else if (section === 'settings')  renderSettings(view, item);

@@ -16,6 +16,7 @@ import { renderCampaignSection } from '../views/campaigns.js';
 import { renderCreators, showCreator } from '../views/creators.js';
 import { renderAnalytics } from '../views/analytics.js';
 import { renderSocial } from '../views/social.js';
+import { renderSocialOverview } from '../views/socialOverview.js';
 import { renderMessagesSection } from '../views/messages.js';
 import { renderContracts } from '../views/contracts.js';
 import { renderSettings } from '../views/settings.js';
@@ -32,7 +33,8 @@ const RENDERERS = {
   campaigns: renderCampaignSection,
   creators:  renderCreators,
   analytics: renderAnalytics,
-  social:    renderSocial,
+  /* one section, two pages: the Overview is read, the library is worked in */
+  social:    (view, item, tab) => (item === 'overview' ? renderSocialOverview : renderSocial)(view, item, tab),
   messages:  renderMessagesSection,
   contracts: renderContracts,
   settings:  (view, item) => renderSettings(view, item),

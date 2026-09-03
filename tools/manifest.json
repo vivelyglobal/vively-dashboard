@@ -737,5 +737,53 @@
    "import { newId } from './vocab.js';"
   ],
   "sha256": "c05f7d73086d2e2673aad0faff0f700443b3a1b75e1ac61bc9555c03d3213195"
+ },
+ {
+  "file": "model/socialStats.js",
+  "ranges": [
+   [
+    9277,
+    9576
+   ]
+  ],
+  "imports": [
+   "import { DB } from './db.js';"
+  ],
+  "sha256": "02593cb1febe57a0d899d480ced56e55e32f65e8a1364123dbf9728620823579"
+ },
+ {
+  "file": "charts/socialViz.js",
+  "ranges": [
+   [
+    9577,
+    9674
+   ]
+  ],
+  "imports": [
+   "import { kmb, num, pct } from '../lib/format.js';",
+   "import { esc } from '../ui/dom.js';",
+   "import { tableFallback } from './index.js';"
+  ],
+  "sha256": "e847409f95e49705dad82881b9948316abe953aa099d2b9da9fd1cc410493dae"
+ },
+ {
+  "file": "views/socialOverview.js",
+  "ranges": [
+   [
+    9675,
+    10035
+   ]
+  ],
+  "imports": [
+   "import { SERIES_HEX, barsH, lineChart } from '../charts/index.js';",
+   "import { columnChart, donutChart } from '../charts/socialViz.js';",
+   "import { kmb, num, pct } from '../lib/format.js';",
+   "import { DB, notify } from '../model/db.js';",
+   "import { OVERVIEW_METRICS, byCampaignRollup, byMarketRollup, byPlatformRollup, engagementSplit, overviewCoverage, overviewFilter, overviewKpis, overviewRows, overviewSeries, topContent, unmappedCountries, viewDistribution } from '../model/socialStats.js';",
+   "import { $, $$, esc } from '../ui/dom.js';",
+   "import { emptyState } from '../ui/html.js';",
+   "import { showSocialContent } from './social.js';"
+  ],
+  "sha256": "bf5d624a318a815887296079c68668c8b98158d01466af2dcd40fb386dc35318"
  }
 ]

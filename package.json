@@ -19,7 +19,8 @@
     "check:visit": "node tools/seed.mjs > tmp/seed.json && node tools/visit-edit-page.mjs",
     "check:social": "node tools/seed.mjs > tmp/seed.json && node tools/social-page.mjs",
     "check:webhook": "node tools/webhook-post.mjs",
-    "check:collabdiag": "node tools/collab-diag-http.mjs"
+    "check:collabdiag": "node tools/collab-diag-http.mjs",
+    "check:sooverview": "node tools/seed.mjs > tmp/seed.json && node tools/social-overview-page.mjs"
   },
   "engines": {
     "node": ">=18"
