@@ -21,6 +21,7 @@
     "check:webhook": "node tools/webhook-post.mjs",
     "check:collabdiag": "node tools/collab-diag-http.mjs",
     "check:sooverview": "node tools/seed.mjs > tmp/seed.json && node tools/social-overview-page.mjs",
+    "check:home": "node tools/seed.mjs > tmp/seed.json && node tools/home-page.mjs",
     "check:phone": "node tools/seed.mjs > tmp/seed.json && node tools/phone-layout.mjs",
     "check:auth": "node tools/auth-http.mjs",
     "check:migration": "node tools/rehearse-migration.mjs",

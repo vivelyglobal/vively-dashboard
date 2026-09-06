@@ -36,7 +36,9 @@ export function defaultItem(section) {
 }
 
 export function tabsFor(section, item) {
-  if (section === 'overview')  return OVERVIEW_TABS[item] || OVERVIEW_TABS.summary;
+  /* the Summary is the home page now and has no sub-tabs; see the
+     same change in index.html, which this file must agree with */
+  if (section === 'overview')  return item === 'summary' ? [] : (OVERVIEW_TABS[item] || []);
   if (section === 'analytics') return ANALYTICS_TABS[item] || ANALYTICS_TABS.trend;
   /* the Overview has no sub-tabs — its filter strip is the control
      surface, and the library's All/Needs review tabs mean nothing here */

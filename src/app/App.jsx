@@ -17,6 +17,7 @@ import { renderCreators, showCreator } from '../views/creators.js';
 import { renderAnalytics } from '../views/analytics.js';
 import { renderSocial } from '../views/social.js';
 import { renderSocialOverview } from '../views/socialOverview.js';
+import { renderHome } from '../views/home.js';
 import { renderMessagesSection } from '../views/messages.js';
 import { renderContracts } from '../views/contracts.js';
 import { renderSettings } from '../views/settings.js';
@@ -38,7 +39,9 @@ const RENDERERS = {
   messages:  renderMessagesSection,
   contracts: renderContracts,
   settings:  (view, item) => renderSettings(view, item),
-  overview:  renderOverview
+  /* same split as social: the Summary is its own page, the rest of the
+     Overview section is unchanged */
+  overview:  (view, item, tab) => ((item === 'summary' || !item) ? renderHome(view) : renderOverview(view, item, tab))
 };
 
 export default function App() {

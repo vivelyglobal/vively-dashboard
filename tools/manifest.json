@@ -785,5 +785,44 @@
    "import { showSocialContent } from './social.js';"
   ],
   "sha256": "46b4ff86b1c5d3207791395dfccf36ea446732d0ee3769711ee501212ddf12ee"
+ },
+ {
+  "file": "model/homeStats.js",
+  "ranges": [
+   [
+    10177,
+    10519
+   ]
+  ],
+  "imports": [
+   "import { DAY, TODAY, addDays, iso } from '../lib/dates.js';",
+   "import { DB } from './db.js';",
+   "import { byCampaignRollup, overviewKpis } from './socialStats.js';",
+   "import { CAMPAIGN_STATUS, STAGES, STAGE_IDX } from './vocab.js';"
+  ],
+  "sha256": "324cd2064ad9bb2de39f6b787606d0041ffc22aa42e2e2f4e89eb7d500587334"
+ },
+ {
+  "file": "views/home.js",
+  "ranges": [
+   [
+    10521,
+    10875
+   ]
+  ],
+  "imports": [
+   "import { barsH, funnelView, lineChart } from '../charts/index.js';",
+   "import { columnChart, donutChart } from '../charts/socialViz.js';",
+   "import { DAY, TODAY, dLabel } from '../lib/dates.js';",
+   "import { kmb, num } from '../lib/format.js';",
+   "import { DB } from '../model/db.js';",
+   "import { HOME_METRICS, activityFeed, attentionCounts, campaignPerformance, campaignPipeline, completionSplit, creatorPipeline, homeKpis, trendWindow } from '../model/homeStats.js';",
+   "import { overviewRows, overviewSeries, topContent } from '../model/socialStats.js';",
+   "import { $, $$, esc } from '../ui/dom.js';",
+   "import { emptyState } from '../ui/html.js';",
+   "import { showSocialContent } from './social.js';",
+   "import { ensureOverviewStyles, platformTag } from './socialOverview.js';"
+  ],
+  "sha256": "4ba20f843a8ca5b38e3fc2af30d4584275e6a9d8f24e7871f11260f1f913f911"
  }
 ]
