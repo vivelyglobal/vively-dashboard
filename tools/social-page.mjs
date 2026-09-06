@@ -6,6 +6,7 @@
    the numbers here would drift apart without anything failing loudly —
    so several of these check identity, not just equality. */
 import { chromium } from 'playwright';
+import { signIn } from './harness-auth.mjs';
 import fs from 'fs';
 const seed = fs.readFileSync('tmp/seed.json', 'utf8');
 const BASE = process.argv[2] || 'http://localhost:3120/';
@@ -15,6 +16,7 @@ const errs = [];
 
 for (const [name, app] of [['legacy', BASE], ['react', BASE + 'next/']]) {
   const ctx = await b.newContext();
+  await signIn(ctx);
   await ctx.addInitScript(([s]) => {
     localStorage.setItem('vively-workspace-v1', s);
     localStorage.setItem('vively-auth-user-v1', JSON.stringify({ email: 'k@v.com', name: 'K' }));

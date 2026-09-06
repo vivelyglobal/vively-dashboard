@@ -1,10 +1,12 @@
 import { chromium } from 'playwright';
+import { signIn } from './harness-auth.mjs';
 import fs from 'fs';
 const seed = fs.readFileSync('tmp/seed.json', 'utf8');
 const FAKE = 'http://127.0.0.1:3455';
 await fetch(FAKE + '/__reset', { method: 'POST' });
 const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
 const ctx = await b.newContext();
+await signIn(ctx);
 await ctx.addInitScript(([s]) => {
   localStorage.setItem('vively-workspace-v1', s);
   localStorage.setItem('vively-auth-user-v1', JSON.stringify({ email: 'k@v.com', name: 'K' }));

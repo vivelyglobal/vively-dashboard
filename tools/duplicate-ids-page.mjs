@@ -1,5 +1,6 @@
 /* The collision as the user meets it: two campaigns answering to one id. */
 import { chromium } from 'playwright';
+import { signIn } from './harness-auth.mjs';
 import fs from 'fs';
 const seed = fs.readFileSync('tmp/seed.json', 'utf8');
 /* read the fixture from the seed rather than off the page — nothing is on
@@ -14,6 +15,7 @@ const APP = process.argv[2] || 'http://localhost:3120/';
 
 const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
 const ctx = await b.newContext();
+await signIn(ctx);
 await ctx.addInitScript(([s]) => {
   localStorage.setItem('vively-workspace-v1', s);
   localStorage.setItem('vively-auth-user-v1', JSON.stringify({ email: 'k@v.com', name: 'K' }));

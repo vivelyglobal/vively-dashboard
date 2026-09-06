@@ -27,6 +27,11 @@ const VERIFY = process.env.META_WEBHOOK_VERIFY_TOKEN || 'harness-verify-token';
 const BASIC = process.env.META_APP_BASIC_SECRET || 'harness-basic-secret';
 const IGSEC = process.env.META_INSTAGRAM_APP_SECRET || 'harness-instagram-secret';
 const OUR_ACCOUNT = process.env.INSTAGRAM_ACCOUNT_ID || '17841400000000000';
+/* the status endpoint stopped being open when the workspace API was
+   locked down: it reports which secret verifies a delivery, which is a
+   map of the integration's soft spots. A session or this key opens it. */
+const DIAG_KEY = process.env.DIAGNOSTIC_KEY || 'harness-diagnostic-key';
+const DIAG_HEADERS = { 'X-Diagnostic-Key': DIAG_KEY };
 
 const errs = [];
 const step = async (n, fn) => {
@@ -114,7 +119,7 @@ await step('the reel link in the message was picked out', async () => {
   if (!out.ok) throw new Error('not ok');
   /* read it back through the status endpoint rather than trusting the
      response — the point is that it was persisted, not just parsed */
-  const st = await (await fetch(BASE + '/api/webhooks/instagram/status')).json();
+  const st = await (await fetch(BASE + '/api/webhooks/instagram/status', { headers: DIAG_HEADERS })).json();
   if (st.deliveriesLast24h === 0) throw new Error('nothing was stored');
 });
 
@@ -186,7 +191,7 @@ await step('a signed delivery with no events still answers 200', async () => {
 
 /* ---- the four states must not look like one ---------------------------- */
 
-const status = async () => (await fetch(BASE + '/api/webhooks/instagram/status')).json();
+const status = async () => (await fetch(BASE + '/api/webhooks/instagram/status', { headers: DIAG_HEADERS })).json();
 
 await step('a signed delivery in a shape we do not parse is kept, not silently dropped', async () => {
   /* exactly what Meta's Test button sends: a bare sample, no entry[]
@@ -369,7 +374,7 @@ await step('no secret and no signature appears anywhere in the status', async ()
 });
 
 await step('the status endpoint reports configuration without revealing it', async () => {
-  const r = await fetch(BASE + '/api/webhooks/instagram/status');
+  const r = await fetch(BASE + '/api/webhooks/instagram/status', { headers: DIAG_HEADERS });
   const out = await r.json();
   for (const k of ['verifyToken', 'appSecret', 'instagramAccessToken', 'instagramAccountId'])
     if (!['set', 'missing'].includes(out[k])) throw new Error(`${k} reported ${JSON.stringify(out[k])}`);

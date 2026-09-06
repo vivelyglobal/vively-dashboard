@@ -267,10 +267,36 @@ export let serverSaveTimer = null;
 
 export function workspacePayload() { return dbPayload(); }
 
+/* The server can now say no, and there are two different noes: 401 is
+   "the session has gone", 403 is "signed in, but not staff".
+
+   What to *show* for either is the shell's business, not this layer's —
+   a data module that reaches into the login overlay is a module that
+   cannot be tested or reused. So the refusal is reported here and the
+   shell installs the handler at boot. Unset, a refusal still fails the
+   request and shows in the save badge; it just does not raise a dialog.
+
+   Before any of this existed, a refused request fell through to the
+   local copy and the dashboard carried on displaying yesterday's data
+   while every save failed quietly. */
+export const AUTH_HOOKS = { onRefused: null };
+
+export function handleAuthFailure(status, body) {
+  if (status !== 401 && status !== 403) return false;
+  if (AUTH_HOOKS.onRefused) AUTH_HOOKS.onRefused(status, body);
+  return true;
+}
+
 export async function serverLoad() {
   try {
     const res = await fetch('/api/workspace');
     if (res.status === 503) { SERVER.configured = false; return 'error'; }
+    if (res.status === 401 || res.status === 403) {
+      const body = await res.json().catch(() => ({}));
+      handleAuthFailure(res.status, body);
+      SERVER.status = 'error'; SERVER.error = (body && body.error) || 'Not signed in';
+      return 'error';
+    }
     if (!res.ok) throw new Error('Server responded ' + res.status);
     const json = await res.json();
     SERVER.configured = true;
@@ -315,6 +341,14 @@ export async function serverSave(opts) {
     });
     if (res.status === 503) {
       SERVER.configured = false; SERVER.status = 'off';
+      return;
+    }
+    if (res.status === 401 || res.status === 403) {
+      const body = await res.json().catch(() => ({}));
+      handleAuthFailure(res.status, body);
+      SERVER.status = 'error';
+      SERVER.error = (body && body.error) || 'Not signed in';
+      if (!opts.silent) toast(SERVER.error);
       return;
     }
     const out = await res.json().catch(() => ({}));

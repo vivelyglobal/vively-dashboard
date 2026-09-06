@@ -4,6 +4,7 @@
    thing that matters most here — that the Content library next door is
    untouched by any of it. */
 import { chromium } from 'playwright';
+import { signIn } from './harness-auth.mjs';
 import fs from 'fs';
 
 const seed = fs.readFileSync('tmp/seed.json', 'utf8');
@@ -11,6 +12,7 @@ const APP = process.argv[2] || 'http://localhost:3120/';
 
 const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
 const ctx = await b.newContext();
+await signIn(ctx);
 /* Planted only when absent. An unconditional set runs again on every
    reload, which silently restored the seed underneath any fixture a
    check had just injected — the check then passed against the original

@@ -20,7 +20,9 @@
     "check:social": "node tools/seed.mjs > tmp/seed.json && node tools/social-page.mjs",
     "check:webhook": "node tools/webhook-post.mjs",
     "check:collabdiag": "node tools/collab-diag-http.mjs",
-    "check:sooverview": "node tools/seed.mjs > tmp/seed.json && node tools/social-overview-page.mjs"
+    "check:sooverview": "node tools/seed.mjs > tmp/seed.json && node tools/social-overview-page.mjs",
+    "check:phone": "node tools/seed.mjs > tmp/seed.json && node tools/phone-layout.mjs",
+    "check:auth": "node tools/auth-http.mjs"
   },
   "engines": {
     "node": ">=18"

@@ -649,6 +649,105 @@ tr.preferred-row td:first-child { box-shadow: inset 3px 0 0 var(--good); }
   .rail-item { width: 50px; }
   .rail-item .lb { display: none; }
 }
+
+/* ============================== phone ==============================
+   Everything above this point assumes a wide screen. Below ~760px the
+   three-column shell has nowhere to put its middle column, and the top
+   bar on its own is wider than the viewport — which is why every page
+   slid sideways on a phone rather than simply looking cramped.
+
+   Measured before these rules, at 390px: the document was 632–898px
+   wide on every page tested, and the Creators table put 379 elements
+   past the right edge.
+   =================================================================== */
+@media (max-width: 760px) {
+  /* The top bar was the main offender: a search box with a 230px
+     minimum plus four buttons on a row that could not wrap came to
+     ~650px. Let the row wrap and let the search shrink to fit. */
+  .topbar {
+    height: auto; min-height: 52px; padding: 8px 12px;
+    flex-wrap: wrap; row-gap: 8px; column-gap: 8px;
+  }
+  .topbar h1 { font-size: 16px; }
+  .topbar .spacer { display: none; }
+  .searchbox { min-width: 0; flex: 1 1 100%; order: 5; }
+
+  /* the tab bar's sticky offset was measured against a top bar fixed
+     at 64px, which stops being true the moment that bar can wrap */
+  .tabbar { position: static; padding: 0 12px; }
+
+  /* Two columns, not three. 56px of rail plus 250px of side menu
+     leaves 80px for the content on a 390px screen, so the menu
+     becomes an overlay that slides over the page instead of a track
+     that competes with it. */
+  .app { grid-template-columns: 56px minmax(0, 1fr); }
+  body, body.panel-open, body.panel-closed { --panelw: 0px; }
+  .panel {
+    position: fixed; left: 56px; top: 0; bottom: 0; height: 100dvh;
+    width: min(300px, calc(100vw - 56px)); z-index: 120;
+    transform: translateX(-105%); transition: transform .18s ease;
+    border-right: 1px solid var(--line-strong); box-shadow: var(--shadow);
+  }
+  body.panel-open .panel { transform: none; border-right: 1px solid var(--line-strong); }
+
+  .content { padding: 12px; min-width: 0; }
+  .card { min-width: 0; }
+
+  /* A wide table scrolls inside its own box. Without the max-width it
+     pushed the whole document instead, which is what made the page
+     itself slide under the thumb. */
+  .tbl-wrap { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .tbl th, .tbl td { padding: 11px 10px; white-space: nowrap; }
+
+  /* A drawer 92vw wide leaves an 8% strip of dead page behind it that
+     scrolls under the finger. Take the whole screen. */
+  .drawer, .drawer.wide { width: 100vw; border-left: 0; }
+  .drawer-head { padding: 14px; }
+  .drawer-body { padding: 14px 14px 40px; }
+
+  /* Thumbs, not cursors. 40px is the smallest comfortable target, and
+     16px is the threshold below which iOS zooms the page in on focus
+     and leaves the user stranded at 2x. */
+  .btn, .btn.sm { min-height: 40px; padding: 9px 15px; }
+  .icon-btn, .theme-btn { min-width: 40px; min-height: 40px; }
+  /* Matching the typed selector above, not a bare element selector —
+     `input, select, textarea` loses to
+     `input[type=text], … , select, textarea` on specificity, so the
+     library's filters stayed at 13.5px and kept the zoom trap. */
+  input[type=text], input[type=password], input[type=number], input[type=date],
+  input[type=search], input[type=email], input[type=tel], input[type=url],
+  input:not([type]), select, textarea { min-height: 40px; font-size: 16px; }
+  .searchbox input { min-height: 0; font-size: 16px; }
+  .panel-item { padding-top: 11px; padding-bottom: 11px; }
+  .rail-item { padding-top: 10px; padding-bottom: 10px; }
+
+  /* forms stack rather than wrap into a ragged two-and-a-half columns */
+  .field { min-width: 0; }
+  .auth-row { grid-template-columns: 1fr; }
+
+  /* A card header is a title, a spacer and a row of controls. On a
+     phone that row is wider than the card, and without wrapping it
+     pushed the page out sideways — the Campaigns header alone came to
+     854px inside a 310px card. */
+  .card-head { flex-wrap: wrap; row-gap: 8px; }
+  .card-head .sp { flex: 1 1 100%; height: 0; }
+
+  /* the same shape on the Social Overview cards */
+  .so-head { flex-wrap: wrap; row-gap: 8px; }
+  .so-seg { flex-wrap: wrap; }
+  .so-filters select, .so-filters input { max-width: none; flex: 1 1 45%; }
+  .so-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  /* Segmented controls are the last small targets on the page: the
+     7d/30d/90d switch and the Overview's metric and axis pickers all
+     render at 21-25px, which is under a thumb. */
+  .seg button, .segbtn, .so-seg button { min-height: 34px; padding: 8px 13px; }
+
+  /* One stat card per row turns a six-figure summary into six screens
+     of scrolling. Two-up keeps a KPI row readable as a row. */
+  .g2, .g4, .g6 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .card.stat .value { font-size: 20px; }
+}
 @media print {
   .rail, .panel, .topbar, .tabbar, .no-print { display: none !important; }
   body { background: #fff; color: #111; }
@@ -749,6 +848,10 @@ tr.preferred-row td:first-child { box-shadow: inset 3px 0 0 var(--good); }
     </form>
 
     <form class="auth-form" id="signupForm">
+      <div class="field">
+        <label for="signupCode">Invite code</label>
+        <input id="signupCode" type="text" autocomplete="off" placeholder="Ask whoever runs the dashboard" required />
+      </div>
       <div class="auth-row">
         <div class="field">
           <label for="signupName">Full name</label>
@@ -1150,10 +1253,36 @@ let serverSaveTimer = null;
 
 function workspacePayload() { return dbPayload(); }
 
+/* The server can now say no, and there are two different noes: 401 is
+   "the session has gone", 403 is "signed in, but not staff".
+
+   What to *show* for either is the shell's business, not this layer's —
+   a data module that reaches into the login overlay is a module that
+   cannot be tested or reused. So the refusal is reported here and the
+   shell installs the handler at boot. Unset, a refusal still fails the
+   request and shows in the save badge; it just does not raise a dialog.
+
+   Before any of this existed, a refused request fell through to the
+   local copy and the dashboard carried on displaying yesterday's data
+   while every save failed quietly. */
+const AUTH_HOOKS = { onRefused: null };
+
+function handleAuthFailure(status, body) {
+  if (status !== 401 && status !== 403) return false;
+  if (AUTH_HOOKS.onRefused) AUTH_HOOKS.onRefused(status, body);
+  return true;
+}
+
 async function serverLoad() {
   try {
     const res = await fetch('/api/workspace');
     if (res.status === 503) { SERVER.configured = false; return 'error'; }
+    if (res.status === 401 || res.status === 403) {
+      const body = await res.json().catch(() => ({}));
+      handleAuthFailure(res.status, body);
+      SERVER.status = 'error'; SERVER.error = (body && body.error) || 'Not signed in';
+      return 'error';
+    }
     if (!res.ok) throw new Error('Server responded ' + res.status);
     const json = await res.json();
     SERVER.configured = true;
@@ -1198,6 +1327,14 @@ async function serverSave(opts) {
     });
     if (res.status === 503) {
       SERVER.configured = false; SERVER.status = 'off';
+      return;
+    }
+    if (res.status === 401 || res.status === 403) {
+      const body = await res.json().catch(() => ({}));
+      handleAuthFailure(res.status, body);
+      SERVER.status = 'error';
+      SERVER.error = (body && body.error) || 'Not signed in';
+      if (!opts.silent) toast(SERVER.error);
       return;
     }
     const out = await res.json().catch(() => ({}));
@@ -9737,9 +9874,12 @@ function ensureOverviewStyles() {
   @media(max-width:1000px){.so-grid{grid-template-columns:repeat(6,1fr)}
     .so-c12,.so-c8,.so-c7,.so-c5,.so-c4{grid-column:span 6}.so-c2{grid-column:span 3}
     .so-cards{grid-template-columns:repeat(2,1fr)}}
-  @media(max-width:640px){.so-grid{grid-template-columns:1fr}
-    .so-c12,.so-c8,.so-c7,.so-c5,.so-c4,.so-c2{grid-column:span 1}
-    .so-cards{grid-template-columns:1fr}}`;
+  /* two columns, not one: the KPI tiles pair up and every chart spans
+     the full width, which halves the scroll without shrinking a chart */
+  @media(max-width:640px){.so-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .so-c12,.so-c8,.so-c7,.so-c5,.so-c4{grid-column:span 2}
+    .so-c2{grid-column:span 1}
+    .so-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}`;
   document.head.appendChild(s);
 }
 
@@ -10420,12 +10560,10 @@ function refreshAuthButtons() {
 
 $('#btnLogin').addEventListener('click', () => {
   if (authState.user) {
-    authState.user = null;
-    saveAuthUser();
-    refreshAuthButtons();
-    setAuthMode('login');
-    setAuthLocked(true);
-    toast('Logged out');
+    /* ending it on the server too — otherwise the cookie stays valid
+       and "log out" only convinced this browser, which is the same
+       mistake the whole login screen used to make */
+    signOut().then(() => toast('Logged out'));
     return;
   }
   openAuth('login');
@@ -10460,13 +10598,16 @@ $('#signupForm').addEventListener('submit', async (e) => {
   btn.disabled = true;
   btn.textContent = 'Creating...';
   try {
-    const data = await sendAuth('/api/signup', { name, email, password });
-    authState.user = data.user;
-    saveAuthUser();
-    refreshAuthButtons();
-    setAuthLocked(false);
+    const code = ($('#signupCode') || {}).value || '';
+    const data = await sendAuth('/api/signup', { name, email, password, code });
+    /* signing up no longer signs you in — the account still has to
+       pass the login and still has to be staff to see anything */
     $('#signupForm').reset();
-    toast('Signup berhasil. Welcome ' + authState.user.name);
+    /* an account is not a session: they still have to sign in, and the
+       login will tell them if the account is not staff */
+    setAuthMode('login');
+    $('#loginEmail').value = email;
+    toast('Account created — now sign in.');
   } catch (err) {
     toast(err.message || 'Signup gagal');
   } finally {
@@ -10488,8 +10629,16 @@ $('#loginForm').addEventListener('submit', async (e) => {
     authState.user = data.user;
     saveAuthUser();
     refreshAuthButtons();
-    setAuthLocked(false);
     $('#loginForm').reset();
+    /* the password can be right and the answer still be no — creators
+       have accounts here, and bouncing them back to a login screen
+       they have just passed would loop them with no way out */
+    if (data.staff === false) {
+      authState.deniedReason = 'This account does not have access to the workspace.';
+      showAccessDenied();
+      return;
+    }
+    setAuthLocked(false);
     toast('Login sukses. Hi ' + authState.user.name);
   } catch (err) {
     toast(err.message || 'Login gagal');
@@ -10499,8 +10648,89 @@ $('#loginForm').addEventListener('submit', async (e) => {
   }
 });
 
+/* The stored user was only ever a note the browser wrote to itself;
+   it never proved anything. The session does, so ask the server. */
+async function bootAuth() {
+  try {
+    const res = await fetch('/api/me');
+    if (res.status === 401) {
+      authState.user = null; saveAuthUser(); refreshAuthButtons();
+      setAuthLocked(true);
+      return;
+    }
+    const body = await res.json();
+    authState.user = body.user || null;
+    saveAuthUser(); refreshAuthButtons();
+    if (body.staff === false) {
+      authState.deniedReason = body.reason || 'This account does not have access.';
+      showAccessDenied();
+      return;
+    }
+    setAuthLocked(false);
+  } catch (err) {
+    /* the server is unreachable rather than refusing. Locking someone
+       out of a local copy they already hold would be the wrong call —
+       every save will fail loudly anyway. */
+    authState.user = loadAuthUser();
+    refreshAuthButtons();
+    setAuthLocked(!authState.user);
+  }
+}
+
+/* The shell's answer to a refusal from the server. Installed rather
+   than imported so the data layer stays free of the login overlay. */
+AUTH_HOOKS.onRefused = (status, body) => {
+  if (status === 401) {
+    authState.user = null;
+    saveAuthUser();
+    refreshAuthButtons();
+    setAuthLocked(true);
+    return;
+  }
+  authState.deniedReason = (body && body.error) || 'This account does not have access.';
+  showAccessDenied();
+};
+
+/* Signed in, but not staff. A separate state from signed out, because
+   the remedy is different and the login form is no help. */
+function showAccessDenied() {
+  document.body.classList.add('auth-locked');
+  const ov = $('#authOverlay');
+  ov.classList.add('open');
+  ov.setAttribute('aria-hidden', 'false');
+  const sub = ov.querySelector('.auth-sub');
+  if (sub) sub.textContent = authState.deniedReason || 'This account does not have access.';
+  const lf = $('#loginForm'), sf = $('#signupForm'), md = $('#authMode');
+  if (lf) lf.classList.remove('active');
+  if (sf) sf.classList.remove('active');
+  if (md) md.style.display = 'none';
+  if (!$('#authSignOut')) {
+    const out = document.createElement('button');
+    out.id = 'authSignOut';
+    out.className = 'btn sm';
+    out.style.marginTop = '14px';
+    out.textContent = 'Sign out';
+    out.addEventListener('click', signOut);
+    ov.querySelector('.auth-modal').appendChild(out);
+  }
+}
+
+async function signOut() {
+  try { await fetch('/api/logout', { method: 'POST' }); } catch (e) { /* clear locally anyway */ }
+  authState.user = null;
+  saveAuthUser();
+  refreshAuthButtons();
+  const md = $('#authMode');
+  if (md) md.style.display = '';
+  const out = $('#authSignOut');
+  if (out) out.remove();
+  setAuthMode('login');
+  setAuthLocked(true);
+}
+
 authState.user = loadAuthUser();
 refreshAuthButtons();
+bootAuth();
 
 window.addEventListener('hashchange', render);
 window.addEventListener('beforeunload', () => { persist(true); flushServerSaveBeacon(); });

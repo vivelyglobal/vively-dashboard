@@ -1,6 +1,7 @@
 /* Moves a creator between stages in the real UI and checks what Notion was
    actually asked to store. */
 import { chromium } from 'playwright';
+import { signIn, signInCookie } from './harness-auth.mjs';
 import fs from 'fs';
 const seed = fs.readFileSync('tmp/seed.json', 'utf8');
 const APP = process.argv[2] || 'http://localhost:3120/';
@@ -10,6 +11,7 @@ await fetch(FAKE + '/__reset', { method: 'POST' });
 
 const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
 const ctx = await b.newContext();
+await signIn(ctx);
 await ctx.addInitScript(([s]) => {
   localStorage.setItem('vively-workspace-v1', s);
   localStorage.setItem('vively-auth-user-v1', JSON.stringify({ email: 'k@v.com', name: 'K' }));
@@ -122,8 +124,11 @@ await step('a value Notion rejects is reported, not swallowed', async () => {
      whose Status column is mapped to a property that does not exist is the
      honest way to provoke a rejection */
   await fetch(FAKE + '/__reset', { method: 'POST' });
+  /* called straight from node rather than through the page, so it needs
+     its own session — the route is no longer open */
+  const cookie = await signInCookie(APP.replace(/\/(next\/)?$/, ''));
   const res = await fetch(APP.replace(/\/(next\/)?$/, '') + '/api/notion/status', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie },
     body: JSON.stringify({ pageId: rows[0].notionPageId, property: 'Status', value: 'Not A Real Option' })
   });
   if (res.ok) throw new Error('the server accepted a value Notion would refuse');

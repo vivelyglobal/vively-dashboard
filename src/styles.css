@@ -639,6 +639,105 @@ tr.preferred-row td:first-child { box-shadow: inset 3px 0 0 var(--good); }
   .rail-item { width: 50px; }
   .rail-item .lb { display: none; }
 }
+
+/* ============================== phone ==============================
+   Everything above this point assumes a wide screen. Below ~760px the
+   three-column shell has nowhere to put its middle column, and the top
+   bar on its own is wider than the viewport — which is why every page
+   slid sideways on a phone rather than simply looking cramped.
+
+   Measured before these rules, at 390px: the document was 632–898px
+   wide on every page tested, and the Creators table put 379 elements
+   past the right edge.
+   =================================================================== */
+@media (max-width: 760px) {
+  /* The top bar was the main offender: a search box with a 230px
+     minimum plus four buttons on a row that could not wrap came to
+     ~650px. Let the row wrap and let the search shrink to fit. */
+  .topbar {
+    height: auto; min-height: 52px; padding: 8px 12px;
+    flex-wrap: wrap; row-gap: 8px; column-gap: 8px;
+  }
+  .topbar h1 { font-size: 16px; }
+  .topbar .spacer { display: none; }
+  .searchbox { min-width: 0; flex: 1 1 100%; order: 5; }
+
+  /* the tab bar's sticky offset was measured against a top bar fixed
+     at 64px, which stops being true the moment that bar can wrap */
+  .tabbar { position: static; padding: 0 12px; }
+
+  /* Two columns, not three. 56px of rail plus 250px of side menu
+     leaves 80px for the content on a 390px screen, so the menu
+     becomes an overlay that slides over the page instead of a track
+     that competes with it. */
+  .app { grid-template-columns: 56px minmax(0, 1fr); }
+  body, body.panel-open, body.panel-closed { --panelw: 0px; }
+  .panel {
+    position: fixed; left: 56px; top: 0; bottom: 0; height: 100dvh;
+    width: min(300px, calc(100vw - 56px)); z-index: 120;
+    transform: translateX(-105%); transition: transform .18s ease;
+    border-right: 1px solid var(--line-strong); box-shadow: var(--shadow);
+  }
+  body.panel-open .panel { transform: none; border-right: 1px solid var(--line-strong); }
+
+  .content { padding: 12px; min-width: 0; }
+  .card { min-width: 0; }
+
+  /* A wide table scrolls inside its own box. Without the max-width it
+     pushed the whole document instead, which is what made the page
+     itself slide under the thumb. */
+  .tbl-wrap { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .tbl th, .tbl td { padding: 11px 10px; white-space: nowrap; }
+
+  /* A drawer 92vw wide leaves an 8% strip of dead page behind it that
+     scrolls under the finger. Take the whole screen. */
+  .drawer, .drawer.wide { width: 100vw; border-left: 0; }
+  .drawer-head { padding: 14px; }
+  .drawer-body { padding: 14px 14px 40px; }
+
+  /* Thumbs, not cursors. 40px is the smallest comfortable target, and
+     16px is the threshold below which iOS zooms the page in on focus
+     and leaves the user stranded at 2x. */
+  .btn, .btn.sm { min-height: 40px; padding: 9px 15px; }
+  .icon-btn, .theme-btn { min-width: 40px; min-height: 40px; }
+  /* Matching the typed selector above, not a bare element selector —
+     `input, select, textarea` loses to
+     `input[type=text], … , select, textarea` on specificity, so the
+     library's filters stayed at 13.5px and kept the zoom trap. */
+  input[type=text], input[type=password], input[type=number], input[type=date],
+  input[type=search], input[type=email], input[type=tel], input[type=url],
+  input:not([type]), select, textarea { min-height: 40px; font-size: 16px; }
+  .searchbox input { min-height: 0; font-size: 16px; }
+  .panel-item { padding-top: 11px; padding-bottom: 11px; }
+  .rail-item { padding-top: 10px; padding-bottom: 10px; }
+
+  /* forms stack rather than wrap into a ragged two-and-a-half columns */
+  .field { min-width: 0; }
+  .auth-row { grid-template-columns: 1fr; }
+
+  /* A card header is a title, a spacer and a row of controls. On a
+     phone that row is wider than the card, and without wrapping it
+     pushed the page out sideways — the Campaigns header alone came to
+     854px inside a 310px card. */
+  .card-head { flex-wrap: wrap; row-gap: 8px; }
+  .card-head .sp { flex: 1 1 100%; height: 0; }
+
+  /* the same shape on the Social Overview cards */
+  .so-head { flex-wrap: wrap; row-gap: 8px; }
+  .so-seg { flex-wrap: wrap; }
+  .so-filters select, .so-filters input { max-width: none; flex: 1 1 45%; }
+  .so-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  /* Segmented controls are the last small targets on the page: the
+     7d/30d/90d switch and the Overview's metric and axis pickers all
+     render at 21-25px, which is under a thumb. */
+  .seg button, .segbtn, .so-seg button { min-height: 34px; padding: 8px 13px; }
+
+  /* One stat card per row turns a six-figure summary into six screens
+     of scrolling. Two-up keeps a KPI row readable as a row. */
+  .g2, .g4, .g6 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .card.stat .value { font-size: 20px; }
+}
 @media print {
   .rail, .panel, .topbar, .tabbar, .no-print { display: none !important; }
   body { background: #fff; color: #111; }

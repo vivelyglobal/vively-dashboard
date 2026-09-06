@@ -4,6 +4,7 @@
    is the whole point — so the sync runs afterwards and the values are
    read back from what the page actually stored. */
 import { chromium } from 'playwright';
+import { signIn } from './harness-auth.mjs';
 import fs from 'fs';
 const seed = fs.readFileSync('tmp/seed.json', 'utf8');
 const APP = process.argv[2] || 'http://localhost:3120/';
@@ -49,6 +50,7 @@ const gstate = async () => (await fetch(GOOGLE + '/__state')).json();
 
 const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
 const ctx = await b.newContext();
+await signIn(ctx);
 await ctx.addInitScript(([s]) => {
   localStorage.setItem('vively-workspace-v1', s);
   localStorage.setItem('vively-auth-user-v1', JSON.stringify({ email: 'k@v.com', name: 'K' }));

@@ -1,12 +1,14 @@
 /* The parts that only exist once you click something: drawers, wizards,
    and the inline onclick= handlers the string-rendered views still use. */
 import { chromium } from 'playwright';
+import { signIn } from './harness-auth.mjs';
 import fs from 'fs';
 const seed = fs.readFileSync((process.env.VIVELY_SEED || 'tmp/seed.json'), 'utf8');
 const base = process.argv[2] || 'http://localhost:3120/next/';
 
 const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
 const ctx = await b.newContext();
+await signIn(ctx);
 await ctx.addInitScript(([s]) => {
   localStorage.setItem('vively-workspace-v1', s);
   localStorage.setItem('vively-auth-user-v1', JSON.stringify({ email: 'a@b.c', name: 'Test' }));

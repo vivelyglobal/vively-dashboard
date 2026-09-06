@@ -72,9 +72,12 @@ export function ensureOverviewStyles() {
   @media(max-width:1000px){.so-grid{grid-template-columns:repeat(6,1fr)}
     .so-c12,.so-c8,.so-c7,.so-c5,.so-c4{grid-column:span 6}.so-c2{grid-column:span 3}
     .so-cards{grid-template-columns:repeat(2,1fr)}}
-  @media(max-width:640px){.so-grid{grid-template-columns:1fr}
-    .so-c12,.so-c8,.so-c7,.so-c5,.so-c4,.so-c2{grid-column:span 1}
-    .so-cards{grid-template-columns:1fr}}`;
+  /* two columns, not one: the KPI tiles pair up and every chart spans
+     the full width, which halves the scroll without shrinking a chart */
+  @media(max-width:640px){.so-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .so-c12,.so-c8,.so-c7,.so-c5,.so-c4{grid-column:span 2}
+    .so-c2{grid-column:span 1}
+    .so-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}`;
   document.head.appendChild(s);
 }
 

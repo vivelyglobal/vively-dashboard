@@ -1,5 +1,6 @@
 /* The cases a naive dedup gets wrong. */
 import { chromium } from 'playwright';
+import { signIn } from './harness-auth.mjs';
 import fs from 'fs';
 const seed = JSON.parse(fs.readFileSync('tmp/seed.json', 'utf8'));
 const APP = 'http://localhost:3120/';
@@ -11,6 +12,7 @@ const errs = [];
 
 async function session(workspace) {
   const ctx = await b.newContext();
+  await signIn(ctx);
   await ctx.addInitScript(([s]) => {
     localStorage.setItem('vively-workspace-v1', s);
     localStorage.setItem('vively-auth-user-v1', JSON.stringify({ email: 'k@v.com', name: 'K' }));

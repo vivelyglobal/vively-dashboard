@@ -72,11 +72,62 @@ const HAVE_CANDIDATES = !!(META_APP_BASIC_SECRET || META_INSTAGRAM_APP_SECRET);
    not answer at all, which is the safe default for a route that spends
    our Meta rate limit and returns our media. */
 const DIAGNOSTIC_KEY = readEnv("DIAGNOSTIC_KEY");
-/* only ever set in tests, to point the probe at a stub instead of Meta */
-const IG_PROBE_BASE = readEnv("IG_PROBE_BASE");
+/* Points the probe at a stub instead of Meta, for the harness.
+
+   Honoured only outside production, and only for a loopback address.
+   As written before, this was an environment variable that could send
+   the Instagram access token to any host on the internet — anyone who
+   could set it on the service could exfiltrate the token without ever
+   reading it. That someone with Render access can already read the
+   token is not a reason to leave a second, quieter route open. */
+const IG_PROBE_BASE = (() => {
+  const raw = readEnv("IG_PROBE_BASE");
+  if (!raw) return "";
+  if (process.env.NODE_ENV === "production") {
+    console.error("IG_PROBE_BASE is set but ignored: it is not honoured in production.");
+    return "";
+  }
+  if (!/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(raw.replace(/\/$/, ""))) {
+    console.error("IG_PROBE_BASE is set but ignored: only a loopback address is accepted.");
+    return "";
+  }
+  return raw;
+})();
 
 const igWebhook = require("./server/instagram-webhook.js");
 const igCollabProbe = require("./server/instagram-collab-probe.js");
+const auth = require("./server/auth.js");
+
+/* ------------------------------------------------------------------
+   Who is allowed into the workspace.
+
+   Signup was open to the internet, so the accounts that exist are not
+   by themselves a list of who should see the roster — "has an account"
+   and "may read bank details" are different questions.
+   STAFF_EMAILS answers the second one, and lives in the environment
+   precisely so that nothing inside the app can grant it.
+
+   Both of these fail closed. An unset STAFF_EMAILS locks everyone out
+   rather than letting everyone in, and an unset SIGNUP_CODE closes
+   signup rather than leaving it open; each says so plainly when it
+   refuses, because a silent lockout is its own kind of outage.
+   ------------------------------------------------------------------ */
+const STAFF_EMAILS = auth.parseStaffList(readEnv("STAFF_EMAILS"));
+const SIGNUP_CODE = readEnv("SIGNUP_CODE");
+if (!STAFF_EMAILS.length) {
+  console.error("STAFF_EMAILS is not set — the workspace API will refuse every request. " +
+    "Set it to the comma-separated emails of the people who should have access.");
+} else {
+  /* the count, not the addresses: enough to catch a value that parsed
+     into fewer people than intended, without printing a staff list into
+     logs that outlive the deploy */
+  console.log("STAFF_EMAILS: %d address(es) authorised.", STAFF_EMAILS.length);
+  const rejects = auth.staffListRejects(readEnv("STAFF_EMAILS"));
+  if (rejects.length) {
+    console.error("STAFF_EMAILS: %d entr(ies) were not usable as an email address and were ignored. " +
+      "Check for typos or stray characters.", rejects.length);
+  }
+}
 
 let mongoClientPromise = null;
 function getMongoClient() {
@@ -491,6 +542,92 @@ function verifyPassword(password, stored) {
   return crypto.timingSafeEqual(Buffer.from(originalHash), Buffer.from(next));
 }
 
+/* ------------------------------------------------------------------
+   Sessions.
+
+   Stored server-side and keyed by an unguessable cookie, so signing
+   out actually ends the session and a stolen laptop stops working when
+   the record expires. Without a database there is an in-memory map so
+   the harness can exercise the same code path; it is not what
+   production runs on and the process forgets it on restart.
+   ------------------------------------------------------------------ */
+const sessionMemory = new Map();
+
+async function sessionsCollection() {
+  const client = await getMongoClient();
+  if (!client) return null;
+  const col = client.db(MONGODB_DB).collection("sessions");
+  if (!sessionsCollection._ready) {
+    sessionsCollection._ready = true;
+    col.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 })
+      .catch((e) => console.error("sessions TTL index:", e.message));
+  }
+  return col;
+}
+
+async function createSession(user) {
+  const session = auth.newSession(user);
+  const col = await sessionsCollection();
+  if (col) await col.insertOne(session);
+  else sessionMemory.set(session._id, session);
+  return session;
+}
+
+async function readSession(sid) {
+  if (!sid) return null;
+  const col = await sessionsCollection();
+  const session = col ? await col.findOne({ _id: sid }) : sessionMemory.get(sid) || null;
+  /* expiry is checked here as well as by the TTL index: the index
+     sweeps on a timer, and an expired session has to be refused the
+     moment it expires rather than whenever Mongo next gets round to it */
+  if (!session || auth.sessionExpired(session)) return null;
+  return session;
+}
+
+async function destroySession(sid) {
+  if (!sid) return;
+  const col = await sessionsCollection();
+  if (col) await col.deleteOne({ _id: sid });
+  else sessionMemory.delete(sid);
+}
+
+/* Attaches req.session and req.user when the caller has a valid one.
+   Never refuses anything by itself — the guards below decide. */
+async function loadSession(req) {
+  if (req.session !== undefined) return req.session;
+  const sid = auth.parseCookies(req.headers.cookie)[auth.SESSION_COOKIE];
+  let session = null;
+  try { session = await readSession(sid); } catch (e) {
+    console.error("Session lookup failed:", e.message);
+  }
+  req.session = session;
+  return session;
+}
+
+/* The guard. Two questions, refused differently on purpose: a caller
+   with no session gets 401 and the dashboard shows the login screen; a
+   caller who is signed in but is not staff gets 403, because logging
+   in again will not help them and pretending otherwise would send a
+   creator round a loop they cannot exit. */
+function requireStaff(handler) {
+  return async (req, res) => {
+    const session = await loadSession(req);
+    if (!session) {
+      return res.status(401).json({ error: "Sign in to continue.", auth: "required" });
+    }
+    if (!auth.isStaff(session.email, STAFF_EMAILS)) {
+      console.error("Workspace access refused for a signed-in non-staff account.");
+      return res.status(403).json({
+        error: STAFF_EMAILS.length
+          ? "This account does not have access to the workspace."
+          : "Access has not been configured on this server yet.",
+        auth: "forbidden"
+      });
+    }
+    return handler(req, res);
+  };
+}
+
 function publicUser(user) {
   return {
     id: user.id,
@@ -534,7 +671,7 @@ app.get("/api/health", (req, res) => {
 
 /* ---------------------------- workspace save/load ---------------------------- */
 
-app.get("/api/workspace", async (req, res) => {
+app.get("/api/workspace", requireStaff(async (req, res) => {
   if (!MONGODB_URI) {
     return res.status(503).json({ error: "Database not configured on the server yet — set MONGODB_URI." });
   }
@@ -550,9 +687,9 @@ app.get("/api/workspace", async (req, res) => {
     console.error("GET /api/workspace failed:", err.message);
     return res.status(502).json({ error: "Could not reach the database." });
   }
-});
+}));
 
-app.post("/api/workspace", async (req, res) => {
+app.post("/api/workspace", requireStaff(async (req, res) => {
   if (!MONGODB_URI) {
     return res.status(503).json({ error: "Database not configured on the server yet — set MONGODB_URI." });
   }
@@ -591,11 +728,11 @@ app.post("/api/workspace", async (req, res) => {
     console.error("POST /api/workspace failed:", err.message);
     return res.status(502).json({ error: "Could not reach the database." });
   }
-});
+}));
 
 /* ---------------------------- notion sync ---------------------------- */
 
-app.get("/api/notion/database", async (req, res) => {
+app.get("/api/notion/database", requireStaff(async (req, res) => {
   if (!NOTION_TOKEN) {
     return res.status(503).json({ error: "Notion is not configured on the server yet — set NOTION_TOKEN." });
   }
@@ -626,9 +763,9 @@ app.get("/api/notion/database", async (req, res) => {
     console.error("GET /api/notion/database failed:", err.message);
     return res.status(502).json({ error: err.message });
   }
-});
+}));
 
-app.get("/api/notion/query", async (req, res) => {
+app.get("/api/notion/query", requireStaff(async (req, res) => {
   if (!NOTION_TOKEN) {
     return res.status(503).json({ error: "Notion is not configured on the server yet — set NOTION_TOKEN." });
   }
@@ -659,14 +796,14 @@ app.get("/api/notion/query", async (req, res) => {
     console.error("GET /api/notion/query failed:", err.message);
     return res.status(502).json({ error: err.message });
   }
-});
+}));
 
 /* ---------------------------- google calendar ---------------------------- */
 
 /* client_email is deliberately returned: it is not a secret, and it is the
    exact string that has to be pasted into the calendar's sharing settings.
    Showing it in the app saves digging the JSON key back out. */
-app.get("/api/calendar/status", async (req, res) => {
+app.get("/api/calendar/status", requireStaff(async (req, res) => {
   if (!GOOGLE_SERVICE_ACCOUNT || !GOOGLE_CALENDAR_ID) {
     return res.json({
       ok: true, configured: false,
@@ -686,9 +823,9 @@ app.get("/api/calendar/status", async (req, res) => {
   } catch (err) {
     return res.status(err.status === 404 ? 404 : 502).json({ error: err.message, clientEmail });
   }
-});
+}));
 
-app.get("/api/calendar/events", async (req, res) => {
+app.get("/api/calendar/events", requireStaff(async (req, res) => {
   try {
     const q = new URLSearchParams({ maxResults: "2500", singleEvents: "true", showDeleted: "false" });
     if (req.query.timeMin) q.set("timeMin", String(req.query.timeMin));
@@ -719,13 +856,13 @@ app.get("/api/calendar/events", async (req, res) => {
     console.error("GET /api/calendar/events failed:", err.message);
     return res.status(502).json({ error: err.message });
   }
-});
+}));
 
 /* Create-or-update, keyed on an id the dashboard chooses. Creating with a
    known id is what makes a repeated sync land on the same event instead of
    a second copy; if Google says that id is taken, this patches it rather
    than failing, so re-running the sync is always safe. */
-app.post("/api/calendar/event", async (req, res) => {
+app.post("/api/calendar/event", requireStaff(async (req, res) => {
   const e = req.body || {};
   if (!e.key || !e.summary || !e.start || !e.end) {
     return res.status(400).json({ error: "key, summary, start and end are all required." });
@@ -761,9 +898,9 @@ app.post("/api/calendar/event", async (req, res) => {
     console.error("PATCH /api/calendar/event failed:", err.message);
     return res.status(502).json({ error: err.message });
   }
-});
+}));
 
-app.post("/api/calendar/event/delete", async (req, res) => {
+app.post("/api/calendar/event/delete", requireStaff(async (req, res) => {
   const b = req.body || {};
   const id = b.id ? String(b.id) : (b.key ? gcalEventId(b.kind || "visit", b.key) : "");
   if (!id) return res.status(400).json({ error: "id, or kind and key, are required." });
@@ -776,11 +913,11 @@ app.post("/api/calendar/event/delete", async (req, res) => {
     console.error("POST /api/calendar/event/delete failed:", err.message);
     return res.status(502).json({ error: err.message });
   }
-});
+}));
 
 /* Writes one probe event and removes it again, so "is this wired up
    correctly?" has a real answer instead of a hopeful one. */
-app.post("/api/calendar/test", async (req, res) => {
+app.post("/api/calendar/test", requireStaff(async (req, res) => {
   const id = gcalEventId("test", Date.now());
   const start = new Date(Date.now() + 86400000);
   const iso = (d) => d.toISOString().replace(/\.\d+Z$/, "Z");
@@ -799,7 +936,7 @@ app.post("/api/calendar/test", async (req, res) => {
     console.error("POST /api/calendar/test failed:", err.message);
     return res.status(502).json({ error: err.message });
   }
-});
+}));
 
 /* ---------------------------- partner view ----------------------------
    A partner's point of contact gets one unguessable link and no login.
@@ -998,7 +1135,7 @@ app.post("/api/partner/:token/comment", async (req, res) => {
 });
 
 /* what the dashboard reads to show the comments back to you */
-app.get("/api/partner-comments", async (req, res) => {
+app.get("/api/partner-comments", requireStaff(async (req, res) => {
   if (!MONGODB_URI) return res.json({ ok: true, comments: [] });
   try {
     const col = await partnerCommentsCollection();
@@ -1008,9 +1145,9 @@ app.get("/api/partner-comments", async (req, res) => {
   } catch (err) {
     return res.status(502).json({ error: err.message });
   }
-});
+}));
 
-app.post("/api/partner-comments/read", async (req, res) => {
+app.post("/api/partner-comments/read", requireStaff(async (req, res) => {
   try {
     const col = await partnerCommentsCollection();
     await col.updateMany({ read: { $ne: true } }, { $set: { read: true } });
@@ -1018,7 +1155,7 @@ app.post("/api/partner-comments/read", async (req, res) => {
   } catch (err) {
     return res.status(502).json({ error: err.message });
   }
-});
+}));
 
 app.get("/partner/:token", (req, res) => {
   res.set("X-Robots-Tag", "noindex, nofollow");
@@ -1035,7 +1172,7 @@ app.get("/partner/:token", (req, res) => {
    and the two take different shapes. The type is not stored alongside the
    mapping, so this tries the likely one and falls back rather than making
    an extra schema call before every write. */
-app.post("/api/notion/status", async (req, res) => {
+app.post("/api/notion/status", requireStaff(async (req, res) => {
   if (!NOTION_TOKEN) return res.status(503).json({ error: "Notion is not configured on the server yet." });
   const b = req.body || {};
   const pageId = normalizeNotionId(b.pageId);
@@ -1063,12 +1200,22 @@ app.post("/api/notion/status", async (req, res) => {
       return res.status(502).json({ error: err.message });
     }
   }
-});
+}));
 
 app.post("/api/signup", async (req, res) => {
   const name = String(req.body?.name || "").trim();
   const email = normalizeEmail(req.body?.email);
   const password = String(req.body?.password || "");
+
+  /* Signup used to be open to anyone who found the URL. An account no
+     longer grants access on its own, but leaving the door open invites
+     confusion, so it now needs a code. Unset means closed. */
+  if (!SIGNUP_CODE) {
+    return res.status(403).json({ error: "Signup is closed on this server." });
+  }
+  if (String(req.body?.code || "") !== SIGNUP_CODE) {
+    return res.status(403).json({ error: "That signup code is not right." });
+  }
 
   if (!name) return res.status(400).json({ error: "Nama wajib diisi" });
   if (!email || !email.includes("@")) return res.status(400).json({ error: "Email tidak valid" });
@@ -1102,11 +1249,41 @@ app.post("/api/signup", async (req, res) => {
       users.push(user);
       writeUsers(users);
     }
+    /* deliberately no session: a new account still has to sign in, and
+       still has to be in STAFF_EMAILS to see anything */
     return res.status(201).json({ ok: true, user: publicUser(user) });
   } catch (err) {
     console.error("POST /api/signup failed:", err.message);
     return res.status(502).json({ error: "Could not reach the database." });
   }
+});
+
+/* The dashboard asks this on boot instead of trusting what it put in
+   localStorage, which is the only way the browser can know whether the
+   session is still real. */
+app.get("/api/me", async (req, res) => {
+  const session = await loadSession(req);
+  if (!session) return res.status(401).json({ error: "Not signed in.", auth: "required" });
+  const staff = auth.isStaff(session.email, STAFF_EMAILS);
+  res.json({
+    ok: true,
+    user: { id: session.userId, name: session.name, email: session.email },
+    staff,
+    /* so a non-staff account is told why rather than being bounced
+       back to a login screen that will not help it */
+    reason: staff ? null : (STAFF_EMAILS.length
+      ? "This account does not have access to the workspace."
+      : "Access has not been configured on this server yet.")
+  });
+});
+
+app.post("/api/logout", async (req, res) => {
+  const sid = auth.parseCookies(req.headers.cookie)[auth.SESSION_COOKIE];
+  try { await destroySession(sid); } catch (e) { console.error("Logout:", e.message); }
+  /* the cookie is cleared whatever happened to the record — a logout
+     that half works is worse than one that fails loudly */
+  res.setHeader("Set-Cookie", auth.clearCookie({ secure: auth.isSecureRequest(req) }));
+  res.json({ ok: true });
 });
 
 app.post("/api/login", async (req, res) => {
@@ -1123,7 +1300,17 @@ app.post("/api/login", async (req, res) => {
     if (!user || !verifyPassword(password, user.passwordHash)) {
       return res.status(401).json({ error: "Email atau password salah" });
     }
-    return res.json({ ok: true, user: publicUser(user) });
+    /* The password check here was already sound before this change —
+       what was missing is that nothing came of it. Now a session does. */
+    const session = await createSession(user);
+    res.setHeader("Set-Cookie", auth.sessionCookie(session._id, { secure: auth.isSecureRequest(req) }));
+    return res.json({
+      ok: true,
+      user: publicUser(user),
+      /* said out loud so the dashboard can tell "wrong password" apart
+         from "right password, but this account is not staff" */
+      staff: auth.isStaff(user.email, STAFF_EMAILS)
+    });
   } catch (err) {
     console.error("POST /api/login failed:", err.message);
     return res.status(502).json({ error: "Could not reach the database." });
@@ -1368,6 +1555,17 @@ app.post("/api/webhooks/instagram", async (req, res) => {
    revealing any of it. Says whether each secret is present, never
    what it is. */
 app.get("/api/webhooks/instagram/status", async (req, res) => {
+  /* It reports which secret would verify a delivery and how much
+     traffic arrives, which is a map of the integration's soft spots.
+     Either credential opens it: a staff session for someone with the
+     dashboard open, or the diagnostic key for a curl from a terminal. */
+  const session = await loadSession(req);
+  const keyed = DIAGNOSTIC_KEY &&
+    igWebhook.tokensMatch(req.get("x-diagnostic-key") || req.query.key || "", DIAGNOSTIC_KEY);
+  if (!keyed && !(session && auth.isStaff(session.email, STAFF_EMAILS))) {
+    return res.status(401).json({ error: "Sign in, or pass the diagnostic key.", auth: "required" });
+  }
+
   /* Four states used to look like one number. A delivery that was
      refused, one that arrived in a shape we do not parse, and one that
      never arrived at all all showed as zero — so "Test successful" next
