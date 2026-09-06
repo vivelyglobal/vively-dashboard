@@ -346,3 +346,80 @@ export function trendWindow(series, days, today) {
     state: points.length === 0 ? 'empty' : points.length === 1 ? 'single' : 'ok'
   };
 }
+
+/* ---- the campaign register -------------------------------------------
+
+   One row per campaign for the scan-the-company view. It composes rules
+   that already exist — the confirmed count from campaignPerformance, the
+   schedule test from attentionCounts, the completion test from
+   completionSplit — rather than inventing a sixth definition of "how is
+   this campaign doing". If those rules change, this changes with them.
+   ------------------------------------------------------------------ */
+
+export function campaignRegister(db, rows, today) {
+  const d = db || DB;
+  const now = today || TODAY;
+  const by = {};
+  byCampaignRollup(rows).forEach((g) => { by[g.key] = g; });
+
+  return (d.campaigns || []).map((cp) => {
+    const g = by[cp.id] || { views: 0, engagements: 0, content: 0, measured: 0 };
+    const ps = homeParts(d, cp.id);
+    const confirmed = ps.filter((p) => homeActive(p) && atLeast(p, 'confirmed')).length;
+    const delivered = ps.filter(homeLive).length;
+    const target = Number(cp.targetCreators) || 0;
+    const status = String(cp.status || '').toLowerCase();
+    const start = dateOnly(cp.start), end = dateOnly(cp.end);
+
+    /* how far through its own calendar the campaign is; null when the
+       dates cannot answer it, which is not the same as zero */
+    let elapsed = null;
+    if (start && end && end > start) {
+      const span = new Date(end + 'T00:00:00Z') - new Date(start + 'T00:00:00Z');
+      elapsed = Math.max(0, Math.min(1, (now - new Date(start + 'T00:00:00Z')) / span));
+    }
+    const progress = target ? Math.min(1, confirmed / target) : 0;
+
+    let health = 'ontrack';
+    if (status === 'wrapped' || (target > 0 && delivered >= target)) health = 'complete';
+    else if (elapsed === null) health = 'unknown';
+    else if (elapsed <= 0) health = 'notstarted';
+    else if (target && progress < elapsed) health = 'risk';
+
+    return {
+      id: cp.id, name: cp.name || cp.brand || cp.id, status,
+      statusLabel: (CAMPAIGN_STATUS[status] || {}).label || 'Unknown',
+      confirmed, delivered, target, progress, elapsed,
+      posts: g.content, views: g.views, measured: g.measured,
+      unmeasured: g.content > 0 && g.measured === 0,
+      noTarget: !target, health
+    };
+  }).sort((a, b) => b.views - a.views || b.confirmed - a.confirmed);
+}
+
+/* ---- the creator flow, collapsed to the steps that record movement ----
+
+   creatorPipeline returns all nine stages. Three of them — contacted,
+   replied and shortlisted — are pass-through: the Notion form never
+   produces those values, so every sourced creator counts at all three
+   and drawing them as separate segments would show movement that was
+   never recorded. They collapse into the first block, and the card says
+   so rather than leaving the reader to wonder why three bars match.
+   ------------------------------------------------------------------ */
+
+export function creatorFlow(db, campaignIds) {
+  const f = creatorPipeline(db, campaignIds);
+  const at = (id) => (f.counts.find((c) => c.stage.id === id) || { n: 0 }).n;
+  const steps = [
+    { id: 'shortlisted', label: 'Sourced → Shortlisted', n: at('sourced') },
+    { id: 'confirmed',   label: 'Confirmed',             n: at('confirmed') },
+    { id: 'shipped',     label: 'Shipped',               n: at('shipped') },
+    { id: 'live',        label: 'Live',                  n: at('live') }
+  ];
+  const losses = steps.slice(1).map((s, i) => ({
+    lost: steps[i].n - s.n,
+    through: steps[i].n ? s.n / steps[i].n : 0,
+    label: s.id === 'confirmed' ? 'declined' : s.id === 'shipped' ? 'not shipped' : 'no link'
+  }));
+  return { steps, losses, dropped: f.dropped, total: f.total };
+}

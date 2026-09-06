@@ -191,7 +191,9 @@ await step('the desktop layout is untouched', async () => {
   const w = await wide.newPage();
   await w.goto(APP, { waitUntil: 'domcontentloaded' });
   await w.waitForTimeout(1700);
-  await w.evaluate(() => { location.hash = '#/social/overview'; });
+  /* measured on the homepage: the chrome checks below hold on any
+     route, and the composition checks need the band */
+  await w.evaluate(() => { location.hash = '#/overview'; });
   await w.waitForTimeout(1100);
   const m = await w.evaluate(() => {
     const panel = document.querySelector('aside.panel');
@@ -199,75 +201,76 @@ await step('the desktop layout is untouched', async () => {
              panelW: Math.round(panel.getBoundingClientRect().width),
              railW: Math.round(document.querySelector('.rail').getBoundingClientRect().width),
              topbarWrap: getComputedStyle(document.querySelector('.topbar')).flexWrap,
-             cards: document.querySelectorAll('#view .card').length };
+             /* the homepage is composed of sections now, not cards —
+                what must survive on desktop is the band, its satellite
+                grid side by side, and the register */
+             band: !!document.querySelector('.hm-band'),
+             satCols: (() => { const el = document.querySelector('.hm-sats');
+               return el ? getComputedStyle(el).gridTemplateColumns.split(' ').length : 0; })(),
+             regRows: document.querySelectorAll('#hmRegister .hm-reg-row').length };
   });
   await wide.close();
   if (m.panelPos === 'fixed') throw new Error('the phone overlay leaked into the desktop layout');
   if (m.panelW < 200) throw new Error('the desktop side menu collapsed: ' + m.panelW + 'px');
   if (m.railW < 70) throw new Error('the desktop rail shrank to ' + m.railW + 'px');
   if (m.topbarWrap === 'wrap') throw new Error('the desktop top bar is wrapping');
-  if (m.cards < 5) throw new Error('the Overview lost cards on desktop: ' + m.cards);
+  if (!m.band) throw new Error('the command band did not render on desktop');
+  if (m.satCols !== 2) throw new Error('the satellites collapsed on desktop: ' + m.satCols + ' column(s)');
+  if (!m.regRows) throw new Error('the campaign register is empty on desktop');
 });
 
 /* ---- the homepage, which is the first thing anyone sees ---------------- */
 
-await step('the homepage KPI strip goes two-up rather than five-across', async () => {
+await step('the command band stacks instead of scrolling sideways', async () => {
   await go('#/overview');
   const m = await p.evaluate(() => {
-    const strip = document.querySelector('.hm-kpis');
-    if (!strip) return null;
-    const cards = [...strip.children];
-    const cols = getComputedStyle(strip).gridTemplateColumns.split(' ').length;
+    const band = document.querySelector('.hm-band');
+    if (!band) return null;
+    const sats = document.querySelector('.hm-sats');
     return {
-      cols,
-      widest: Math.max(...cards.map((c) => Math.round(c.getBoundingClientRect().width))),
-      lastSpansBoth: cards.length === 5 &&
-        Math.round(cards[4].getBoundingClientRect().width) > Math.round(cards[0].getBoundingClientRect().width) + 20,
-      overflow: cards.filter((c) => c.getBoundingClientRect().right > window.innerWidth + 1).length
+      cols: getComputedStyle(sats).gridTemplateColumns.split(' ').length,
+      bandRight: Math.round(band.getBoundingClientRect().right),
+      vw: window.innerWidth,
+      doc: document.documentElement.scrollWidth,
+      bigPx: Math.round(parseFloat(getComputedStyle(document.querySelector('.hm-big')).fontSize))
     };
   });
-  if (!m) throw new Error('the KPI strip did not render');
-  if (m.cols !== 2) throw new Error('the KPI strip is ' + m.cols + ' columns wide on a phone');
-  if (m.overflow) throw new Error(m.overflow + ' KPI card(s) run off the right edge');
-  if (!m.lastSpansBoth) throw new Error('the fifth card should span both columns rather than sit half-width');
-});
-
-await step('the funnel labels still fit beside their bars', async () => {
-  const bad = await p.evaluate(() => {
-    const rows = [...document.querySelectorAll('#hmFunnel .fn-row')];
-    return rows.filter((r) => {
-      const label = r.querySelector('.fl');
-      const track = r.querySelector('.fn-track');
-      /* the track is what has to survive: a label that eats the row
-         leaves a bar with no width, which is worse than an ellipsis */
-      return !track || track.getBoundingClientRect().width < 40 ||
-             label.scrollWidth > label.clientWidth + 40;
-    }).length;
-  });
-  if (bad) throw new Error(bad + ' funnel row(s) have no usable bar at 390px');
-});
-
-await step('the four-way metric selector wraps instead of pushing the page', async () => {
-  const m = await p.evaluate(() => {
-    const seg = document.querySelector('#hmMetric');
-    if (!seg) return null;
-    return { right: Math.round(seg.getBoundingClientRect().right), vw: window.innerWidth,
-             /* scrollWidth, not the box: an inline-flex that refuses to
-                wrap sits inside its parent's rectangle while still
-                dragging the document out from under it */
-             segScroll: seg.scrollWidth, segClient: seg.clientWidth,
-             doc: document.documentElement.scrollWidth };
-  });
-  if (!m) throw new Error('the metric selector did not render');
-  if (m.right > m.vw + 1) throw new Error('the selector runs to ' + m.right + 'px in a ' + m.vw + 'px viewport');
-  if (m.segScroll > m.segClient + 1) throw new Error('the selector overflows itself: ' + m.segScroll + ' > ' + m.segClient);
+  if (!m) throw new Error('the band did not render');
+  if (m.cols !== 2) throw new Error('the satellites are ' + m.cols + ' columns on a phone');
+  if (m.bandRight > m.vw + 1) throw new Error('the band runs to ' + m.bandRight + 'px in ' + m.vw);
   if (m.doc > m.vw + 1) throw new Error('the homepage scrolls sideways: ' + m.doc + 'px');
+  /* the headline is the point of the band; clamped it must still lead */
+  if (m.bigPx < 44) throw new Error('the headline shrank to ' + m.bigPx + 'px');
 });
 
-await step('the Needs Attention rows are thumb-sized', async () => {
+await step('the creator flow scales rather than overflowing', async () => {
+  const m = await p.evaluate(() => {
+    const svg = document.querySelector('#hmFlow svg');
+    if (!svg) return null;
+    return { w: Math.round(svg.getBoundingClientRect().width), vw: window.innerWidth };
+  });
+  if (!m) throw new Error('no flow drawn');
+  if (m.w > m.vw + 1) throw new Error('the flow is ' + m.w + 'px wide in a ' + m.vw + 'px viewport');
+});
+
+await step('the campaign register reflows and its rows stay tappable', async () => {
+  const m = await p.evaluate(() => {
+    const rows = [...document.querySelectorAll('#hmRegister .hm-reg-row')];
+    return {
+      n: rows.length,
+      short: rows.filter((r) => r.getBoundingClientRect().height < 40).length,
+      over: rows.filter((r) => r.getBoundingClientRect().right > window.innerWidth + 1).length
+    };
+  });
+  if (!m.n) throw new Error('no register rows');
+  if (m.over) throw new Error(m.over + ' register row(s) run off the right edge');
+  if (m.short) throw new Error(m.short + ' register row(s) are under 40px tall');
+});
+
+await step('the attention rows are thumb-sized', async () => {
   const small = await p.evaluate(() => [...document.querySelectorAll('.hm-att .row')]
-    .filter((r) => r.getBoundingClientRect().height < 32).length);
-  if (small) throw new Error(small + ' attention row(s) are under 32px tall');
+    .filter((r) => r.getBoundingClientRect().height < 40).length);
+  if (small) throw new Error(small + ' attention row(s) are under 40px tall');
 });
 
 await step('no page errors anywhere in all of that', async () => {

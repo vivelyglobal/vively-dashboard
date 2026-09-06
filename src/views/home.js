@@ -1,10 +1,8 @@
-import { barsH, funnelView, lineChart } from '../charts/index.js';
-import { columnChart, donutChart } from '../charts/socialViz.js';
-import { DAY, TODAY, dLabel } from '../lib/dates.js';
+import { dLabel } from '../lib/dates.js';
 import { kmb, num } from '../lib/format.js';
-import { DB } from '../model/db.js';
-import { HOME_METRICS, activityFeed, attentionCounts, campaignPerformance, campaignPipeline, completionSplit, creatorPipeline, homeKpis, trendWindow } from '../model/homeStats.js';
-import { overviewRows, overviewSeries, topContent } from '../model/socialStats.js';
+import { DB, notify } from '../model/db.js';
+import { activityFeed, attentionCounts, campaignPipeline, campaignRegister, creatorFlow, homeKpis } from '../model/homeStats.js';
+import { overviewRows, topContent } from '../model/socialStats.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { emptyState } from '../ui/html.js';
 import { showSocialContent } from './social.js';
@@ -13,83 +11,203 @@ import { ensureOverviewStyles, platformTag } from './socialOverview.js';
 /* ============================================================
    HOME — the page
 
-   White, minimal, asymmetric. Same cards, same series variables, same
-   mono figures as the rest of the app; the only new visual weight is
-   the amber rule on Needs Attention.
+   Composed as an operating surface rather than a dashboard. A dark
+   command band carries the headline figure and the shape of the
+   portfolio; below it the page runs as a rhythm of sections separated
+   by space and a hairline rather than by a border on every widget.
 
-   Its CSS is injected at runtime rather than added to the head, for
-   the same reason the Social Overview's is: the head stylesheet is
-   itself a module with a line range, and adding a rule to it would
-   shift every anchor after it.
+   Three things are deliberate:
+
+     · One elevated surface per screen. The band is the only thing that
+       lifts off the ground, so elevation means "this is the summary"
+       rather than "this is a div".
+     · The creator funnel is drawn as a flow whose narrowing IS the
+       loss, not as nine bars of which five record no movement.
+     · Campaigns are entities, not a chart. One row each, progress
+       integrated, so fifteen of them scan in a single pass.
+
+   Its CSS is injected here rather than added to the head stylesheet,
+   which is itself a module with a line range — editing it would shift
+   every anchor after it.
    ============================================================ */
 
-export const home = { metric: 'views', range: 30, dateMode: 'metrics' };
+export const home = { registerAll: false };
 
 export function ensureHomeStyles() {
   if (document.getElementById('hmCss')) return;
   const s = document.createElement('style');
   s.id = 'hmCss';
   s.textContent = `
-  .hm-grid{display:grid;grid-template-columns:repeat(12,1fr);gap:14px;align-items:start}
-  .hm-grid > .card{min-width:0;margin:0}
-  .hm-c12{grid-column:span 12}.hm-c8{grid-column:span 8}.hm-c7{grid-column:span 7}
-  .hm-c5{grid-column:span 5}.hm-c4{grid-column:span 4}
-  .hm-kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:14px}
-  .hm-kpis > .card{margin:0;min-width:0}
-  .hm-att{border-left:3px solid var(--warning)}
-  .hm-att .row{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;
-    padding:9px 2px;border-bottom:1px solid var(--line);text-decoration:none;color:inherit}
-  .hm-att .row:last-of-type{border-bottom:0}
+  /* ---- the command band ---- */
+  .hm-band{background:#0C1211;color:#F1F6F3;border-radius:14px;padding:34px 30px 26px;margin-bottom:44px;
+    background-image:radial-gradient(120% 130% at 88% -10%,rgba(47,168,140,.16),transparent 58%)}
+  .hm-top{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:58px;align-items:start}
+  .hm-lab{font:500 10.5px/1 'Roboto Mono',monospace;letter-spacing:.15em;text-transform:uppercase;color:#7E938B}
+  .hm-big{font-size:clamp(56px,8vw,86px);font-weight:600;line-height:.92;letter-spacing:-.045em;
+    margin-top:14px;font-variant-numeric:tabular-nums}
+  .hm-cap{font-size:19px;font-weight:500;letter-spacing:-.02em;margin-top:10px}
+  .hm-band .hm-sub{color:#7E938B;font-size:13px;margin-top:7px}
+  .hm-sats{display:grid;grid-template-columns:1fr 1fr;gap:24px 44px;padding-left:38px;border-left:1px solid #22302C}
+  .hm-sat .l{font:500 10px/1 'Roboto Mono',monospace;letter-spacing:.13em;text-transform:uppercase;color:#7E938B}
+  .hm-sat .v{font-size:26px;font-weight:600;letter-spacing:-.028em;margin-top:8px;font-variant-numeric:tabular-nums}
+  .hm-sat .s{font:400 10.5px/1.35 'Roboto Mono',monospace;color:#7E938B;margin-top:5px}
+
+  /* ---- the campaign pipeline rail, inside the band ---- */
+  .hm-rail{margin-top:32px;padding-top:22px;border-top:1px solid #22302C}
+  .hm-rail-h{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:13px}
+  .hm-rail-h .t{font:500 10px/1 'Roboto Mono',monospace;letter-spacing:.13em;text-transform:uppercase;color:#7E938B}
+  .hm-rail-h .n{font:400 11px/1 'Roboto Mono',monospace;color:#7E938B}
+  .hm-track{display:flex;gap:4px;height:34px}
+  .hm-seg{border-radius:5px;display:flex;align-items:center;justify-content:center;background:#151E1B;
+    cursor:pointer;transition:transform .16s ease;min-width:28px;border:0;color:inherit;font:inherit;padding:0}
+  .hm-seg:hover{transform:translateY(-2px)}
+  .hm-seg .c{font:600 14px/1 'Roboto Mono',monospace}
+  .hm-seg.on{background:#0E7C66}.hm-seg.on .c{color:#04120E}
+  .hm-seg.mid{background:#2C403A}
+  .hm-seg.zero{background:transparent;box-shadow:inset 0 0 0 1px #22302C}
+  .hm-seg.zero .c{color:#7E938B;font-weight:400}
+  .hm-labs{display:flex;gap:4px;margin-top:9px}
+  .hm-labs span{font:400 10.5px/1.3 'Roboto Mono',monospace;color:#7E938B;text-align:center;min-width:28px}
+
+  /* ---- sections, not boxes ---- */
+  .hm-flow{display:flex;flex-direction:column;gap:50px}
+  .hm-sec{display:flex;align-items:baseline;gap:12px;margin-bottom:17px}
+  .hm-sec h4{margin:0;font-size:15px;font-weight:600;letter-spacing:-.015em;white-space:nowrap}
+  .hm-sec .ln{flex:1;height:1px;background:var(--line)}
+  .hm-sec .m{font:400 11px/1 'Roboto Mono',monospace;color:var(--text-3);white-space:nowrap}
+  .hm-duo{display:grid;grid-template-columns:1.62fr 1fr;gap:44px;align-items:start}
+  .hm-note{font:400 11.5px/1.65 'Roboto Mono',monospace;color:var(--text-3);margin-top:15px}
+
+  /* ---- creator flow ---- */
+  #hmFlow svg{width:100%;height:auto;display:block;overflow:visible}
+
+  /* ---- attention feed ---- */
+  .hm-att .row{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;
+    padding:13px 10px;margin:0 -10px;border-radius:8px;text-decoration:none;color:inherit;
+    min-height:40px;transition:background .14s ease}
+  .hm-att .row + .row{box-shadow:inset 0 1px 0 var(--line)}
   .hm-att .row:hover{background:var(--surface-2)}
-  .hm-att .n{font:500 14px/1 'Roboto Mono',monospace;min-width:26px;text-align:right}
-  .hm-att .row.zero .n,.hm-att .row.zero .t{color:var(--text-3)}
-  .hm-att .t{font-size:12.5px}
-  .hm-att .go{color:var(--text-3);font-size:12px}
-  .hm-note{font:400 11px/1.5 'Roboto Mono',monospace;color:var(--text-3);margin-top:10px}
-  .hm-warn{font:400 11px/1.5 'Roboto Mono',monospace;color:var(--warning);margin-top:8px}
-  .hm-blank{border:1px dashed var(--line-strong);border-radius:8px;padding:18px;text-align:center;
-    color:var(--text-3);font-size:12.5px;line-height:1.6}
-  .hm-blank b{display:block;color:var(--text-2);font-weight:500;margin-bottom:5px}
-  .hm-feed{display:flex;flex-direction:column;gap:0}
-  .hm-feed .e{display:grid;grid-template-columns:52px 1fr;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:12.5px}
-  .hm-feed .e:last-child{border-bottom:0}
+  .hm-att .dot{width:7px;height:7px;border-radius:50%;background:var(--text-3)}
+  .hm-att .row.crit .dot{background:var(--danger);box-shadow:0 0 0 3px rgba(220,76,76,.14)}
+  .hm-att .row.warn .dot{background:var(--warning);box-shadow:0 0 0 3px rgba(250,178,25,.14)}
+  .hm-att .tx{font-size:13.5px;display:flex;align-items:baseline;gap:9px;min-width:0}
+  .hm-att .tx b{font:600 15px/1 'Roboto Mono',monospace}
+  .hm-att .row.crit .tx b{color:var(--danger)}
+  .hm-att .row.warn .tx b{color:var(--warning)}
+  .hm-att .tx span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hm-att .row.done .tx,.hm-att .row.done .tx b{color:var(--text-3);font-weight:400}
+  .hm-att .go{color:var(--text-3);font-size:13px;opacity:0;transition:opacity .14s ease}
+  .hm-att .row:hover .go{opacity:1}
+  .hm-att .row.done:hover{background:transparent}
+  .hm-att .row.done:hover .go{opacity:0}
+
+  /* ---- campaign register ---- */
+  .hm-reg-head,.hm-reg-row{display:grid;
+    grid-template-columns:minmax(160px,2fr) 104px minmax(120px,1fr) 66px 104px 96px;
+    gap:18px;align-items:center}
+  .hm-reg-head{padding:0 12px 11px;border-bottom:1px solid var(--line-strong)}
+  .hm-reg-head span{font:500 10px/1 'Roboto Mono',monospace;letter-spacing:.12em;
+    text-transform:uppercase;color:var(--text-3)}
+  .hm-reg-head .r,.hm-reg-row .r{text-align:right}
+  .hm-reg-row{padding:14px 12px;border-radius:9px;cursor:pointer;width:100%;text-align:left;
+    border:0;background:none;font:inherit;color:inherit;transition:background .14s ease}
+  .hm-reg-row + .hm-reg-row{box-shadow:inset 0 1px 0 var(--line)}
+  .hm-reg-row:hover{background:var(--surface-2)}
+  .hm-reg-row .nm{font-size:13.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hm-reg-row:hover .nm{color:var(--blue)}
+  .hm-prog{display:flex;align-items:center;gap:10px}
+  .hm-prog .t{flex:1;height:5px;border-radius:3px;background:var(--surface-3);overflow:hidden;min-width:40px}
+  .hm-prog .f{height:100%;border-radius:3px;background:var(--s1)}
+  .hm-prog .f.nil{background:var(--danger);width:2px}
+  .hm-prog .v{font:500 11.5px/1 'Roboto Mono',monospace;color:var(--text-2);white-space:nowrap}
+  .hm-reg-row .fig{font:500 13px/1 'Roboto Mono',monospace;font-variant-numeric:tabular-nums}
+  .hm-reg-row .fig.na{color:var(--text-3);font-weight:400;font-size:10.5px}
+  .hm-more{margin-top:13px;font:500 12px/1 'Roboto Mono',monospace;color:var(--blue);cursor:pointer;
+    padding:11px 12px;border-radius:8px;border:0;background:none}
+  .hm-more:hover{background:var(--blue-soft)}
+
+  /* ---- chips ---- */
+  .hm-chip{display:inline-flex;align-items:center;gap:6px;font:500 11px/1 inherit;padding:5px 9px;
+    border-radius:100px;white-space:nowrap}
+  .hm-chip::before{content:'';width:5px;height:5px;border-radius:50%;background:currentColor;flex:0 0 5px}
+  .hm-ok{background:rgba(38,166,110,.12);color:var(--success)}
+  .hm-risk{background:rgba(220,76,76,.12);color:var(--danger)}
+  .hm-idle{background:var(--surface-3);color:var(--text-3)}
+
+  /* ---- activity ---- */
+  .hm-feed .e{display:grid;grid-template-columns:56px 1fr;gap:12px;padding:9px 0;font-size:13px}
+  .hm-feed .e + .e{border-top:1px solid var(--line)}
   .hm-feed .d{font:400 10.5px/1.5 'Roboto Mono',monospace;color:var(--text-3)}
   .hm-feed .w{color:var(--text-3);font-size:11.5px}
+
+  .hm-blank{border-radius:10px;background:var(--surface-2);padding:22px;text-align:center;
+    color:var(--text-3);font-size:12.5px;line-height:1.6}
+
   @media(max-width:1000px){
-    .hm-grid{grid-template-columns:repeat(6,1fr)}
-    .hm-c12,.hm-c8,.hm-c7,.hm-c5,.hm-c4{grid-column:span 6}
-    .hm-kpis{grid-template-columns:repeat(3,1fr)}
+    .hm-top{grid-template-columns:1fr;gap:28px}
+    .hm-sats{padding-left:0;border-left:0;border-top:1px solid #22302C;padding-top:24px}
+    .hm-duo{grid-template-columns:1fr;gap:36px}
+    .hm-reg-head{display:none}
+    .hm-reg-row{grid-template-columns:1fr auto;gap:8px 14px}
+    .hm-reg-row .hm-prog,.hm-reg-row .fig{grid-column:1/-1}
   }
   @media(max-width:760px){
-    .hm-grid{grid-template-columns:1fr;gap:12px}
-    .hm-grid > .card{grid-column:auto}
-    .hm-kpis{grid-template-columns:repeat(2,1fr);gap:10px}
-    .hm-kpis > .card:nth-child(5){grid-column:span 2}
-    /* the funnel's 150px label track leaves 148px of usable width at
-       390px, which is not enough for a stage name and a bar */
-    .fn-row{grid-template-columns:92px 1fr 64px !important;gap:8px}
-    /* Views | Engagement | Creators | Completion is 446px of pills in a
-       390px viewport, and .seg is an inline-flex that does not wrap —
-       so it dragged the whole document sideways rather than overflowing
-       its own card. Wrapping to two rows is the price of keeping four
-       readable labels; truncating them would be worse. */
-    .hm-grid .so-head{flex-wrap:wrap;row-gap:8px}
-    .hm-grid .seg{display:flex;flex-wrap:wrap;max-width:100%}
-    .hm-grid .seg button{flex:0 1 auto;padding:8px 11px}
+    .hm-band{padding:26px 18px 20px}
+    .hm-sats{grid-template-columns:1fr 1fr;gap:20px}
+    .hm-flow{gap:38px}
   }`;
   document.head.appendChild(s);
 }
 
-export const hmKpi = (label, value, foot, meter) => `<div class="card stat so-kpi">
-  <div class="label">${esc(label)}</div>
-  <div class="value">${value}</div>
-  <div class="foot">${foot || ''}</div>
-  ${meter == null ? '' : `<div class="so-meter"><i style="width:${(meter * 100).toFixed(1)}%"></i></div>`}
-</div>`;
+export const hmSat = (l, v, s) => `<div class="hm-sat"><div class="l">${esc(l)}</div>
+  <div class="v">${v}</div><div class="s">${esc(s)}</div></div>`;
 
-export const hmSeg = (id, opts, cur) => `<div class="seg" id="${id}">${opts
-  .map(([v, l]) => `<button data-v="${esc(String(v))}" class="${String(v) === String(cur) ? 'active' : ''}">${esc(l)}</button>`)
-  .join('')}</div>`;
+/* The flow is drawn rather than charted: the ribbon's narrowing is the
+   drop-off, and the shed volume is filled in so the loss is a shape you
+   can see instead of a percentage you have to read. */
+export function flowSvg(flow) {
+  const W = 720, top = 26, maxH = 130, nodeW = 14;
+  const xs = [24, 248, 472, 680];
+  const max = Math.max(1, ...flow.steps.map((s) => s.n));
+  const h = (n) => Math.max(2, (n / max) * maxH);
+  let body = '';
+  for (let i = 0; i < 3; i++) {
+    const lx = xs[i] + nodeW, rx = xs[i + 1];
+    const lh = top + h(flow.steps[i].n), rh = top + h(flow.steps[i + 1].n);
+    body += `<polygon points="${lx},${top} ${rx},${top} ${rx},${rh} ${lx},${lh}" fill="url(#hmFl)" opacity=".85"/>`
+      + `<polygon points="${lx},${lh} ${rx},${rh} ${rx},${lh}" fill="var(--danger)" opacity=".2"/>`
+      + `<line x1="${lx}" y1="${lh}" x2="${rx}" y2="${rh}" stroke="var(--danger)" stroke-width="1.25" opacity=".75"/>`;
+  }
+  const nodes = flow.steps.map((s, i) =>
+    `<rect x="${xs[i]}" y="${top}" width="${nodeW}" height="${h(s.n)}" rx="3" fill="var(--s1)"/>`).join('');
+  const counts = flow.steps.map((s, i) =>
+    `<text x="${i === 3 ? xs[i] - 24 : xs[i]}" y="18">${num(s.n)}</text>`).join('');
+  const labels = flow.steps.map((s, i) =>
+    `<text x="${i === 3 ? xs[i] - 24 : xs[i]}" y="180">${esc(s.label)}</text>`).join('');
+  const losses = flow.losses.map((l, i) => {
+    const mid = (xs[i] + nodeW + xs[i + 1]) / 2 - 46;
+    return `<text x="${mid}" y="203" fill="var(--danger)" font-weight="500">−${num(l.lost)} ${esc(l.label)}</text>`
+      + `<text x="${mid}" y="217" fill="var(--text-3)">${(l.through * 100).toFixed(0)}% through</text>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} 226" role="img" aria-label="Creator flow: ${
+    flow.steps.map((s) => s.label + ' ' + s.n).join(', ')}">
+    <defs><linearGradient id="hmFl" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="var(--s1)" stop-opacity=".92"/>
+      <stop offset="1" stop-color="var(--s3)" stop-opacity=".62"/></linearGradient></defs>
+    ${body}${nodes}
+    <g font-family="inherit" font-size="21" font-weight="600" fill="var(--text)">${counts}</g>
+    <g font-family="'Roboto Mono',monospace" font-size="10.5" fill="var(--text-3)">${labels}</g>
+    <g font-family="'Roboto Mono',monospace" font-size="11">${losses}</g>
+  </svg>`;
+}
+
+export const HEALTH = {
+  ontrack:    { cls: 'hm-ok',   label: 'On track' },
+  complete:   { cls: 'hm-ok',   label: 'Complete' },
+  risk:       { cls: 'hm-risk', label: 'At risk' },
+  notstarted: { cls: 'hm-idle', label: 'Not started' },
+  unknown:    { cls: 'hm-idle', label: 'No dates' }
+};
 
 export function renderHome(view) {
   ensureOverviewStyles();
@@ -104,206 +222,119 @@ export function renderHome(view) {
   const rows = overviewRows(DB);
   const k = homeKpis(DB, rows);
   const att = attentionCounts(DB, rows);
-  const comp = completionSplit(DB);
   const pipe = campaignPipeline(DB);
   const activeIds = DB.campaigns.filter((c) => c.status !== 'wrapped').map((c) => c.id);
-  const funnel = creatorPipeline(DB, activeIds);
-  const series = overviewSeries(rows, home.dateMode);
-  const win = trendWindow(series, home.range);
+  const flow = creatorFlow(DB, activeIds);
+  const reg = campaignRegister(DB, rows);
   const top = topContent(rows, 6);
-  const feed = activityFeed(DB, rows, 8);
+  const feed = activityFeed(DB, rows, 5);
+  const shown = home.registerAll ? reg : reg.slice(0, 9);
+
+  const railSeg = (r, cls) => `<button class="hm-seg ${cls}" data-status="${esc(r.key)}"
+    style="${r.value ? 'flex:' + r.value : 'flex:0 0 30px'}" title="${esc(r.label)} — ${r.value}">
+    <span class="c">${num(r.value)}</span></button>`;
 
   view.innerHTML = `
-    <div class="hm-kpis">
-      ${hmKpi('Active campaigns', num(k.activeCampaigns),
-        `${num(k.totalCampaigns)} total · ${num(k.liveCampaigns)} live · ${num(k.wrappedCampaigns)} wrapped`)}
-      ${hmKpi('Creators in campaigns', num(k.creatorsInCampaigns),
-        `${num(k.confirmedEver)} confirmed all-time`)}
-      ${hmKpi('Creators contacted', num(k.creatorsContacted),
-        `of ${num(k.roster)} on the roster`, k.roster ? k.creatorsContacted / k.roster : 0)}
-      ${hmKpi('Content published', num(k.content),
-        `${num(k.measuredCount)} of ${num(k.content)} measured`, k.coverage)}
-      ${hmKpi('Total campaign views', num(k.views),
-        k.avgViews == null ? 'nothing measured yet' : `${num(k.measuredCount)} posts · ${num(k.avgViews)} avg`, k.coverage)}
+    <div class="hm-band">
+      <div class="hm-top">
+        <div>
+          <div class="hm-lab">Active campaigns</div>
+          <div class="hm-big">${num(k.activeCampaigns)}</div>
+          <div class="hm-cap">${num(k.totalCampaigns)} in the book</div>
+          <div class="hm-sub">${num(k.liveCampaigns)} live · ${num(k.wrappedCampaigns)} wrapped
+            · ${num(flow.total)} creators in the funnel</div>
+        </div>
+        <div class="hm-sats">
+          ${hmSat('Confirmed creators', num(k.creatorsInCampaigns), num(flow.total) + ' in the funnel')}
+          ${hmSat('Contacted', num(k.creatorsContacted), 'of ' + num(k.roster) + ' on the roster')}
+          ${hmSat('Content pieces', num(k.content), num(k.measuredCount) + ' with view counts')}
+          ${hmSat('Total views', num(k.views),
+            k.avgViews == null ? 'nothing measured yet' : num(k.avgViews) + ' avg per post')}
+        </div>
+      </div>
+
+      <div class="hm-rail">
+        <div class="hm-rail-h"><span class="t">Campaign pipeline</span>
+          <span class="n">${num(pipe.total)} campaigns · width by count</span></div>
+        <div class="hm-track" id="hmRail">
+          ${pipe.rows.map((r) => railSeg(r, r.value === 0 ? 'zero' : r.key === 'live' ? 'on' : 'mid')).join('')}
+        </div>
+        <div class="hm-labs">
+          ${pipe.rows.map((r) => `<span style="${r.value ? 'flex:' + r.value : 'flex:0 0 30px'}">${esc(r.label)}</span>`).join('')}
+        </div>
+      </div>
     </div>
 
-    <div class="hm-grid">
-      <div class="card hm-att hm-c4">
-        <div class="so-head"><h4>Needs attention</h4><span class="so-hint">${num(att.urgent)} to act on</span></div>
-        ${att.items.map((i) => `<a class="row ${i.n ? '' : 'zero'}" href="${i.href}">
-            <span class="n">${num(i.n)}</span><span class="t">${esc(i.label)}</span><span class="go">›</span></a>`).join('')}
-        ${att.noEnd ? `<div class="hm-warn">${num(att.noEnd)} active campaign${att.noEnd === 1 ? ' has' : 's have'} no end date, so they cannot be counted as overdue or ending soon.</div>` : ''}
-      </div>
-
-      <div class="card hm-c8">
-        <div class="so-head"><h4>Campaign performance</h4>
-          ${hmSeg('hmMetric', Object.keys(HOME_METRICS).map((m) => [m, HOME_METRICS[m].label]), home.metric)}</div>
-        <div id="hmPerf"></div>
-      </div>
-
-      <div class="card hm-c5">
-        <div class="so-head"><h4>Campaign pipeline</h4><span class="so-hint">${num(pipe.total)} campaigns</span></div>
-        <div id="hmPipe"></div>
-        <div class="hm-note">These are the statuses the campaign editor uses. There is no “Recruiting” or “Reporting” in the schema — Outreach and Wrapped are their real names.</div>
-      </div>
-
-      <div class="card hm-c7">
-        <div class="so-head"><h4>Creator pipeline</h4><span class="so-hint">drop-off · active campaigns</span></div>
-        <div id="hmFunnel"></div>
-        <div class="hm-note">${num(funnel.dropped)} of ${num(funnel.total)} dropped out or declined.
-          Contacted and Replied are not tracked separately by the Notion form, so both read as pass-through.</div>
-      </div>
-
-      <div class="card hm-c4">
-        <div class="so-head"><h4>Campaign completion</h4></div>
-        <div id="hmDonut"></div>
-      </div>
-
-      <div class="card hm-c8">
-        <div class="so-head"><h4>Trends</h4>
-          ${hmSeg('hmRange', [[7, '7d'], [30, '30d'], [90, '90d']], home.range)}</div>
-        <div class="grid g2" style="gap:14px">
-          <div><div class="so-head"><h4>Views over time</h4></div><div id="hmViews"></div></div>
-          <div><div class="so-head"><h4>Content published over time</h4></div><div id="hmPosts"></div></div>
+    <div class="hm-flow">
+      <div class="hm-duo">
+        <div>
+          <div class="hm-sec"><h4>Creator flow</h4><div class="ln"></div>
+            <span class="m">${num(flow.total)} active · ${num(flow.dropped)} dropped</span></div>
+          <div id="hmFlow">${flowSvg(flow)}</div>
+          <p class="hm-note">Contacted and Replied are folded into the first block: the Notion form never
+            produces those stages, so all ${num(flow.steps[0].n)} pass through them untouched and three
+            identical segments would imply movement that was never recorded.</p>
         </div>
-        <div class="hm-note">Plotted by measurement date. Publish dates carry only
-          ${num(new Set(rows.map((r) => String(r.c.postedAt || '').slice(0, 10)).filter(Boolean)).size)}
-          distinct values across ${num(rows.length)} posts, so they cannot carry a time axis.</div>
+        <div class="hm-att">
+          <div class="hm-sec"><h4>Needs attention</h4><div class="ln"></div>
+            <span class="m">${num(att.urgent)} open</span></div>
+          ${att.items.map((i) => `<a class="row ${i.n ? (i.key === 'overdue' || i.key === 'links' ? 'crit' : 'warn') : 'done'}"
+             href="${esc(i.href)}"><span class="dot"></span>
+             <span class="tx"><b>${num(i.n)}</b><span>${esc(i.label)}</span></span>
+             <span class="go">→</span></a>`).join('')}
+          ${att.noEnd ? `<p class="hm-note">${num(att.noEnd)} active campaign${att.noEnd === 1 ? ' has' : 's have'}
+            no end date, so they cannot be counted as overdue or ending soon.</p>` : ''}
+        </div>
       </div>
 
-      <div class="card hm-c8">
-        <div class="so-head"><h4>Top performing content</h4><span class="so-hint">by views · measured only</span></div>
-        <div id="hmTop"></div>
+      <div>
+        <div class="hm-sec"><h4>Campaigns</h4><div class="ln"></div>
+          <span class="m">scan the company in one pass</span></div>
+        <div class="hm-reg-head"><span>Campaign</span><span>Status</span><span>Creators confirmed</span>
+          <span class="r">Posts</span><span class="r">Views</span><span class="r">Health</span></div>
+        <div id="hmRegister">${shown.map((c) => `
+          <button class="hm-reg-row" data-id="${esc(c.id)}">
+            <span class="nm">${esc(c.name)}</span>
+            <span><span class="hm-chip hm-idle">${esc(c.statusLabel)}</span></span>
+            <span class="hm-prog"><span class="t"><span class="f${c.confirmed ? '' : ' nil'}"
+              style="width:${(c.progress * 100).toFixed(1)}%"></span></span>
+              <span class="v">${num(c.confirmed)}/${c.target ? num(c.target) : '—'}</span></span>
+            <span class="fig r${c.posts ? '' : ' na'}">${c.posts ? num(c.posts) : '—'}</span>
+            <span class="fig r${c.views ? '' : ' na'}">${c.views ? num(c.views)
+              : c.unmeasured ? 'unmeasured' : '—'}</span>
+            <span class="r"><span class="hm-chip ${HEALTH[c.health].cls}">${HEALTH[c.health].label}</span></span>
+          </button>`).join('')}</div>
+        ${reg.length > 9 ? `<button class="hm-more" id="hmRegMore">${
+          home.registerAll ? 'Show fewer' : 'Show all ' + num(reg.length) + ' campaigns'} →</button>` : ''}
+        <p class="hm-note">A campaign with posts and no readings shows “unmeasured”, never a zero —
+          a zero would say the work failed rather than that nobody entered a number.</p>
       </div>
 
-      <div class="card hm-c4">
-        <div class="so-head"><h4>Recent activity</h4></div>
-        <div id="hmFeed"></div>
-        <div class="hm-note">Derived from measurement and sync timestamps — not an event log.
-          Creator stage changes are not timestamped individually, so they cannot appear here.</div>
+      <div class="hm-duo">
+        <div>
+          <div class="hm-sec"><h4>Top content</h4><div class="ln"></div>
+            <span class="m">by views · measured only</span></div>
+          <div id="hmTop"></div>
+        </div>
+        <div>
+          <div class="hm-sec"><h4>Activity</h4><div class="ln"></div></div>
+          <div id="hmFeed"></div>
+          <p class="hm-note">Derived from measurement and sync timestamps — not an event log.
+            Creator stage changes are not timestamped individually, so they cannot appear here.</p>
+        </div>
       </div>
     </div>`;
 
-  drawHomePerf(rows);
-  drawHomePipeline(pipe, funnel, comp);
-  drawHomeTrends(series, win, rows);
   drawHomeTop(top);
   drawHomeFeed(feed);
-  wireHome(rows, series);
-}
-
-export function drawHomePerf(rows) {
-  const mount = $('#hmPerf');
-  if (!mount) return;
-  mount.innerHTML = '';
-  const perf = campaignPerformance(DB, rows, home.metric);
-  if (!perf.length) {
-    mount.innerHTML = '<div class="hm-blank"><b>No campaigns with a roster yet</b>Confirm a creator or attach a post and this fills in.</div>';
-    return;
-  }
-  const isPct = home.metric === 'completion';
-  const fmt = (v) => (isPct ? Math.round(v) + '%' : kmb(v));
-  const wrap = barsH(mount, perf.map((r) => ({
-    label: r.label,
-    value: r.value,
-    /* an unmeasured campaign is drawn in the neutral surface colour so
-       it cannot be mistaken for a campaign that scored zero */
-    color: r.unmeasured || r.noTarget ? 'var(--surface-3)' : 'var(--s1)',
-    sub: r.unmeasured ? r.content + ' posts · no metrics entered'
-       : r.noTarget ? 'no target set' : ''
-  })), { format: fmt, labelWidth: window.innerWidth <= 760 ? '96px' : '150px', labelHead: 'Campaign', valueHead: HOME_METRICS[home.metric].label });
-
-  const flagged = perf.filter((r) => r.unmeasured || r.noTarget);
-  if (flagged.length) {
-    const note = document.createElement('div');
-    note.className = 'hm-warn';
-    note.textContent = home.metric === 'completion'
-      ? flagged.length + ' campaign(s) have no creator target, so completion cannot be computed for them.'
-      : flagged.map((r) => r.label).join(', ') + ' — posts are attached but no view counts have been entered.';
-    mount.appendChild(note);
-  }
-  if (home.metric === 'engagement') {
-    const s = document.createElement('div');
-    s.className = 'hm-note';
-    s.textContent = 'Likes, comments and shares. Saves are not collected by the Notion form, so they are absent rather than zero.';
-    mount.appendChild(s);
-  }
-
-  /* barsH renders one row element per entry, in order, inside a single
-     list container — so index maps to campaign. Depends on that shape;
-     the harness clicks a bar and asserts where it lands. */
-  const list = wrap && wrap.firstChild;
-  if (list) [].slice.call(list.children).forEach((row, i) => {
-    if (!perf[i]) return;
-    row.style.cursor = 'pointer';
-    row.addEventListener('click', () => { location.hash = '#/campaigns/' + perf[i].id; });
-  });
-}
-
-export function drawHomePipeline(pipe, funnel, comp) {
-  const p = $('#hmPipe');
-  if (p) { p.innerHTML = ''; columnChart(p, pipe.rows, { labelHead: 'Status' }); }
-
-  const f = $('#hmFunnel');
-  if (f) { f.innerHTML = ''; funnelView(f, funnel.counts, funnel.total); }
-
-  const d = $('#hmDonut');
-  if (!d) return;
-  d.innerHTML = '';
-  donutChart(d, [
-    { label: 'Complete', value: comp.complete.length, color: 'var(--s3)' },
-    { label: 'Pending',  value: comp.pending.length,  color: 'var(--s1)' },
-    { label: 'Overdue',  value: comp.overdue.length,  color: 'var(--s6)' }
-  ], { centre: 'campaigns' });
-  if (comp.noEnd.length) {
-    const n = document.createElement('div');
-    n.className = 'hm-warn';
-    n.textContent = comp.noEnd.length + ' campaign(s) have no end date and can never be counted overdue.';
-    d.appendChild(n);
-  }
-}
-
-/* The two cards that would have lied. A window with nothing in it says
-   so and offers the whole range; a window with one reading draws the
-   reading and says why there is no line. Neither is ever handed a
-   zero-filled array. */
-export function drawHomeTrend(mount, win, key, label) {
-  if (!mount) return;
-  mount.innerHTML = '';
-  if (win.state === 'empty') {
-    mount.innerHTML = `<div class="hm-blank"><b>No measurements in the last ${win.days} days</b>` +
-      (win.latest
-        ? `The most recent reading is ${esc(win.latest)}${win.daysAgo == null ? '' : ` — ${win.daysAgo} days ago`}.`
-        : 'Nothing has been measured yet.') +
-      (win.total ? '<div style="margin-top:10px"><button class="btn sm" data-all="1">Show all time</button></div>' : '') +
-      '</div>';
-    return;
-  }
-  if (win.state === 'single') {
-    const p = win.points[0];
-    mount.innerHTML = `<div class="hm-blank"><b>${esc(label)}: ${num(p[key])}</b>` +
-      `One measurement in this window, on ${esc(p.date)}. A line needs two.` +
-      (win.total > 1 ? '<div style="margin-top:10px"><button class="btn sm" data-all="1">Show all time</button></div>' : '') +
-      '</div>';
-    return;
-  }
-  lineChart(mount, {
-    labels: win.points.map((p) => p.date),
-    series: [{ name: label, values: win.points.map((p) => p[key]) }],
-    height: 190
-  });
-}
-
-export function drawHomeTrends(series, win, rows) {
-  drawHomeTrend($('#hmViews'), win, 'views', 'Views');
-  drawHomeTrend($('#hmPosts'), win, 'content', 'Posts measured');
+  wireHome(reg);
 }
 
 export function drawHomeTop(top) {
   const mount = $('#hmTop');
   if (!mount) return;
   if (!top.length) {
-    mount.innerHTML = '<div class="hm-blank"><b>No measured posts yet</b>Enter a view count on a post and the best of them appear here.</div>';
+    mount.innerHTML = '<div class="hm-blank">No measured posts yet. Enter a view count and the best of them appear here.</div>';
     return;
   }
   mount.innerHTML = '<div class="so-cards">' + top.map((r) => {
@@ -312,9 +343,9 @@ export function drawHomeTop(top) {
        deterministic colour per creator rather than a broken image */
     const tint = r.c.thumbTint || 'var(--s1)';
     return `<button class="so-tc" data-id="${esc(r.id)}">
-      <span class="plate" style="background:linear-gradient(150deg,${esc(tint)},rgba(0,0,0,.55))">
+      <span class="plate" style="background:linear-gradient(158deg,${esc(tint)},rgba(0,0,0,.62))">
         <span class="tag">${esc(platformTag(r.platform))} ${esc((r.c.format || 'POST').toUpperCase())}</span>
-        <span class="big">${kmb(r.views)}</span>
+        <span class="big">${kmb(r.views)}</span><span class="vl">views</span>
       </span>
       <span class="body">
         <span class="h">${esc(r.handle || '—')}</span>
@@ -326,7 +357,6 @@ export function drawHomeTop(top) {
       </span>
     </button>`;
   }).join('') + '</div>';
-
   $$('#hmTop .so-tc').forEach((b) => b.addEventListener('click', () => showSocialContent(b.dataset.id)));
 }
 
@@ -334,7 +364,7 @@ export function drawHomeFeed(feed) {
   const mount = $('#hmFeed');
   if (!mount) return;
   if (!feed.length) {
-    mount.innerHTML = '<div class="hm-blank"><b>Nothing dated yet</b>Measurements and imports appear here as they happen.</div>';
+    mount.innerHTML = '<div class="hm-blank">Nothing dated yet. Measurements and imports appear here as they happen.</div>';
     return;
   }
   mount.innerHTML = '<div class="hm-feed">' + feed.map((e) => `<div class="e">
@@ -343,25 +373,13 @@ export function drawHomeFeed(feed) {
     </div>`).join('') + '</div>';
 }
 
-export function wireHome(rows, series) {
-  const seg = (id, apply) => {
-    const el = $('#' + id);
-    if (!el) return;
-    $$('#' + id + ' button').forEach((b) => b.addEventListener('click', () => {
-      apply(b.dataset.v);
-      $$('#' + id + ' button').forEach((x) => x.classList.toggle('active', x === b));
-    }));
-  };
-  seg('hmMetric', (v) => { home.metric = v; drawHomePerf(rows); });
-  seg('hmRange', (v) => { home.range = Number(v); drawHomeTrends(series, trendWindow(series, home.range), rows); });
-
-  /* "Show all time" widens the window to cover every reading rather
-     than pretending the empty one had data in it */
-  $$('#hmViews [data-all], #hmPosts [data-all]').forEach((b) => b.addEventListener('click', () => {
-    const span = series.length
-      ? Math.max(1, Math.round((TODAY - new Date(series[0].date + 'T00:00:00Z')) / DAY) + 1)
-      : 1;
-    home.range = span;
-    drawHomeTrends(series, trendWindow(series, span), rows);
+export function wireHome(reg) {
+  $$('#hmRegister .hm-reg-row').forEach((b) => b.addEventListener('click', () => {
+    location.hash = '#/campaigns/' + b.dataset.id;
   }));
+  $$('#hmRail .hm-seg').forEach((b) => b.addEventListener('click', () => {
+    location.hash = '#/campaigns/all';
+  }));
+  const more = $('#hmRegMore');
+  if (more) more.addEventListener('click', () => { home.registerAll = !home.registerAll; notify(); });
 }

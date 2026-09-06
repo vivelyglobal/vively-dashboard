@@ -67,7 +67,7 @@ await step('the Overview has no leftover library tabs', async () => {
 /* ---- every card is present -------------------------------------------- */
 
 await step('all nine cards render', async () => {
-  for (const id of ['#soTime', '#soPlatformViz', '#soCampaignViz', '#soEngViz',
+  for (const id of ['#soTime', '#soCampaignViz', '#soEngViz',
                     '#soDistViz', '#soTopViz', '#soMarketViz', '#soCoverageViz'])
     if (!await p.$(id)) throw new Error('missing ' + id);
   /* the labels are uppercased by CSS, and innerText reports what is

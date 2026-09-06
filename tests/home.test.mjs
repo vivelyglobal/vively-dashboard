@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  homeKpis, campaignPipeline, creatorPipeline, campaignPerformance,
+  homeKpis, campaignPipeline, creatorPipeline, campaignPerformance, campaignRegister, creatorFlow,
   completionSplit, attentionCounts, activityFeed, trendWindow
 } from '../src/model/homeStats.js';
 import { overviewRows, overviewSeries } from '../src/model/socialStats.js';
@@ -334,4 +334,83 @@ test('a post nobody measured is absent from the axis rather than plotted at zero
     socialContent: [sc({ metricsAt: '', views: 0 }), sc({ id: 's2', metricsAt: '2026-08-20', views: 5 })] });
   const s = overviewSeries(overviewRows(db), 'metrics');
   assert.equal(s.length, 1);
+});
+
+/* ---- the campaign register -------------------------------------------
+   Composes rules that already exist; these pin that it composes them
+   the same way the other cards do.
+   -------------------------------------------------------------------- */
+
+test('the register carries one row per campaign, richest first', () => {
+  const db = mk({
+    campaigns: [cp({ id: 'a', name: 'A' }), cp({ id: 'b', name: 'B' })],
+    creators: [cr()],
+    participants: [pt({ campaignId: 'a' })],
+    socialContent: [sc({ campaignId: 'a', views: 500 })]
+  });
+  const reg = campaignRegister(db, overviewRows(db), TODAY);
+  assert.equal(reg.length, 2);
+  assert.equal(reg[0].id, 'a', 'the campaign with views sorts first');
+  assert.equal(reg[0].views, 500);
+  assert.equal(reg[0].posts, 1);
+});
+
+test('a campaign with posts and no readings is unmeasured, not zero-scoring', () => {
+  const db = mk({ campaigns: [cp()], creators: [cr()],
+    participants: [pt()], socialContent: [sc({ views: 0 })] });
+  const r = campaignRegister(db, overviewRows(db), TODAY)[0];
+  assert.equal(r.views, 0);
+  assert.equal(r.unmeasured, true);
+  assert.equal(r.posts, 1);
+});
+
+test('health is at risk only when the calendar has run ahead of delivery', () => {
+  const behind = mk({ campaigns: [cp({ start: '2026-08-01', end: '2026-10-01', targetCreators: 10 })],
+    participants: [pt()] });
+  assert.equal(campaignRegister(behind, [], TODAY)[0].health, 'risk');
+
+  const ahead = mk({ campaigns: [cp({ start: '2026-08-01', end: '2026-10-01', targetCreators: 1 })],
+    participants: [pt()] });
+  assert.equal(campaignRegister(ahead, [], TODAY)[0].health, 'ontrack');
+
+  const future = mk({ campaigns: [cp({ start: '2026-09-06', end: '2026-09-20', targetCreators: 10 })],
+    participants: [] });
+  assert.equal(campaignRegister(future, [], TODAY)[0].health, 'notstarted');
+
+  const wrapped = mk({ campaigns: [cp({ status: 'wrapped', targetCreators: 10 })], participants: [] });
+  assert.equal(campaignRegister(wrapped, [], TODAY)[0].health, 'complete');
+});
+
+test('a campaign with no usable dates says so rather than being judged', () => {
+  const db = mk({ campaigns: [cp({ start: '', end: '', targetCreators: 10 })], participants: [] });
+  assert.equal(campaignRegister(db, [], TODAY)[0].health, 'unknown');
+});
+
+/* ---- the collapsed creator flow -------------------------------------- */
+
+test('the flow collapses the three pass-through stages into one block', () => {
+  const db = mk({ campaigns: [cp()], participants: [
+    pt({ id: 'a', stage: 'sourced' }), pt({ id: 'b', stage: 'confirmed' }),
+    pt({ id: 'c', stage: 'shipped' }), pt({ id: 'd', stage: 'live' })
+  ] });
+  const f = creatorFlow(db, ['cp1']);
+  assert.equal(f.steps.length, 4, 'four blocks, not nine');
+  assert.deepEqual(f.steps.map((s) => s.n), [4, 3, 2, 1]);
+  assert.match(f.steps[0].label, /Sourced/);
+});
+
+test('the flow never widens, and its losses match the step differences', () => {
+  const db = mk({ campaigns: [cp()], participants: [
+    pt({ id: 'a', stage: 'sourced' }), pt({ id: 'b', stage: 'sourced' }),
+    pt({ id: 'c', stage: 'confirmed' }), pt({ id: 'd', stage: 'live' })
+  ] });
+  const f = creatorFlow(db, ['cp1']);
+  f.steps.forEach((s, i) => { if (i) assert.ok(s.n <= f.steps[i - 1].n, s.id); });
+  f.losses.forEach((l, i) => assert.equal(l.lost, f.steps[i].n - f.steps[i + 1].n));
+});
+
+test('an empty roster produces a flow of zeros rather than throwing', () => {
+  const f = creatorFlow(mk({ campaigns: [cp()] }), ['cp1']);
+  assert.deepEqual(f.steps.map((s) => s.n), [0, 0, 0, 0]);
+  assert.equal(f.total, 0);
 });

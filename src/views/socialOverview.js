@@ -1,5 +1,5 @@
 import { SERIES_HEX, barsH, lineChart } from '../charts/index.js';
-import { columnChart, donutChart } from '../charts/socialViz.js';
+import { columnChart } from '../charts/socialViz.js';
 import { kmb, num, pct } from '../lib/format.js';
 import { DB, notify } from '../model/db.js';
 import { OVERVIEW_METRICS, byCampaignRollup, byMarketRollup, byPlatformRollup, engagementSplit, overviewCoverage, overviewFilter, overviewKpis, overviewRows, overviewSeries, topContent, unmappedCountries, viewDistribution } from '../model/socialStats.js';
@@ -77,7 +77,72 @@ export function ensureOverviewStyles() {
   @media(max-width:640px){.so-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
     .so-c12,.so-c8,.so-c7,.so-c5,.so-c4{grid-column:span 2}
     .so-c2{grid-column:span 1}
-    .so-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}`;
+    .so-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+  /* ---------- pass 02: the command band and its language ----------
+     Appended rather than replacing the rules above, because home.js and
+     the chart code both style against them. Later rules win, so the new
+     composition overrides the old card grid without breaking anything
+     that still reads the old class names. */
+  .so-band{background:#0C1211;color:#F1F6F3;border-radius:14px;padding:30px 28px 24px;margin-bottom:34px;
+    background-image:radial-gradient(120% 130% at 88% -10%,rgba(47,168,140,.16),transparent 58%)}
+  .so-band-in{display:grid;grid-template-columns:minmax(0,.85fr) minmax(0,1.15fr);gap:44px;align-items:start}
+  .so-lab{font:500 10.5px/1 'Roboto Mono',monospace;letter-spacing:.15em;text-transform:uppercase;color:#7E938B}
+  .so-big{font-size:clamp(48px,7vw,74px);font-weight:600;line-height:.94;letter-spacing:-.04em;margin-top:12px;
+    font-variant-numeric:tabular-nums}
+  .so-band .so-sub{color:#7E938B;font-size:13px;margin-top:11px}
+  .so-sats{display:flex;gap:34px;flex-wrap:wrap;margin-top:22px;padding-top:20px;border-top:1px solid #22302C}
+  .so-sat .l{font:500 10px/1 'Roboto Mono',monospace;letter-spacing:.13em;text-transform:uppercase;color:#7E938B}
+  .so-sat .v{font-size:25px;font-weight:600;letter-spacing:-.028em;margin-top:8px;font-variant-numeric:tabular-nums}
+  .so-sat .v.off{color:#7E938B}
+  .so-sat .s{font:400 10.5px/1.3 'Roboto Mono',monospace;color:#7E938B;margin-top:5px}
+  .so-chart-h{display:flex;align-items:baseline;justify-content:space-between;gap:14px;margin-bottom:12px}
+  .so-chart-h .t{font:500 10px/1 'Roboto Mono',monospace;letter-spacing:.13em;text-transform:uppercase;color:#7E938B}
+  .so-band .so-seg{background:#151E1B;border-radius:7px;padding:3px;display:flex;gap:2px}
+  .so-band .so-seg button{border:0;background:none;color:#7E938B;font-size:11.5px;font-weight:500;
+    padding:6px 10px;border-radius:5px;cursor:pointer;font-family:inherit}
+  .so-band .so-seg button[aria-pressed="true"]{background:#0C1211;color:#F1F6F3}
+  .so-band .so-hint{color:#7E938B}
+  .so-band .so-filters{margin:24px 0 0;padding-top:20px;border-top:1px solid #22302C}
+  .so-band .so-filters select,.so-band .so-filters input{background:#151E1B;border-color:#2A3733;color:#F1F6F3}
+  .so-band .so-filters .btn{background:#151E1B;border-color:#2A3733;color:#F1F6F3}
+
+  /* sections, not boxes */
+  .so-flow{display:flex;flex-direction:column;gap:46px}
+  .so-sec{display:flex;align-items:baseline;gap:12px;margin-bottom:16px}
+  .so-sec h4{margin:0;font-size:15px;font-weight:600;letter-spacing:-.015em;white-space:nowrap}
+  .so-sec .ln{flex:1;height:1px;background:var(--line)}
+  .so-duo{display:grid;grid-template-columns:1.62fr 1fr;gap:38px;align-items:start}
+  .so-duo.flip{grid-template-columns:1fr 1.62fr}
+  .so-flow .card{background:none;border:0;box-shadow:none;padding:0;margin:0}
+
+  /* momentum */
+  .so-mrail{height:42px;border-radius:9px;background:var(--surface-2);display:flex;align-items:center;
+    justify-content:center;position:relative;overflow:hidden}
+  .so-mrail::before{content:'';position:absolute;inset:0;
+    background:repeating-linear-gradient(115deg,transparent 0 9px,var(--line) 9px 10px)}
+  .so-mrail span{position:relative;font:500 12px/1 'Roboto Mono',monospace;color:var(--text-3)}
+  .so-mkeys{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-top:11px}
+  .so-mk{padding:13px 11px;border-radius:9px;background:var(--surface-2)}
+  .so-mk .n{font-size:21px;font-weight:600;color:var(--text-3);letter-spacing:-.02em}
+  .so-mk .l{font:500 9.5px/1 'Roboto Mono',monospace;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--text-3);margin-top:8px}
+
+  /* richer content plates */
+  .so-cards{grid-template-columns:repeat(auto-fit,minmax(168px,1fr))}
+  .so-tc{border-radius:12px}
+  .so-tc .plate{aspect-ratio:4/5;justify-content:space-between}
+  .so-tc .plate .big{font-size:26px;font-weight:600;letter-spacing:-.03em}
+  .so-tc .vl{font:400 9.5px/1 'Roboto Mono',monospace;color:rgba(255,255,255,.72);
+    letter-spacing:.1em;text-transform:uppercase;margin-top:6px}
+  .so-tc:hover{transform:translateY(-3px)}
+  .so-tc{transition:transform .18s ease,border-color .18s ease}
+
+  @media(max-width:1000px){
+    .so-band-in{grid-template-columns:1fr;gap:30px}
+    .so-duo,.so-duo.flip{grid-template-columns:1fr;gap:32px}
+    .so-mkeys{grid-template-columns:repeat(2,1fr)}
+  }`;
   document.head.appendChild(s);
 }
 
@@ -123,68 +188,120 @@ export function renderSocialOverview(view) {
       ${opts.map(([v, l]) => `<option value="${esc(v)}"${v === value ? ' selected' : ''}>${esc(l)}</option>`).join('')}
     </select>`;
 
+  /* Only history can answer "how fast" — nothing here invents it. When no
+     post carries a curve the velocity satellites read as dashes with the
+     reason, which is the honest state until the collector ships. */
+  const withHistory = rows.filter((r) => (r.c.curve || []).length).length;
+  const platformLine = byPlatformRollup(rows).sort((a, b) => b.content - a.content)
+    .map((g) => num(g.content) + ' ' + g.key).join(' · ');
+  const suggested = rows.filter((r) => r.c.matchStatus === 'suggested').length;
+  const unassigned = rows.filter((r) => !r.campaignId || r.c.matchStatus === 'unassigned').length;
+  const seg = (id, key, opts, extra) => `<div class="so-seg" id="${id}"${extra || ''}>${opts
+    .map(([v, l]) => `<button data-${key}="${v}" aria-pressed="${soOverview[key === 'm' ? 'metric' : 'dateMode'] === v}">${l}</button>`)
+    .join('')}</div>`;
+
   view.innerHTML = `
-    <div class="so-filters">
-      <input type="date" id="soFrom" value="${esc(soOverview.from)}" class="${soOverview.from ? 'on' : ''}" aria-label="From"/>
-      <input type="date" id="soTo" value="${esc(soOverview.to)}" class="${soOverview.to ? 'on' : ''}" aria-label="To"/>
-      ${sel('soCampaign', 'Campaign', soOverview.campaign, campaignOpts)}
-      ${sel('soPlatform', 'Platform', soOverview.platform, platformOpts.map((p) => [p, p]))}
-      ${sel('soMarket', 'Market', soOverview.market, marketOpts.map((m) => [m, m]))}
-      <button class="btn sm" id="soReset">Reset</button>
-      <span class="so-hint">${num(rows.length)} of ${num(all.length)} posts</span>
-    </div>
-
-    <div class="so-grid">
-      <div class="card stat so-kpi so-c2"><div class="label">Total content</div>
-        <div class="value">${num(k.content)}</div>
-        <div class="foot">${num(new Set(rows.map((r) => r.campaignId).filter(Boolean)).size)} campaigns</div></div>
-
-      <div class="card stat so-kpi so-c2"><div class="label">Total views</div>
-        <div class="value">${num(k.views)}</div>
-        <div class="foot">${num(k.measuredCount)} of ${num(k.content)} measured</div>
-        <div class="so-meter"><i style="width:${(k.coverage * 100).toFixed(1)}%"></i></div></div>
-
-      <div class="card stat so-kpi so-c2"><div class="label">Engagements</div>
-        <div class="value">${num(k.engagements)}</div>
-        <div class="foot">likes · comments · shares</div></div>
-
-      <div class="card stat so-kpi so-c2"><div class="label">Avg eng. rate</div>
-        <div class="value">${k.rate == null ? '—' : k.rate.toFixed(2) + '<span style="font-size:13px;color:var(--text-2)">%</span>'}</div>
-        <div class="foot">of measured views</div></div>
-
-      <div class="card stat so-kpi so-c2"><div class="label">Avg views / post</div>
-        <div class="value">${k.avgViews == null ? '—' : num(k.avgViews)}</div>
-        <div class="foot">measured only <span class="so-gap">÷${num(k.measuredCount)}</span></div></div>
-
-      <div class="card stat so-kpi so-c2"><div class="label">Creators activated</div>
-        <div class="value">${num(k.creators)}</div>
-        <div class="foot">of ${num((DB.creators || []).length)} on the roster</div>
-        <div class="so-meter"><i style="width:${((DB.creators || []).length ? k.creators / DB.creators.length * 100 : 0).toFixed(1)}%"></i></div></div>
-
-      <div class="card so-c8">
-        <div class="so-head">
-          <div><h4>Performance over time</h4>
-            <div class="so-hint" style="margin-top:3px" id="soTimeNote"></div></div>
-          <div class="so-seg" id="soMetricSeg">
-            <button data-m="views" aria-pressed="${soOverview.metric === 'views'}">Views</button>
-            <button data-m="eng" aria-pressed="${soOverview.metric === 'eng'}">Engagement</button>
-            <button data-m="content" aria-pressed="${soOverview.metric === 'content'}">Published</button>
+    <div class="so-band">
+      <div class="so-band-in">
+        <div>
+          <div class="so-lab">Total views</div>
+          <div class="so-big">${num(k.views)}</div>
+          <div class="so-sub">${num(k.content)} total content · ${num(k.measuredCount)} measured
+            · ${pct(k.coverage, 0)} coverage${platformLine ? ' · ' + esc(platformLine) : ''}</div>
+          <div class="so-sats">
+            <div class="so-sat"><div class="l">+24h</div><div class="v off">—</div>
+              <div class="s">${withHistory ? num(withHistory) + ' posts have history' : 'awaiting daily tracking'}</div></div>
+            <div class="so-sat"><div class="l">+7d</div><div class="v off">—</div>
+              <div class="s">awaiting daily tracking</div></div>
+            <div class="so-sat"><div class="l">Avg eng. rate</div>
+              <div class="v">${k.rate == null ? '—' : k.rate.toFixed(2) + '%'}</div>
+              <div class="s">${num(k.engagements)} engagements</div></div>
+            <div class="so-sat"><div class="l">Avg views / post</div>
+              <div class="v">${k.avgViews == null ? '—' : num(k.avgViews)}</div>
+              <div class="s">measured only</div></div>
+            <div class="so-sat"><div class="l">Creators activated</div>
+              <div class="v">${num(k.creators)}</div>
+              <div class="s">of ${num((DB.creators || []).length)} on the roster</div></div>
           </div>
         </div>
-        <div id="soTime"></div>
-        <div class="so-seg" id="soDateSeg" style="margin-top:10px;width:max-content">
-          <button data-d="metrics" aria-pressed="${soOverview.dateMode === 'metrics'}">By measurement date</button>
-          <button data-d="posted" aria-pressed="${soOverview.dateMode === 'posted'}">By publish date</button>
+
+        <div>
+          <div class="so-chart-h"><span class="t">Performance over time</span>
+            ${seg('soMetricSeg', 'm', [['views', 'Views'], ['eng', 'Engagement'], ['content', 'Published']])}</div>
+          <div id="soTime"></div>
+          <div class="so-hint" id="soTimeNote" style="margin-top:9px"></div>
+          ${seg('soDateSeg', 'd', [['metrics', 'By measurement date'], ['posted', 'By publish date']],
+                ' style="margin-top:11px;width:max-content"')}
         </div>
       </div>
 
-      ${soCard('so-c4', 'Platform breakdown', '', 'soPlatformViz')}
-      ${soCard('so-c7', 'Campaign performance', 'click to open', 'soCampaignViz')}
-      ${soCard('so-c5', 'Engagement breakdown', '', 'soEngViz')}
-      ${soCard('so-c5', 'View distribution', '', 'soDistViz')}
-      ${soCard('so-c7', 'Top performing content', 'click opens the post', 'soTopViz')}
-      ${soCard('so-c7', 'Market performance', 'by creator nationality', 'soMarketViz')}
-      ${soCard('so-c5', 'Measurement coverage', "what this page can't see yet", 'soCoverageViz')}
+      <div class="so-filters">
+        <input type="date" id="soFrom" value="${esc(soOverview.from)}" class="${soOverview.from ? 'on' : ''}" aria-label="From"/>
+        <input type="date" id="soTo" value="${esc(soOverview.to)}" class="${soOverview.to ? 'on' : ''}" aria-label="To"/>
+        ${sel('soCampaign', 'Campaign', soOverview.campaign, campaignOpts)}
+        ${sel('soPlatform', 'Platform', soOverview.platform, platformOpts.map((pl) => [pl, pl]))}
+        ${sel('soMarket', 'Market', soOverview.market, marketOpts.map((m) => [m, m]))}
+        <button class="btn sm" id="soReset">Reset</button>
+        <span class="so-hint">${num(rows.length)} of ${num(all.length)} posts</span>
+      </div>
+    </div>
+
+    <div class="so-flow">
+      <div class="so-duo">
+        <div>
+          <div class="so-sec"><h4>Content momentum</h4><div class="ln"></div>
+            <span class="so-hint">fills once daily tracking begins</span></div>
+          <div class="so-mrail"><span>${num(rows.length - withHistory)} posts · no snapshot history yet</span></div>
+          <div class="so-mkeys">
+            <div class="so-mk"><div class="n">—</div><div class="l">Rising</div></div>
+            <div class="so-mk"><div class="n">—</div><div class="l">Growing</div></div>
+            <div class="so-mk"><div class="n">—</div><div class="l">Stable</div></div>
+            <div class="so-mk"><div class="n">—</div><div class="l">Plateaued</div></div>
+          </div>
+        </div>
+        <div>
+          <div class="so-sec"><h4>Data coverage</h4><div class="ln"></div>
+            <span class="so-hint">what this page cannot see yet</span></div>
+          <div id="soCoverageViz"></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="so-sec"><h4>Top performing content</h4><div class="ln"></div>
+          <span class="so-hint">click opens the post</span></div>
+        <div id="soTopViz"></div>
+      </div>
+
+      <div class="so-duo">
+        <div>
+          <div class="so-sec"><h4>Campaign performance</h4><div class="ln"></div>
+            <span class="so-hint">click a bar to filter</span></div>
+          <div id="soCampaignViz"></div>
+        </div>
+        <div>
+          <div class="so-sec"><h4>Engagement breakdown</h4><div class="ln"></div></div>
+          <div id="soEngViz"></div>
+          <div class="so-sec" style="margin-top:28px"><h4>Needs review</h4><div class="ln"></div></div>
+          <div style="display:flex;flex-direction:column;gap:11px">
+            <div class="so-row"><span>Unassigned content</span>
+              <span style="font:500 12px/1 'Roboto Mono',monospace;color:${unassigned ? 'var(--warning)' : 'var(--text-3)'}">${num(unassigned)}</span></div>
+            <div class="so-row"><span>Suggested matches to confirm</span>
+              <span style="font:500 12px/1 'Roboto Mono',monospace;color:${suggested ? 'var(--warning)' : 'var(--text-3)'}">${num(suggested)}</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="so-duo flip">
+        <div>
+          <div class="so-sec"><h4>View distribution</h4><div class="ln"></div></div>
+          <div id="soDistViz"></div>
+        </div>
+        <div>
+          <div class="so-sec"><h4>Market performance</h4><div class="ln"></div>
+            <span class="so-hint">by creator nationality</span></div>
+          <div id="soMarketViz"></div>
+        </div>
+      </div>
     </div>`;
 
   /* ---- filters drive everything ---- */
@@ -230,20 +347,6 @@ export function renderSocialOverview(view) {
         format: soOverview.metric === 'content' ? num : kmb
       });
     }
-  }
-
-  /* ---- platform ---- */
-  const platMount = $('#soPlatformViz');
-  if (platMount) {
-    const seen = byPlatformRollup(rows);
-    const order = ['Instagram', 'TikTok', 'YouTube', 'Other'];
-    const parts = order.map((name, i) => {
-      const g = seen.find((s) => s.key === name);
-      return { label: name, value: g ? g.content : 0, color: SERIES_HEX[i] };
-    });
-    seen.filter((s) => !order.includes(s.key))
-      .forEach((s, i) => parts.push({ label: s.key, value: s.content, color: SERIES_HEX[(order.length + i) % 7] }));
-    donutChart(platMount, parts, { centreLabel: 'POSTS', aria: 'posts by platform', labelHead: 'Platform' });
   }
 
   /* ---- campaigns ---- */
