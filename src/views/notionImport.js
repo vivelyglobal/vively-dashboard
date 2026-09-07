@@ -1,9 +1,9 @@
 import { countryOf } from '../import/excel.js';
-import { NOTION_FIELD_DEFS, guessNotionField, notionRowToApplicant } from '../import/notion.js';
+import { NOTION_FIELD_DEFS, guessNotionField, notionDbKey, notionRowToApplicant, runNotionSync } from '../import/notion.js';
 import { TODAY, addDays, iso } from '../lib/dates.js';
 import { num } from '../lib/format.js';
 import { findCreatorByHandle, mergeDuplicateCreators } from '../model/creators.js';
-import { DB, SERVER, attachContent, byCampaign, byCreator, serverSave } from '../model/db.js';
+import { DB, attachContent, byCampaign, byCreator, serverSave, toastAfterSave } from '../model/db.js';
 import { CAMPAIGN_STATUS, CATEGORIES, COUNTRIES, STAGE_IDX, newId, stageOf, tierOf } from '../model/vocab.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { stagePill, statCard } from '../ui/html.js';
@@ -137,6 +137,13 @@ export function renderNotionImportStep3() {
   st.parsed.forEach((r) => { byStage[r.stage] = (byStage[r.stage] || 0) + 1; });
 
   const base = st.schema.title || 'Notion campaign';
+  /* A campaign already built from this very form. Creating a second one
+     is almost always a mistake — it duplicates the roster, duplicates the
+     chip on the partner link, and leaves both campaigns claiming every
+     submission, which is what makes a roster empty itself on the next
+     sync. Still possible, because occasionally two projects really do run
+     off one form; it just is not the default any more. */
+  const twin = DB.campaigns.find((c) => notionDbKey(c.notionDatabaseId) === notionDbKey(st.databaseId));
   const brandGuess = base.split(/\s*[xX×]\s*/).map((s) => s.trim()).filter((s) => s && !/^vively$/i.test(s))[0] || base;
 
   $('#niResult').innerHTML = `
@@ -186,12 +193,25 @@ export function renderNotionImportStep3() {
     <label style="display:flex;align-items:center;gap:9px;text-transform:none;letter-spacing:0;font-size:13px;color:var(--text-2);margin-bottom:16px">
       <input type="checkbox" id="niSkipBlocked" checked/> Skip blacklisted creators
     </label>
+    ${twin ? `<div class="note warn" style="margin-bottom:12px">
+      <strong>“${esc(twin.brand)} — ${esc(twin.name)}” is already built from this same Notion form.</strong>
+      Importing it again makes a second campaign holding the same people, which is what puts two
+      identically named projects on a partner link — and, because both campaigns then claim every
+      submission, syncing one empties the other's roster.
+      <div style="margin-top:8px">Sync the campaign you already have instead.</div></div>` : ''}
     <div style="display:flex;gap:8px">
-      <button class="btn primary" id="niGo">Create campaign with ${st.parsed.length} creators</button>
+      ${twin ? `<button class="btn primary" id="niSyncExisting">Sync “${esc(twin.name)}” instead</button>
+                <button class="btn" id="niGo">Create a second campaign anyway</button>`
+              : `<button class="btn primary" id="niGo">Create campaign with ${st.parsed.length} creators</button>`}
       <button class="btn" onclick="closeDrawer()">Cancel</button>
     </div>`;
 
   $('#niGo').addEventListener('click', commitNotionImport);
+  if (twin) $('#niSyncExisting').addEventListener('click', () => {
+    closeDrawer();
+    location.hash = '#/campaigns/' + twin.id + '/roster';
+    runNotionSync(twin);
+  });
 }
 
 export function commitNotionImport() {
@@ -285,6 +305,6 @@ export function commitNotionImport() {
   const summary = `Created “${cp.name}” from Notion — ${created + matched} creators (${created} new, ${matched} matched)${skipped ? ', ' + skipped + ' skipped' : ''}` +
     (dedupe.mergedCreators ? `, ${dedupe.mergedCreators} duplicate${dedupe.mergedCreators === 1 ? '' : 's'} merged` : '');
   toast(summary);
-  serverSave({ force: true, silent: true }).then(() =>
-    toast(SERVER.status === 'idle' ? summary + ' — saved' : summary + ' — click Save to store it on the server'));
+  serverSave({ force: true, silent: true }).then((r) =>
+    toastAfterSave(summary, r));
 }

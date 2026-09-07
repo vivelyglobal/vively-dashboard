@@ -281,6 +281,37 @@ export function workspaceIsEmpty(d) {
   return !(x.campaigns || []).length && !(x.creators || []).length && !(x.participants || []).length;
 }
 export let serverSaveTimer = null;
+/* Saves are serialised through this. Before it existed, a save that
+   arrived while another was in flight hit `if (SERVER.busy) return` and
+   was dropped — and its promise resolved anyway, so the caller could not
+   tell. "Create campaign" saves immediately, the autosave debounce is
+   two seconds, so a campaign created within two seconds of any other
+   change reported success, stored nothing, and vanished on the next
+   reload. */
+export let saveChain = Promise.resolve();
+/* the last status a person was told about, so a persistent failure is
+   reported once rather than every two seconds */
+export let lastReportedSaveStatus = 'idle';
+
+/* One sentence for whatever just happened. Every caller uses this rather
+   than reading SERVER.status and guessing, which is what let a refused
+   save read as a successful one. */
+export function saveOutcomeText(r) {
+  if (!r) return 'Not saved — click Save to try again';
+  if (r.ok && r.reason === 'unchanged') return 'Already saved — nothing had changed';
+  if (r.ok) return 'Saved';
+  if (r.reason === 'not-configured') return 'Not connected to the server — this is in this browser only';
+  if (r.reason === 'conflict') return 'Not saved — someone else saved more recently. Click Save again to overwrite.';
+  if (r.reason === 'empty') return 'Nothing is loaded, so nothing was saved. Reload the page first.';
+  return 'NOT SAVED — ' + (r.error || SERVER.error || 'the server refused it') + '. Click Save to try again.';
+}
+
+/* "I did the thing, and here is what happened to it on the server." Used
+   by every action that writes and then saves, so none of them can report
+   success on the strength of the local half alone. */
+export function toastAfterSave(what, r) {
+  toast(r && r.ok && r.reason !== 'unchanged' ? what + ' — saved' : what + ' — ' + saveOutcomeText(r));
+}
 
 export function workspacePayload() { return dbPayload(); }
 
@@ -343,12 +374,34 @@ export async function serverLoad() {
   }
 }
 
-export async function serverSave(opts) {
+/* The public entry point. Every save queues behind the one before it,
+   so none is ever silently dropped, and every caller gets the real
+   outcome of its own save rather than a promise that resolves whatever
+   happened. */
+export function serverSave(opts) {
+  const run = () => serverSaveNow(opts);
+  saveChain = saveChain.then(run, run);
+  return saveChain;
+}
+
+/* An autosave says nothing when it works. When it stops working the
+   person has to be told, or the first they hear of it is a reload with
+   their work missing — which is exactly what happened. Told once per
+   transition into trouble, not once per attempt. */
+export function reportSaveTrouble(result) {
+  const bad = SERVER.status === 'error' || SERVER.status === 'conflict';
+  if (bad && SERVER.status !== lastReportedSaveStatus) toast(saveOutcomeText(result));
+  lastReportedSaveStatus = SERVER.status;
+}
+
+export async function serverSaveNow(opts) {
   opts = opts || {};
-  if (SERVER.busy) return;
-  if (SERVER.configured === false && !opts.force) return;
+  /* cannot normally happen now that saves are serialised, but a direct
+     caller must still get an answer rather than undefined */
+  if (SERVER.busy) return { ok: false, reason: 'busy' };
+  if (SERVER.configured === false && !opts.force) return { ok: false, reason: 'not-configured' };
   const json = JSON.stringify(workspacePayload());
-  if (!opts.force && json === lastServerJson) return;
+  if (!opts.force && json === lastServerJson) return { ok: true, reason: 'unchanged' };
 
   /* Layer 1. An empty workspace is almost never something anybody
      asked for — it is what memory looks like when the load failed, and
@@ -360,7 +413,7 @@ export async function serverSave(opts) {
     SERVER.status = 'error';
     SERVER.error = 'Nothing is loaded, so nothing was saved. Reload the page to fetch the workspace.';
     notifyStatus();
-    return;
+    return { ok: false, reason: 'empty', error: SERVER.error };
   }
 
   SERVER.busy = true; SERVER.status = 'syncing'; notifyStatus();
@@ -373,15 +426,16 @@ export async function serverSave(opts) {
     });
     if (res.status === 503) {
       SERVER.configured = false; SERVER.status = 'off';
-      return;
+      return { ok: false, reason: 'not-configured' };
     }
     if (res.status === 401 || res.status === 403) {
       const body = await res.json().catch(() => ({}));
       handleAuthFailure(res.status, body);
       SERVER.status = 'error';
       SERVER.error = (body && body.error) || 'Not signed in';
-      if (!opts.silent) toast(SERVER.error);
-      return;
+      const r = { ok: false, reason: 'auth', error: SERVER.error };
+      if (!opts.silent) toast(SERVER.error); else reportSaveTrouble(r);
+      return r;
     }
     if (res.status === 422) {
       /* the server's own guard refused it — say what it said rather
@@ -389,16 +443,19 @@ export async function serverSave(opts) {
       const body = await res.json().catch(() => ({}));
       SERVER.status = 'error';
       SERVER.error = (body && body.error) || 'The server refused that save.';
-      if (!opts.silent) toast(SERVER.error);
-      return;
+      const r = { ok: false, reason: 'refused', error: SERVER.error };
+      if (!opts.silent) toast(SERVER.error); else reportSaveTrouble(r);
+      return r;
     }
     const out = await res.json().catch(() => ({}));
     if (res.status === 409) {
       SERVER.status = 'conflict';
       SERVER.error = `Saved from another browser at ${out.savedAt ? new Date(out.savedAt).toLocaleString() : 'a later time'}. Click Save again to overwrite it, or reload this page to get their version.`;
       SERVER.revision = out.revision != null ? out.revision : SERVER.revision;
+      const r = { ok: false, reason: 'conflict', error: SERVER.error };
       if (!opts.silent) toast('Someone else saved more recently — click Save again to overwrite');
-      return;
+      else reportSaveTrouble(r);
+      return r;
     }
     if (!res.ok) throw new Error(out.error || ('Server responded ' + res.status));
     SERVER.configured = true;
@@ -406,10 +463,14 @@ export async function serverSave(opts) {
     SERVER.at = new Date(out.savedAt);
     SERVER.status = 'idle'; SERVER.error = null;
     lastServerJson = json;
+    lastReportedSaveStatus = 'idle';
     if (!opts.silent) toast('Saved');
+    return { ok: true, reason: 'saved', revision: out.revision, savedAt: out.savedAt };
   } catch (err) {
     SERVER.status = 'error'; SERVER.error = err.message;
-    if (!opts.silent) toast('Save failed — ' + err.message);
+    const r = { ok: false, reason: 'failed', error: err.message };
+    if (!opts.silent) toast('Save failed — ' + err.message); else reportSaveTrouble(r);
+    return r;
   } finally {
     SERVER.busy = false; notifyStatus();
   }

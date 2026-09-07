@@ -44,6 +44,43 @@ textarea{width:100%;min-height:56px;padding:8px;border:1px solid var(--line);bor
 input[type=text]{padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text);font:inherit;font-size:12.5px}
 .send{background:var(--accent);color:var(--bg);border:0;border-radius:6px;padding:7px 14px;font-size:12.5px;cursor:pointer}
 .note{border:1px solid var(--line);border-radius:8px;padding:12px 14px;color:var(--text-2);background:var(--card);font-size:12.5px}
+
+/* ---- the month, above the list -------------------------------------
+   A partner reads this page to answer one question: who is coming, and
+   when. A table sorted by date answers it eventually; a month answers it
+   at a glance. Days with a booking are marked and countable, and picking
+   one filters the list below to that day. */
+.cal{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px 16px;margin-bottom:14px;max-width:720px}
+.cal-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.cal-title{font-size:14px;font-weight:600;letter-spacing:-.01em}
+.cal-nav{margin-left:auto;display:flex;gap:6px}
+.cal-nav button{border:1px solid var(--line);background:var(--card);color:var(--text-2);border-radius:6px;
+ width:30px;height:30px;font-size:14px;line-height:1;cursor:pointer}
+.cal-nav button:hover{color:var(--text)}
+.cal-nav button:disabled{opacity:.3;cursor:default}
+.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.cal-dow{font-size:10.5px;letter-spacing:.04em;color:var(--text-3);text-align:left;padding:0 0 4px 7px}
+.cal-dow.sun{color:var(--red)}
+.cal-d{border:1px solid transparent;border-radius:8px;min-height:52px;padding:5px 6px 6px;background:none;
+ color:var(--text-3);font:inherit;font-size:12px;text-align:left;cursor:default;display:flex;flex-direction:column;gap:3px}
+.cal-d.pad{visibility:hidden}
+.cal-d.has{background:var(--bg);border-color:var(--line);color:var(--text);cursor:pointer}
+.cal-d.has:hover{border-color:var(--text-3)}
+.cal-d.today{border-color:var(--blue)}
+.cal-d.on{background:var(--accent);border-color:var(--accent);color:var(--bg)}
+.cal-d .n{font-weight:500}
+.cal-d .who{font-size:10.5px;line-height:1.25;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.cal-d .cnt{display:none;font-size:10px;line-height:1.2;opacity:.75}
+.cal-d.on .who{color:var(--bg);opacity:.85}
+.cal-d .more{font-size:10px;opacity:.7}
+.cal-foot{display:flex;align-items:center;gap:10px;margin-top:10px;font-size:12px;color:var(--text-3);flex-wrap:wrap}
+.cal-clear{border:1px solid var(--line);background:var(--card);color:var(--text-2);border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer}
+@media (max-width:640px){
+  .cal{padding:12px 12px 14px}
+  .cal-d{min-height:42px;font-size:11.5px}
+  .cal-d .who{display:none}
+  .cal-d .cnt{display:block}
+}
 footer{color:var(--text-3);font-size:11.5px;padding:16px 24px;text-align:center}
 </style>
 </head>
@@ -53,6 +90,7 @@ footer{color:var(--text-3);font-size:11.5px;padding:16px 24px;text-align:center}
   <div class="sub" id="sub">불러오는 중…</div>
 </header>
 <main>
+  <div id="cal"></div>
   <div class="bar" id="bar"></div>
   <div id="body"></div>
 </main>
@@ -69,11 +107,109 @@ const kmb = (v) => !v ? '—' : v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v >= 100
 const COLS = [
   ['크리에이터', 'Creator'], ['상태', '초대 확인'], ['방문 일정', 'Visit'], ['예약 시간', 'Time'], ['인원수', 'People'],
   ['IG 팔로워수', 'Followers'], ['성별', 'Gender'], ['국적', 'Nationality'],
-  ['IG 프로필', 'Profile'], ['Email', ''], ['Other SNS', ''],
-  ['콘텐츠 링크', 'Content'], ['참고', 'Remark'], ['Notes', ''], ['', '']
+  ['IG 프로필', 'Profile'], ['Email', ''],
+  ['콘텐츠 링크', 'Content'], ['참고', 'Remark'], ['', '']
 ];
 
 let DATA = null, filter = 'all', open = new Set();
+/* the month on show, and the day picked out of it (an ISO date or null) */
+let calMonth = null, calDay = null;
+
+const DOW = ['일', '월', '화', '수', '목', '금', '토'];
+const todayIso = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+const monthKey = (isoDate) => String(isoDate || '').slice(0, 7);
+const shiftMonth = (key, by) => {
+  const [y, m] = key.split('-').map(Number);
+  const d = new Date(y, m - 1 + by, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+const monthLabel = (key) => {
+  const [y, m] = key.split('-').map(Number);
+  return `${y}년 ${m}월`;
+};
+
+/* Every day this partner has someone booked on, and who. Built from the
+   rows the campaign filter is already showing, so the month and the list
+   never disagree about what is on. */
+function visitsByDay(rows) {
+  const by = {};
+  rows.forEach((r) => { if (r.visitDate) (by[r.visitDate] = by[r.visitDate] || []).push(r); });
+  Object.values(by).forEach((list) => list.sort((a, b) =>
+    (a.visitTime || '').localeCompare(b.visitTime || '') || a.creator.localeCompare(b.creator)));
+  return by;
+}
+
+/* Open on the month that has the next visit rather than on whatever
+   month it happens to be — a partner opening this in January to check a
+   February booking should not have to press next. */
+function defaultMonth(by) {
+  const days = Object.keys(by).sort();
+  if (!days.length) return monthKey(todayIso());
+  const t = todayIso();
+  return monthKey(days.find((d) => d >= t) || days[days.length - 1]);
+}
+
+function renderCalendar(rows) {
+  const by = visitsByDay(rows);
+  const days = Object.keys(by).sort();
+  const mount = document.getElementById('cal');
+  if (!days.length) { mount.innerHTML = ''; calDay = null; return; }
+
+  if (!calMonth) calMonth = defaultMonth(by);
+  const months = [...new Set(days.map(monthKey))].sort();
+  const [y, m] = calMonth.split('-').map(Number);
+  const first = new Date(y, m - 1, 1);
+  const lead = first.getDay();
+  const len = new Date(y, m, 0).getDate();
+  const today = todayIso();
+  const inMonth = days.filter((d) => monthKey(d) === calMonth);
+  const booked = inMonth.reduce((a, d) => a + by[d].length, 0);
+
+  const cells = [];
+  for (let i = 0; i < lead; i++) cells.push('<div class="cal-d pad"></div>');
+  for (let n = 1; n <= len; n++) {
+    const iso = `${calMonth}-${String(n).padStart(2, '0')}`;
+    const list = by[iso] || [];
+    const cls = ['cal-d'];
+    if (list.length) cls.push('has');
+    if (iso === today) cls.push('today');
+    if (iso === calDay) cls.push('on');
+    /* a name where there is room for one, a count where there is not —
+       the full list is on the tooltip either way */
+    const who = list.length === 1 ? list[0].creator : list.length + '명';
+    cells.push(`<${list.length ? 'button' : 'div'} class="${cls.join(' ')}"${list.length ? ` data-day="${iso}" title="${esc(list.map((r) => (r.visitTime ? r.visitTime + ' ' : '') + r.creator).join(', '))}"` : ''}>
+      <span class="n">${n}</span>${list.length ? `<span class="who">${esc(who)}</span><span class="cnt">${list.length}명</span>` : ''}
+    </${list.length ? 'button' : 'div'}>`);
+  }
+
+  mount.innerHTML = `<div class="cal">
+    <div class="cal-head">
+      <div class="cal-title">${esc(monthLabel(calMonth))}</div>
+      <div class="cal-nav">
+        <button data-mv="-1"${calMonth <= months[0] ? ' disabled' : ''} aria-label="이전 달">&#8249;</button>
+        <button data-mv="1"${calMonth >= months[months.length - 1] ? ' disabled' : ''} aria-label="다음 달">&#8250;</button>
+      </div>
+    </div>
+    <div class="cal-grid">
+      ${DOW.map((d, i) => `<div class="cal-dow${i === 0 ? ' sun' : ''}">${d}</div>`).join('')}
+      ${cells.join('')}
+    </div>
+    <div class="cal-foot">
+      <span>${inMonth.length ? `${inMonth.length}일 · ${booked}명 방문 예정` : '이 달에는 방문 일정이 없습니다'}</span>
+      ${calDay ? `<button class="cal-clear" id="calClear">${esc(calDay)} 선택 해제 · Show all days</button>` : ''}
+    </div>
+  </div>`;
+
+  mount.querySelectorAll('[data-mv]').forEach((b) =>
+    b.onclick = () => { calMonth = shiftMonth(calMonth, +b.dataset.mv); calDay = null; render(); });
+  mount.querySelectorAll('[data-day]').forEach((b) =>
+    b.onclick = () => { calDay = calDay === b.dataset.day ? null : b.dataset.day; render(); });
+  const clear = document.getElementById('calClear');
+  if (clear) clear.onclick = () => { calDay = null; render(); };
+}
 
 async function load() {
   const res = await fetch('/api/partner/' + encodeURIComponent(TOKEN));
@@ -89,22 +225,32 @@ async function load() {
 }
 
 function render() {
-  const rows = DATA.rows.filter((r) => filter === 'all' || r.campaign === filter);
+  /* The chips filter by brand, so two campaign records under one brand
+     produced two identical chips — both lit at once, because both match
+     the same filter string. That is a real duplicate upstream (the same
+     Notion form imported twice) and it is fixed there; here the partner
+     simply sees the one project they have, once. */
+  const brands = [...new Set(DATA.campaigns.map((c) => c.brand).filter(Boolean))];
+
+  const inScope = DATA.rows.filter((r) => filter === 'all' || r.campaign === filter);
+  renderCalendar(inScope);
+  const rows = calDay ? inScope.filter((r) => r.visitDate === calDay) : inScope;
+
   document.getElementById('title').textContent = DATA.partner + ' — 크리에이터 진행 현황';
   document.getElementById('sub').innerHTML =
-    esc(DATA.campaigns.length + '개 프로젝트 · ' + DATA.rows.length + '명') +
+    esc(brands.length + '개 프로젝트 · ' + DATA.rows.length + '명') +
     (DATA.updatedAt ? ' · 마지막 업데이트 ' + esc(new Date(DATA.updatedAt).toLocaleString('ko-KR')) : '');
 
   document.getElementById('bar').innerHTML =
-    ['all'].concat(DATA.campaigns.map((c) => c.brand)).map((c) =>
+    ['all'].concat(brands).map((c) =>
       `<button class="chip ${filter === c ? 'on' : ''}" data-f="${esc(c)}">${c === 'all' ? '전체' : esc(c)}</button>`).join('') +
-    `<span class="count">${rows.length}명 표시</span>`;
+    `<span class="count">${calDay ? esc(calDay) + ' · ' : ''}${rows.length}명 표시</span>`;
 
   const byPid = {};
   (DATA.comments || []).forEach((c) => (byPid[c.pid] = byPid[c.pid] || []).push(c));
 
   document.getElementById('body').innerHTML = !rows.length
-    ? '<div class="note">아직 등록된 크리에이터가 없습니다.</div>'
+    ? `<div class="note">${calDay ? esc(calDay) + '에는 방문 일정이 없습니다.' : '아직 등록된 크리에이터가 없습니다.'}</div>`
     : `<div class="wrap"><table><thead><tr>${
         COLS.map(([ko, en]) => `<th>${esc(ko)}${en ? `<br><span style="text-transform:none;letter-spacing:0">${esc(en)}</span>` : ''}</th>`).join('')
       }</tr></thead><tbody>${rows.map((r) => {
@@ -122,10 +268,8 @@ function render() {
           <td>${esc(r.nationality || '—')}</td>
           <td>${r.igUrl ? `<a href="${esc(r.igUrl)}" target="_blank" rel="noopener">열기</a>` : '—'}</td>
           <td>${esc(r.email || '—')}</td>
-          <td>${r.otherSns ? `<a href="${esc(r.otherSns)}" target="_blank" rel="noopener">열기</a>` : '—'}</td>
           <td>${r.contentUrl ? `<a href="${esc(r.contentUrl)}" target="_blank" rel="noopener">보기</a>` : '—'}</td>
           <td class="wide">${esc(r.remark || '—')}</td>
-          <td class="wide">${esc(r.notes || '—')}</td>
           <td><button class="cbtn ${cs.length ? 'has' : ''}" data-c="${esc(r.pid)}">${cs.length ? '댓글 ' + cs.length : '댓글'}</button></td>
         </tr>
         ${open.has(r.pid) ? `<tr class="thread"><td colspan="${COLS.length}"><div class="inner">
@@ -138,7 +282,7 @@ function render() {
       }).join('')}</tbody></table></div>`;
 
   document.querySelectorAll('[data-f]').forEach((b) =>
-    b.onclick = () => { filter = b.dataset.f; render(); });
+    b.onclick = () => { filter = b.dataset.f; calMonth = null; calDay = null; render(); });
   document.querySelectorAll('[data-c]').forEach((b) =>
     b.onclick = () => { const id = b.dataset.c; open.has(id) ? open.delete(id) : open.add(id); render(); });
   document.querySelectorAll('[data-s]').forEach((b) => b.onclick = () => send(b.dataset.s, b));

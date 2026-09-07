@@ -148,7 +148,15 @@
 .save-badge.warn { color: #f5c451; }
 .save-badge.warn .sdot { background: var(--warning); }
 .save-badge.off .sdot { background: var(--text-3); }
-@media (max-width: 1240px) { .save-badge { display: none; } }
+/* The badge is the only standing indication of whether the workspace is
+   actually stored anywhere. Hiding the whole thing below 1240px meant a
+   laptop, and every phone, showed no save state at all — so a save that
+   had been failing for an hour looked exactly like one that was fine.
+   Keep the light; drop only the sentence, which the tooltip still has. */
+@media (max-width: 1240px) {
+  .save-badge { padding: 6px 7px; }
+  .save-badge .sb-t { display: none; }
+}
 
 /* theme switch */
 .theme-btn {
@@ -481,6 +489,10 @@ input[type=checkbox] { accent-color: var(--blue); width: 15px; height: 15px; cur
 .scrim {
   position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 100; display: none;
 }
+/* Backdrop for the phone slide-over menu. Always in the DOM so the toggle
+   has nothing to build, and inert above 760px where the menu is a real
+   column rather than an overlay. */
+.panel-scrim { display: none; }
 .scrim.open { display: block; }
 .drawer {
   position: fixed; top: 0; right: 0; height: 100vh; width: min(560px, 92vw); background: var(--surface);
@@ -655,12 +667,33 @@ tr.preferred-row td:first-child { box-shadow: inset 3px 0 0 var(--good); }
      minimum plus four buttons on a row that could not wrap came to
      ~650px. Let the row wrap and let the search shrink to fit. */
   .topbar {
-    height: auto; min-height: 52px; padding: 8px 12px;
-    flex-wrap: wrap; row-gap: 8px; column-gap: 8px;
+    height: auto; min-height: 52px; padding: 7px 12px;
+    flex-wrap: wrap; row-gap: 7px; column-gap: 8px;
   }
   .topbar h1 { font-size: 16px; }
+  /* The breadcrumb repeats what the rail already says, and it was buying
+     a second line inside the title block. */
+  .topbar .crumb { display: none; }
   .topbar .spacer { display: none; }
   .searchbox { min-width: 0; flex: 1 1 100%; order: 5; }
+  /* Measured at 390px: title + Save + theme + Export could not share a
+     row, so the buttons wrapped onto a third one and the header came to
+     168px — taller than the first card beneath it. Export is a desktop
+     action (a CSV download nobody opens on a phone) and it is the button
+     that made the difference. Two rows, ~100px. */
+  #btnExportAll { display: none; }
+  /* 40px targets are right in the body; in a header that has to stay out
+     of the way, 36px is still comfortably above the 34px thumb minimum.
+     Written with the `.sm` class so it outranks the generic rule further
+     down this same block. */
+  .topbar .btn, .topbar .btn.sm { min-height: 36px; padding: 7px 12px; }
+  .topbar .icon-btn, .topbar .theme-btn { min-width: 36px; min-height: 36px; }
+  /* Below about 340px of usable header — the rail takes 56 of the screen —
+     the first row cannot hold everything and the whole thing grows to
+     three rows. The theme toggle is what goes: the theme already follows
+     the phone's own light/dark setting, and a choice made on a desktop is
+     remembered here, so nothing is lost but the switch itself. */
+  @media (max-width: 360px) { .topbar .theme-btn { display: none; } }
 
   /* the tab bar's sticky offset was measured against a top bar fixed
      at 64px, which stops being true the moment that bar can wrap */
@@ -672,13 +705,32 @@ tr.preferred-row td:first-child { box-shadow: inset 3px 0 0 var(--good); }
      that competes with it. */
   .app { grid-template-columns: 56px minmax(0, 1fr); }
   body, body.panel-open, body.panel-closed { --panelw: 0px; }
+  /* The slide-over started at top:0 with z-index 120 against a topbar at
+     z-index 30, so opening the menu covered the page title, the search
+     box, the Save button and the ☰ that opened it. It now starts below
+     the header — whose height is measured at runtime into --topbar-h,
+     because that header wraps and is not a fixed 52px. */
   .panel {
-    position: fixed; left: 56px; top: 0; bottom: 0; height: 100dvh;
-    width: min(300px, calc(100vw - 56px)); z-index: 120;
+    position: fixed; left: 56px; top: var(--topbar-h, 52px); bottom: 0;
+    height: auto;
+    /* 300px of menu beside a 56px rail left a 34px ribbon of page on a
+       390px screen: too narrow to read, too narrow to tap. Leave 56px —
+       a real target for "tap outside to close". */
+    width: min(300px, calc(100vw - 112px)); z-index: 120;
     transform: translateX(-105%); transition: transform .18s ease;
     border-right: 1px solid var(--line-strong); box-shadow: var(--shadow);
   }
   body.panel-open .panel { transform: none; border-right: 1px solid var(--line-strong); }
+
+  /* Sits under the menu and over everything else below the header, so the
+     header stays reachable while the menu is open. */
+  .panel-scrim {
+    display: block; position: fixed; left: 0; right: 0;
+    top: var(--topbar-h, 52px); bottom: 0;
+    background: rgba(0, 0, 0, .42); z-index: 119;
+    opacity: 0; pointer-events: none; transition: opacity .18s ease;
+  }
+  body.panel-open .panel-scrim { opacity: 1; pointer-events: auto; }
 
   .content { padding: 12px; min-width: 0; }
   .card { min-width: 0; }

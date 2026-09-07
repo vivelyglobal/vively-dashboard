@@ -2,7 +2,7 @@ import { parseCsvText } from '../lib/csv.js';
 import { iso } from '../lib/dates.js';
 import { num } from '../lib/format.js';
 import { readXlsx } from '../lib/xlsx.js';
-import { SERVER, byCreator, notify, serverSave } from '../model/db.js';
+import { byCreator, notify, serverSave, toastAfterSave } from '../model/db.js';
 import { partsOf } from '../model/stats.js';
 import { $, esc } from '../ui/dom.js';
 import { statCard } from '../ui/html.js';
@@ -203,6 +203,6 @@ export function commitMetricsImport() {
   const summary = `Updated ${updated} creator${updated === 1 ? '' : 's'} from ${posts} post${posts === 1 ? '' : 's'}` +
     (st.unmatched.length ? ` — ${st.unmatched.length} row${st.unmatched.length === 1 ? '' : 's'} skipped (not on this roster)` : '');
   toast(summary);
-  serverSave({ force: true, silent: true }).then(() =>
-    toast(SERVER.status === 'idle' ? summary + ' — saved' : summary + ' — click Save to store it on the server'));
+  serverSave({ force: true, silent: true }).then((r) =>
+    toastAfterSave(summary, r));
 }

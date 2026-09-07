@@ -135,8 +135,24 @@ test('every column the partner asked for is present', () => {
   assert.equal(r.remark, '2명 방문 예정');
   assert.equal(r.contentUrl, 'https://instagram.com/reel/xyz');
   assert.equal(r.nationality, 'Korean');
-  assert.equal(r.notes, '채식주의자입니다');
-  assert.equal(r.otherSns, 'https://tiktok.com/@one');
+});
+
+/* The partner view showed a column of other social handles and a column
+   of form notes, and on a real link both were empty on every row. They
+   are gone from the page, and gone from the payload with it — a field
+   nobody reads is a field that should not be leaving the building, and a
+   creator's other handles are roster data rather than booking data.
+   Anything the partner genuinely needs about a guest goes in `remark`. */
+test('a creator\u2019s other handles and form notes do not leave with the payload', () => {
+  const out = buildPartnerRows(db, 'SPLABAB');
+  const r = out.rows.find((x) => x.pid === 'a-c1');
+  assert.equal(r.otherSns, undefined);
+  assert.equal(r.notes, undefined);
+  const json = JSON.stringify(out);
+  assert.ok(!json.includes('tiktok.com/@one'), 'the other-SNS link reached the partner payload');
+  assert.ok(!json.includes('\uCC44\uC2DD\uC8FC\uC758\uC790'), 'the form note reached the partner payload');
+  /* the column that is still there, and still carries what they need */
+  assert.equal(r.remark, '2\uBA85 \uBC29\uBB38 \uC608\uC815');
 });
 
 test('the Kakao ID and the accept/reject message are not sent at all', () => {
@@ -149,10 +165,9 @@ test('the Kakao ID and the accept/reject message are not sent at all', () => {
   assert.equal(row.acceptMessage, undefined);
 });
 
-test('the creator form note and the internal note are different fields', () => {
-  const r = buildPartnerRows(db, 'SPLABAB').rows.find((x) => x.pid === 'a-c1');
-  assert.equal(r.notes, '채식주의자입니다');
-  assert.ok(!String(r.notes).includes('INTERNAL'));
+test('the internal note never reaches the partner under any name', () => {
+  const json = JSON.stringify(buildPartnerRows(db, 'SPLABAB'));
+  assert.ok(!json.includes('INTERNAL'), 'the internal note reached the partner payload');
 });
 
 test('Waiting Approval is the flag the row filter keys on', () => {

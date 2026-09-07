@@ -4,7 +4,7 @@ import { TODAY, addDays, iso } from '../lib/dates.js';
 import { num } from '../lib/format.js';
 import { downloadXlsx, readXlsx } from '../lib/xlsx.js';
 import { findCreatorByHandle, mergeDuplicateCreators } from '../model/creators.js';
-import { DB, SERVER, attachContent, byCampaign, byCreator, serverSave } from '../model/db.js';
+import { DB, attachContent, byCampaign, byCreator, serverSave, toastAfterSave } from '../model/db.js';
 import { CAMPAIGN_STATUS, CATEGORIES, COUNTRIES, STAGE_IDX, newId, stageOf, tierOf } from '../model/vocab.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { stagePill, statCard } from '../ui/html.js';
@@ -274,8 +274,8 @@ export function commitImport() {
   const summary = `Imported ${created + matched} creators — ${created} new, ${matched} matched${skipped ? ', ' + skipped + ' skipped' : ''}` +
     (dedupe.mergedCreators ? `, ${dedupe.mergedCreators} duplicate${dedupe.mergedCreators === 1 ? '' : 's'} merged` : '');
   toast(summary);
-  serverSave({ force: true, silent: true }).then(() =>
-    toast(SERVER.status === 'idle' ? summary + ' — saved' : summary + ' — click Save to store it on the server'));
+  serverSave({ force: true, silent: true }).then((r) =>
+    toastAfterSave(summary, r));
 }
 
 /* ---------------------------- blank templates ---------------------------- */

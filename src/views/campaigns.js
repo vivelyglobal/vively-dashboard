@@ -1,10 +1,10 @@
 import { SERIES_HEX, barsH, fitHeight, lineChart, sparkSvg, splitBar } from '../charts/index.js';
 import { openMetricsImport } from '../import/metrics.js';
-import { joinSlot, notionLinkedCampaigns, openNotionMappingDrawer, splitSlot, syncAllNotionCampaigns, visitSlotMoved, visitSlotOf } from '../import/notion.js';
+import { campaignsSharingNotionDb, joinSlot, notionLinkedCampaigns, openNotionMappingDrawer, splitSlot, syncAllNotionCampaigns, visitSlotMoved, visitSlotOf } from '../import/notion.js';
 import { DAY, TODAY, addDays, dLabel, iso } from '../lib/dates.js';
 import { engagementsOf, kmb, money2, num, pct, won, wonK } from '../lib/format.js';
 import { recomputeCreatorStats } from '../model/creators.js';
-import { DB, SERVER, byCampaign, byCreator, detachContent, notify, persist, serverSave, setContentUrl } from '../model/db.js';
+import { DB, byCampaign, byCreator, detachContent, notify, persist, serverSave, setContentUrl, toastAfterSave } from '../model/db.js';
 import { duplicateIdBanner, wireDuplicateIdBanner } from '../model/duplicates.js';
 import { SETTINGS, isBlocked, selectable } from '../model/settings.js';
 import { campaignStats, dailySeries, liveOf, partsOf, viralScore } from '../model/stats.js';
@@ -145,10 +145,14 @@ export function openNewCampaign() {
       hashtags: ['#vively'], owner: 'Kunzang', note: $('#ncNote').value, createdAt: iso(TODAY)
     };
     DB.campaigns.push(cp); byCampaign[id] = cp;
+    /* Write the browser's own copy immediately. Creating a campaign used
+       to go straight to the server and nowhere else, so if that save was
+       dropped the campaign existed only in this tab's memory and a
+       refresh lost it with nothing to recover from. */
+    persist(true);
     closeDrawer(); location.hash = '#/campaigns/' + id + '/brief';
-    toast('Campaign created');
-    serverSave({ force: true, silent: true }).then(() =>
-      toast(SERVER.status === 'idle' ? 'Campaign created — saved' : 'Campaign created — click Save to store it on the server'));
+    serverSave({ force: true, silent: true }).then((r) =>
+      toastAfterSave('Campaign created', r));
   });
 }
 
@@ -311,6 +315,89 @@ export function confirmDeleteCampaign(cp) {
 }
 
 /* removes the campaign and its roster rows. Creators are deliberately left alone. */
+/* ---- two campaigns, one Notion form -------------------------------
+   The guard in the sync stops the roster ping-ponging between them, but
+   a pair already in the workspace stays a pair: two projects with the
+   same name on a partner link, and the people split across both. This
+   says so where it is noticed — on the roster — and offers the two ways
+   out. Merging is the one people want; unlinking is the safe one, and
+   it stops the sync from touching the campaign at all.
+   ------------------------------------------------------------------- */
+export function sharedNotionFormBanner(cp) {
+  const twins = campaignsSharingNotionDb(cp);
+  if (!twins.length) return '';
+  const counts = (c) => DB.participants.filter((p) => p.campaignId === c.id).length;
+  return `<div class="note warn" style="margin-bottom:12px">
+    <strong>This campaign shares its Notion form with ${twins.map((c) => '“' + esc(c.name) + '”').join(' and ')}.</strong>
+    Both were built from the same form, so both claim every submission in it — which is why one roster empties
+    when the other is synced, and why a partner link shows the same project twice.
+    <div style="font-size:12px;color:var(--text-3);margin-top:6px">
+      ${esc(cp.name)}: ${counts(cp)} on the roster${twins.map((c) => ` · ${esc(c.name)}: ${counts(c)}`).join('')}
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+      ${twins.map((c) => `<button class="btn sm" data-mergeinto="${esc(c.id)}">Merge into “${esc(c.name)}”</button>`).join('')}
+      <button class="btn sm" id="unlinkNotion">Unlink this one from Notion</button>
+    </div></div>`;
+}
+
+export function wireSharedNotionFormBanner(cp) {
+  $$('[data-mergeinto]').forEach((b) => b.addEventListener('click', () => mergeCampaignInto(cp, byCampaign[b.dataset.mergeinto])));
+  const un = $('#unlinkNotion');
+  if (un) un.addEventListener('click', () => {
+    if (!confirm(`Stop syncing “${cp.name}” from Notion? Its roster stays exactly as it is; it simply will not be pulled or moved again.`)) return;
+    delete cp.notionDatabaseId; delete cp.notionMapping; delete cp.notionSyncedAt;
+    persist(true); notify();
+    serverSave({ force: true, silent: true }).then((r) => toastAfterSave('Unlinked from Notion', r));
+  });
+}
+
+/* Fold `from` into `into`: every roster row moves across, and the empty
+   shell is removed. Row ids are left exactly as they are — a Google
+   Calendar event id is derived from one and a partner's comments are
+   filed against one, so rewriting them would duplicate the event and
+   orphan the comments. A row for someone already on the destination
+   roster is dropped rather than duplicated, keeping whichever copy has
+   got further through the pipeline. */
+export function mergeCampaignInto(from, into) {
+  if (!from || !into || from === into) return;
+  const mine = DB.participants.filter((p) => p.campaignId === from.id);
+  const theirs = DB.participants.filter((p) => p.campaignId === into.id);
+  const byCr = {};
+  theirs.forEach((p) => { byCr[p.creatorId] = p; });
+  const clash = mine.filter((p) => byCr[p.creatorId]).length;
+
+  if (!confirm(
+    `Move all ${mine.length} roster rows from “${from.name}” into “${into.name}” and delete “${from.name}”?\n\n` +
+    (clash ? `${clash} of them are already on “${into.name}” — whichever copy has got further through the pipeline is kept.\n\n` : '') +
+    `No creator is deleted. This cannot be undone from here, so download a backup first if you want one.`)) return;
+
+  let moved = 0, dropped = 0;
+  mine.forEach((p) => {
+    const other = byCr[p.creatorId];
+    if (!other) { p.campaignId = into.id; byCr[p.creatorId] = p; moved++; return; }
+    /* keep the further-along row; a booked visit beats an unbooked one */
+    const better = (STAGE_IDX[p.stage] || 0) > (STAGE_IDX[other.stage] || 0) ||
+                   (!!p.visitAt && !other.visitAt);
+    if (better) {
+      DB.participants.splice(DB.participants.indexOf(other), 1);
+      p.campaignId = into.id; byCr[p.creatorId] = p; moved++;
+    } else {
+      DB.participants.splice(DB.participants.indexOf(p), 1);
+    }
+    dropped++;
+  });
+  /* content records follow their row */
+  (DB.socialContent || []).forEach((c) => { if (c.campaignId === from.id) c.campaignId = into.id; });
+  deleteCampaign(from.id);
+
+  const summary = `Merged “${from.name}” into “${into.name}” — ${moved} rows moved` +
+    (dropped ? `, ${dropped} duplicate row${dropped === 1 ? '' : 's'} resolved` : '');
+  persist(true);
+  location.hash = '#/campaigns/' + into.id + '/roster';
+  notify();
+  serverSave({ force: true, silent: true }).then((r) => toastAfterSave(summary, r));
+}
+
 export function deleteCampaign(id) {
   const goneRows = new Set(DB.participants.filter((p) => p.campaignId === id).map((p) => p.id));
   DB.socialContent = DB.socialContent.filter((c) => !goneRows.has(c.participantId));
@@ -339,6 +426,7 @@ export function rosterTab(mount, cp) {
       <button class="icon-btn sm" id="notionDiag" title="Show exactly what Notion returns and what the sync makes of it">&#128269;</button>` : ''}
       <button class="btn primary sm" id="addCreators">+ Add creators</button>
     </div>
+    ${sharedNotionFormBanner(cp)}
     ${upcomingVisitsStrip(cp)}
     <div id="rosterBody"></div>`;
 
@@ -354,6 +442,7 @@ export function rosterTab(mount, cp) {
   $('#rosterCsv').addEventListener('click', () => exportRoster(cp));
   $('#rosterMetrics').addEventListener('click', () => openMetricsImport(cp));
   $('#notionSync').addEventListener('click', () => openNotionSync(cp));
+  wireSharedNotionFormBanner(cp);
   const notionCfg = $('#notionConfig');
   /* straight to the field mapping — that's what needs fixing 9 times in 10;
      the mapping drawer itself offers "use a different link" */

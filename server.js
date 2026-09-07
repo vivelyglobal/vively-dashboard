@@ -1090,12 +1090,15 @@ function buildPartnerRows(db, partner) {
       remark: p.remark || "",
       headcount: p.headcount || "",
       contentUrl: partnerContentUrl(db, p),
-      nationality: p.nationality || cr.nationality || cr.country || "",
-      notes: p.formNotes || "",
-      otherSns: p.otherSns || ""
-      /* deliberately absent: cr.payout, p.note, p.fee, p.address, the Kakao
+      nationality: p.nationality || cr.nationality || cr.country || ""
+      /* Deliberately absent: cr.payout, p.note, p.fee, p.address, the Kakao
          ID, the accept/reject message, and every campaign that is not this
-         partner's */
+         partner's.
+         Also gone: otherSns and formNotes. The partner view stopped showing
+         them, and a field nobody reads is a field that should not be leaving
+         — a creator's other handles in particular are roster data, not
+         booking data. Anything the partner genuinely needs to know about a
+         guest belongs in `remark`, which is still here and still shown. */
     };
   });
 

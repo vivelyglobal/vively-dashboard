@@ -16,6 +16,36 @@ import { activeCampaigns, state } from './overview.js';
    ============================================================ */
 export let creatorSort = { key: 'followers', dir: -1 };
 
+/* ---- the search box, across a re-render -------------------------
+   Typing here re-renders the whole section, and the re-render replaces
+   the very input being typed into. Focus and the caret therefore have
+   to be carried across by hand; without that, the field drops focus
+   after each character and only accepts one letter per click.
+
+   The filtering itself is untouched — the same value still goes into
+   state.creatorFilters.q on every keystroke. Only the redraw is
+   deferred, so a 400-row table is not rebuilt mid-word.
+   ------------------------------------------------------------------ */
+export const CREATOR_SEARCH_DEBOUNCE_MS = 140;
+export let creatorSearchCaret = null;
+export let creatorSearchTimer = null;
+
+/* Called right after the filter card is rebuilt. preventScroll matters
+   on a phone: without it the browser scrolls the refocused input back
+   into view and the page jumps on every keystroke. */
+export function restoreCreatorSearchCaret() {
+  const snap = creatorSearchCaret;
+  creatorSearchCaret = null;
+  if (!snap) return;
+  const el = $('#crQ');
+  if (!el) return;
+  el.focus({ preventScroll: true });
+  /* setSelectionRange throws on input types that have no caret; a
+     search box has one, but the guard keeps this safe if the field
+     ever changes type. */
+  try { el.setSelectionRange(snap.start, snap.end); } catch (e) { /* no caret on this type */ }
+}
+
 export const CREATOR_SEGMENTS = [
   { id: 'all',       label: 'All creators',      test: () => true },
   { id: 'worked',    label: 'Worked with us',    test: (c) => c.campaignsDone > 0 },
@@ -106,9 +136,28 @@ export function renderCreators(view, item, tab) {
       <td><button class="btn xs" onclick="event.stopPropagation();showCreator('${c.id}')">View</button></td>
     </tr>`).join('') || `<tr><td colspan="13"><div class="empty">No creators match those filters.</div></td></tr>`;
 
+  restoreCreatorSearchCaret();
+
+  /* the selects fire once per choice, so they redraw straight away */
   const bind = (id, key) => $('#' + id).addEventListener('input', () => { state.creatorFilters[key] = $('#' + id).value; notify(); });
-  bind('crQ', 'q'); bind('crTier', 'tier'); bind('crCat', 'cat'); bind('crCountry', 'country'); bind('crPlatform', 'platform');
-  $('#crReset').addEventListener('click', () => { state.creatorFilters = { q: '', tier: '', cat: '', country: '', platform: '', worked: '' }; notify(); });
+  bind('crTier', 'tier'); bind('crCat', 'cat'); bind('crCountry', 'country'); bind('crPlatform', 'platform');
+
+  /* the text box fires per keystroke: record where the caret is, write
+     the filter immediately, and let the redraw wait for a short pause.
+     Paste, backspace and clearing all arrive as 'input' too, so they
+     take the same path and keep the caret in the same way. */
+  $('#crQ').addEventListener('input', () => {
+    const el = $('#crQ');
+    state.creatorFilters.q = el.value;
+    creatorSearchCaret = { start: el.selectionStart, end: el.selectionEnd };
+    clearTimeout(creatorSearchTimer);
+    creatorSearchTimer = setTimeout(() => notify(), CREATOR_SEARCH_DEBOUNCE_MS);
+  });
+
+  $('#crReset').addEventListener('click', () => {
+    clearTimeout(creatorSearchTimer); creatorSearchCaret = null;
+    state.creatorFilters = { q: '', tier: '', cat: '', country: '', platform: '', worked: '' }; notify();
+  });
   $('#crExport').addEventListener('click', () => {
     downloadFile(toCsv(['handle','name','platform','followers','er','avg_views','tier','categories','country','languages','source','rate_krw','campaigns','best_views','rating','last_worked','tags','email','flag','flag_reason'],
       sorted.map((c) => [c.handle, c.name, c.platform, c.followers, c.er, c.avgViews, c.tier, c.categories.join('|'), c.country, c.languages.join('|'),

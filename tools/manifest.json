@@ -3,8 +3,8 @@
   "file": "lib/rng.js",
   "ranges": [
    [
-    882,
-    903
+    935,
+    956
    ]
   ],
   "imports": [],
@@ -14,8 +14,8 @@
   "file": "lib/dates.js",
   "ranges": [
    [
-    904,
-    909
+    957,
+    962
    ]
   ],
   "imports": [],
@@ -25,8 +25,8 @@
   "file": "lib/format.js",
   "ranges": [
    [
-    1602,
-    1625
+    1716,
+    1739
    ]
   ],
   "imports": [],
@@ -36,8 +36,8 @@
   "file": "lib/csv.js",
   "ranges": [
    [
-    6569,
-    6587
+    6884,
+    6902
    ]
   ],
   "imports": [],
@@ -47,8 +47,8 @@
   "file": "model/vocab.js",
   "ranges": [
    [
-    910,
-    992
+    963,
+    1045
    ]
   ],
   "imports": [],
@@ -58,8 +58,8 @@
   "file": "model/settings.js",
   "ranges": [
    [
-    1727,
-    1730
+    1841,
+    1844
    ]
   ],
   "imports": [],
@@ -69,8 +69,8 @@
   "file": "ui/dom.js",
   "ranges": [
    [
-    1990,
-    1995
+    2104,
+    2109
    ]
   ],
   "imports": [],
@@ -80,8 +80,8 @@
   "file": "ui/overlay.js",
   "ranges": [
    [
-    1996,
-    2021
+    2110,
+    2135
    ]
   ],
   "imports": [
@@ -93,8 +93,8 @@
   "file": "ui/html.js",
   "ranges": [
    [
-    2022,
-    2128
+    2136,
+    2242
    ]
   ],
   "imports": [
@@ -111,8 +111,8 @@
   "file": "model/db.js",
   "ranges": [
    [
-    993,
-    1472
+    1046,
+    1586
    ]
   ],
   "imports": [
@@ -122,14 +122,14 @@
    "import { SETTINGS } from './settings.js';",
    "import { avColor, newId } from './vocab.js';"
   ],
-  "sha256": "e3c1aec3bcf48395891505bcb6c0000c6a5c9300a39de78a1e6cbfd1c36dc695"
+  "sha256": "f804ef1b21e8a4c7a50e0a594e5691f8b0268f3bc56974af9ac581b7b890e104"
  },
  {
   "file": "model/creators.js",
   "ranges": [
    [
-    1473,
-    1601
+    1587,
+    1715
    ]
   ],
   "imports": [
@@ -142,8 +142,8 @@
   "file": "model/stats.js",
   "ranges": [
    [
-    1626,
-    1726
+    1740,
+    1840
    ]
   ],
   "imports": [
@@ -158,8 +158,8 @@
   "file": "model/suggest.js",
   "ranges": [
    [
-    1731,
-    1750
+    1845,
+    1864
    ]
   ],
   "imports": [
@@ -171,8 +171,8 @@
   "file": "model/calendar.js",
   "ranges": [
    [
-    2408,
-    2433
+    2522,
+    2547
    ]
   ],
   "imports": [
@@ -185,8 +185,8 @@
   "file": "charts/index.js",
   "ranges": [
    [
-    1751,
-    1989
+    1865,
+    2103
    ]
   ],
   "imports": [
@@ -199,8 +199,8 @@
   "file": "lib/xlsx.js",
   "ranges": [
    [
-    4799,
-    5070
+    5051,
+    5322
    ]
   ],
   "imports": [
@@ -212,8 +212,8 @@
   "file": "import/excel.js",
   "ranges": [
    [
-    5071,
-    5292
+    5323,
+    5544
    ]
   ],
   "imports": [],
@@ -223,27 +223,27 @@
   "file": "import/notion.js",
   "ranges": [
    [
-    5293,
-    5933
+    5545,
+    6228
    ]
   ],
   "imports": [
    "import { TODAY, iso } from '../lib/dates.js';",
    "import { findCreatorByHandle, mergeDuplicateCreators } from '../model/creators.js';",
-   "import { DB, SERVER, attachContent, byCreator, notify, serverSave } from '../model/db.js';",
+   "import { DB, attachContent, byCreator, notify, serverSave, toastAfterSave } from '../model/db.js';",
    "import { STAGE_IDX, newId, tierOf } from '../model/vocab.js';",
    "import { $, esc } from '../ui/dom.js';",
    "import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';",
    "import { STATUS_MAP, countryOf, guessField, handleFromUrl, normHeader, parseDateCell, parseFollowers } from './excel.js';"
   ],
-  "sha256": "0c3c0ed56e8aad56b99f7336bb9db185fb64f9cd1fcad22709d658080da4b841"
+  "sha256": "4cd2c59cdcdbfc7d7a938b922fc1a51a15db74f2df4f9a9bf1ad068f7219113c"
  },
  {
   "file": "import/metrics.js",
   "ranges": [
    [
-    5934,
-    6130
+    6229,
+    6425
    ]
   ],
   "imports": [
@@ -251,7 +251,7 @@
    "import { iso } from '../lib/dates.js';",
    "import { num } from '../lib/format.js';",
    "import { readXlsx } from '../lib/xlsx.js';",
-   "import { SERVER, byCreator, notify, serverSave } from '../model/db.js';",
+   "import { byCreator, notify, serverSave, toastAfterSave } from '../model/db.js';",
    "import { partsOf } from '../model/stats.js';",
    "import { $, esc } from '../ui/dom.js';",
    "import { statCard } from '../ui/html.js';",
@@ -259,14 +259,14 @@
    "import { handleFromUrl, normHeader } from './excel.js';",
    "import { applyNotionContent, notionMetricValue, notionVisitValue } from './notion.js';"
   ],
-  "sha256": "0d02aadc7008f7014d2621677d1a60121f3a9dffe7d65f0bdc2b0aaf7cd3d818"
+  "sha256": "82b6985354509747aa3c9fa86c25bd41c41ac568a39a6960707551f56920849f"
  },
  {
   "file": "sync/sheets.js",
   "ranges": [
    [
-    6811,
-    7056
+    7126,
+    7371
    ]
   ],
   "imports": [
@@ -281,8 +281,8 @@
   "file": "docs/docx.js",
   "ranges": [
    [
-    7147,
-    7277
+    7462,
+    7592
    ]
   ],
   "imports": [
@@ -296,8 +296,8 @@
   "file": "docs/contracts.js",
   "ranges": [
    [
-    7278,
-    7749
+    7593,
+    8064
    ]
   ],
   "imports": [
@@ -310,8 +310,8 @@
   "file": "views/overview.js",
   "ranges": [
    [
-    2129,
-    2392
+    2243,
+    2506
    ]
   ],
   "imports": [
@@ -330,8 +330,8 @@
   "file": "views/calendarView.js",
   "ranges": [
    [
-    2434,
-    2566
+    2548,
+    2680
    ]
   ],
   "imports": [
@@ -351,22 +351,22 @@
   "file": "views/campaigns.js",
   "ranges": [
    [
-    2393,
-    2407
+    2507,
+    2521
    ],
    [
-    2567,
-    3489
+    2681,
+    3692
    ]
   ],
   "imports": [
    "import { SERIES_HEX, barsH, fitHeight, lineChart, sparkSvg, splitBar } from '../charts/index.js';",
    "import { openMetricsImport } from '../import/metrics.js';",
-   "import { joinSlot, notionLinkedCampaigns, openNotionMappingDrawer, splitSlot, syncAllNotionCampaigns, visitSlotMoved, visitSlotOf } from '../import/notion.js';",
+   "import { campaignsSharingNotionDb, joinSlot, notionLinkedCampaigns, openNotionMappingDrawer, splitSlot, syncAllNotionCampaigns, visitSlotMoved, visitSlotOf } from '../import/notion.js';",
    "import { DAY, TODAY, addDays, dLabel, iso } from '../lib/dates.js';",
    "import { engagementsOf, kmb, money2, num, pct, won, wonK } from '../lib/format.js';",
    "import { recomputeCreatorStats } from '../model/creators.js';",
-   "import { DB, SERVER, byCampaign, byCreator, detachContent, notify, persist, serverSave, setContentUrl } from '../model/db.js';",
+   "import { DB, byCampaign, byCreator, detachContent, notify, persist, serverSave, setContentUrl, toastAfterSave } from '../model/db.js';",
    "import { duplicateIdBanner, wireDuplicateIdBanner } from '../model/duplicates.js';",
    "import { SETTINGS, isBlocked, selectable } from '../model/settings.js';",
    "import { campaignStats, dailySeries, liveOf, partsOf, viralScore } from '../model/stats.js';",
@@ -385,14 +385,14 @@
    "import { state } from './overview.js';",
    "import { reportTab } from './report.js';"
   ],
-  "sha256": "7cb049dc3acab007a46c62910f4aad9789200b6fd4c6c5916a9cc287931c4ecc"
+  "sha256": "26319d1371ed5cef8f26b000560094c4878afda5bde6aa57b28d18a4ea556a9b"
  },
  {
   "file": "views/social.js",
   "ranges": [
    [
-    3506,
-    3769
+    3709,
+    3972
    ]
   ],
   "imports": [
@@ -410,12 +410,12 @@
   "file": "views/analytics.js",
   "ranges": [
    [
-    3490,
-    3504
+    3693,
+    3707
    ],
    [
-    3770,
-    3971
+    3973,
+    4174
    ]
   ],
   "imports": [
@@ -435,8 +435,8 @@
   "file": "views/messages.js",
   "ranges": [
    [
-    3972,
-    4393
+    4175,
+    4596
    ]
   ],
   "imports": [
@@ -458,8 +458,8 @@
   "file": "views/report.js",
   "ranges": [
    [
-    4394,
-    4537
+    4597,
+    4740
    ]
   ],
   "imports": [
@@ -477,8 +477,8 @@
   "file": "views/creators.js",
   "ranges": [
    [
-    4538,
-    4798
+    4741,
+    5050
    ]
   ],
   "imports": [
@@ -494,14 +494,14 @@
    "import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';",
    "import { activeCampaigns, state } from './overview.js';"
   ],
-  "sha256": "c08700e626734af96267f90e8a92eb2ded438a9235937990aaaa0a6ffdd6cf11"
+  "sha256": "e1e46f43363c670550b84b4f28e43c042fc1bd55a8358acf26398dc987cc5578"
  },
  {
   "file": "views/notionDiag.js",
   "ranges": [
    [
-    6131,
-    6229
+    6426,
+    6524
    ]
   ],
   "imports": [
@@ -518,34 +518,34 @@
   "file": "views/notionImport.js",
   "ranges": [
    [
-    6230,
-    6509
+    6525,
+    6824
    ]
   ],
   "imports": [
    "import { countryOf } from '../import/excel.js';",
-   "import { NOTION_FIELD_DEFS, guessNotionField, notionRowToApplicant } from '../import/notion.js';",
+   "import { NOTION_FIELD_DEFS, guessNotionField, notionDbKey, notionRowToApplicant, runNotionSync } from '../import/notion.js';",
    "import { TODAY, addDays, iso } from '../lib/dates.js';",
    "import { num } from '../lib/format.js';",
    "import { findCreatorByHandle, mergeDuplicateCreators } from '../model/creators.js';",
-   "import { DB, SERVER, attachContent, byCampaign, byCreator, serverSave } from '../model/db.js';",
+   "import { DB, attachContent, byCampaign, byCreator, serverSave, toastAfterSave } from '../model/db.js';",
    "import { CAMPAIGN_STATUS, CATEGORIES, COUNTRIES, STAGE_IDX, newId, stageOf, tierOf } from '../model/vocab.js';",
    "import { $, $$, esc } from '../ui/dom.js';",
    "import { stagePill, statCard } from '../ui/html.js';",
    "import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';"
   ],
-  "sha256": "a805eff69bf278c113d2ad41bb6054ea583c7ba369518f5caea73123c8c9f5fa"
+  "sha256": "2a25486a835eb05b952b1e338b925250b4a322558b5714af0fc7662aa870454f"
  },
  {
   "file": "views/excelImport.js",
   "ranges": [
    [
-    6510,
-    6568
+    6825,
+    6883
    ],
    [
-    6588,
-    6810
+    6903,
+    7125
    ]
   ],
   "imports": [
@@ -555,20 +555,20 @@
    "import { num } from '../lib/format.js';",
    "import { downloadXlsx, readXlsx } from '../lib/xlsx.js';",
    "import { findCreatorByHandle, mergeDuplicateCreators } from '../model/creators.js';",
-   "import { DB, SERVER, attachContent, byCampaign, byCreator, serverSave } from '../model/db.js';",
+   "import { DB, attachContent, byCampaign, byCreator, serverSave, toastAfterSave } from '../model/db.js';",
    "import { CAMPAIGN_STATUS, CATEGORIES, COUNTRIES, STAGE_IDX, newId, stageOf, tierOf } from '../model/vocab.js';",
    "import { $, $$, esc } from '../ui/dom.js';",
    "import { stagePill, statCard } from '../ui/html.js';",
    "import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';"
   ],
-  "sha256": "f151207bca69edfa0b93f70d567a5a01b81c4747fe792af135308474ca437b33"
+  "sha256": "afb2c8315b77c716882c807ce81e9d80ecca902f065c712028ee040529d3660e"
  },
  {
   "file": "views/sheetsSettings.js",
   "ranges": [
    [
-    7057,
-    7146
+    7372,
+    7461
    ]
   ],
   "imports": [
@@ -583,8 +583,8 @@
   "file": "views/contracts.js",
   "ranges": [
    [
-    7750,
-    8081
+    8065,
+    8396
    ]
   ],
   "imports": [
@@ -601,8 +601,8 @@
   "file": "views/settings.js",
   "ranges": [
    [
-    8082,
-    8372
+    8397,
+    8687
    ]
   ],
   "imports": [
@@ -627,19 +627,19 @@
   "ranges": [
    [
     11,
-    761
+    813
    ]
   ],
   "raw": true,
   "imports": [],
-  "sha256": "55bc9a4aab220574d0c41cd069cebac4e8f95f1f9d7a1a51942a83bf85a70ac0"
+  "sha256": "2ad6a011f88a7b0e619b36ccd75dbe96c61904293362ad66594b04f47fb8baf1"
  },
  {
   "file": "sync/gcal.js",
   "ranges": [
    [
-    8870,
-    9221
+    9185,
+    9536
    ]
   ],
   "imports": [
@@ -655,8 +655,8 @@
   "file": "views/calendar.js",
   "ranges": [
    [
-    9224,
-    9474
+    9539,
+    9789
    ]
   ],
   "imports": [
@@ -674,8 +674,8 @@
   "file": "sync/partner.js",
   "ranges": [
    [
-    8588,
-    8693
+    8903,
+    9008
    ]
   ],
   "imports": [
@@ -688,8 +688,8 @@
   "file": "views/partners.js",
   "ranges": [
    [
-    8694,
-    8869
+    9009,
+    9184
    ]
   ],
   "imports": [
@@ -709,8 +709,8 @@
   "file": "sync/notionWriteback.js",
   "ranges": [
    [
-    8472,
-    8587
+    8787,
+    8902
    ]
   ],
   "imports": [
@@ -725,8 +725,8 @@
   "file": "model/duplicates.js",
   "ranges": [
    [
-    8373,
-    8470
+    8688,
+    8785
    ]
   ],
   "imports": [
@@ -742,8 +742,8 @@
   "file": "model/socialStats.js",
   "ranges": [
    [
-    9476,
-    9775
+    9791,
+    10090
    ]
   ],
   "imports": [
@@ -755,8 +755,8 @@
   "file": "charts/socialViz.js",
   "ranges": [
    [
-    9776,
-    9873
+    10091,
+    10188
    ]
   ],
   "imports": [
@@ -770,8 +770,8 @@
   "file": "views/socialOverview.js",
   "ranges": [
    [
-    9874,
-    10340
+    10189,
+    10655
    ]
   ],
   "imports": [
@@ -790,8 +790,8 @@
   "file": "model/homeStats.js",
   "ranges": [
    [
-    10342,
-    10761
+    10657,
+    11076
    ]
   ],
   "imports": [
@@ -806,8 +806,8 @@
   "file": "views/home.js",
   "ranges": [
    [
-    10763,
-    11137
+    11078,
+    11452
    ]
   ],
   "imports": [

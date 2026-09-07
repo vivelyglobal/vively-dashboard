@@ -1,6 +1,6 @@
 import { TODAY, iso } from '../lib/dates.js';
 import { findCreatorByHandle, mergeDuplicateCreators } from '../model/creators.js';
-import { DB, SERVER, attachContent, byCreator, notify, serverSave } from '../model/db.js';
+import { DB, attachContent, byCreator, notify, serverSave, toastAfterSave } from '../model/db.js';
 import { STAGE_IDX, newId, tierOf } from '../model/vocab.js';
 import { $, esc } from '../ui/dom.js';
 import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';
@@ -391,6 +391,21 @@ export function applyNotionContent(p, ap, cr) {
   return touched;
 }
 
+/* Notion hands the same database id out in two spellings — dashed in a
+   page URL, undashed from the API — so a straight string compare misses
+   half the duplicates it exists to catch. */
+export function notionDbKey(id) {
+  return String(id || '').trim().replace(/-/g, '').toLowerCase();
+}
+/* Every campaign, other than the one given, pointed at the same Notion
+   form. Importing the same form twice is all it takes to make this
+   non-empty. */
+export function campaignsSharingNotionDb(cp) {
+  const key = notionDbKey(cp && cp.notionDatabaseId);
+  if (!key) return [];
+  return DB.campaigns.filter((c) => c !== cp && notionDbKey(c.notionDatabaseId) === key);
+}
+
 export async function runNotionSync(cp, opts) {
   const batch = opts && opts.batch;
   if (!batch) toast('Syncing from Notion…');
@@ -404,7 +419,26 @@ export async function runNotionSync(cp, opts) {
     return { campaign: cp, error: err.message };
   }
 
-  let newRows = 0, updated = 0, newCreators = 0, matched = 0, skipped = 0, moved = 0, reslotted = 0, adopted = 0, metricsUpdated = 0, rehomed = 0, heldBack = 0;
+  /* THE LIST-GOES-TO-ZERO BUG.
+
+     The rehoming rule below reads "this submission came from this
+     campaign's form, so the row it matches is this campaign's". That is
+     only true while one campaign owns the form. Import the same Notion
+     database twice — which is also what puts two identically named
+     chips on a partner page — and both campaigns claim every row in it:
+     syncing A drags the entire roster onto A, syncing B drags it all
+     back, and whichever was not synced last shows nothing at all. "Sync
+     all from Notion" does both in a row, so the loser empties every
+     time.
+
+     When the form is shared the page id no longer identifies an owner,
+     so nothing is moved. Counted and named rather than skipped in
+     silence — a roster split across two campaigns is the kind of drift
+     nobody finds for a month. */
+  const twins = campaignsSharingNotionDb(cp);
+  const dbIsShared = twins.length > 0;
+
+  let newRows = 0, updated = 0, newCreators = 0, matched = 0, skipped = 0, moved = 0, reslotted = 0, adopted = 0, metricsUpdated = 0, rehomed = 0, heldBack = 0, ambiguous = 0;
   data.rows.forEach((row) => {
     const ap = notionRowToApplicant(row.properties, cp.notionMapping);
     if (!ap.handle) { skipped++; return; }
@@ -450,7 +484,10 @@ export async function runNotionSync(cp, opts) {
        belongs to this campaign whatever it currently says. Two campaigns
        that shared an id pooled their rosters under one campaignId; syncing
        either one now pulls its own rows back where they belong. */
-    if (p && p.campaignId !== cp.id && !p.pinnedCampaign) {
+    if (p && p.campaignId !== cp.id && dbIsShared) {
+      /* two campaigns claim this form — leave the row where it is */
+      ambiguous++;
+    } else if (p && p.campaignId !== cp.id && !p.pinnedCampaign) {
       /* Only the campaign changes. The row's own id stays exactly as it is,
          because other things are keyed on it: a Google Calendar event's id is
          derived from it, and a partner's comments are filed against it.
@@ -540,10 +577,15 @@ export async function runNotionSync(cp, opts) {
     else if (!data.rows.some((r) => r.properties[mappedTo])) visitWarning = `“${mappedTo}” is empty for every row`;
   }
 
-  const stats = { campaign: cp, rows: data.rows.length, newRows, updated, moved, reslotted, skipped, newCreators, adopted, metricsUpdated, rehomed, heldBack, visitWarning };
+  const stats = { campaign: cp, rows: data.rows.length, newRows, updated, moved, reslotted, skipped, newCreators, adopted, metricsUpdated, rehomed, heldBack, ambiguous, twins: twins.map((c) => c.name), visitWarning };
   if (batch) return stats;
 
   notify();
+  if (dbIsShared) {
+    toast(`This Notion form is also linked to ${twins.map((c) => '“' + c.name + '”').join(' and ')}. ` +
+      `${ambiguous ? ambiguous + ' rows were left where they are' : 'No rows were moved'} — unlink one of them, ` +
+      `or merge them, so the roster stops moving between the two.`);
+  }
   if (visitWarning) toast(`No visit dates — ${visitWarning}. Click ⚙ next to Sync to pick the column.`);
   const summary = `Synced ${data.rows.length} Notion submission${data.rows.length === 1 ? '' : 's'} — ${newRows} new, ${updated + adopted} updated` +
     (adopted ? ` (${adopted} existing roster row${adopted === 1 ? '' : 's'} linked up)` : '') +
@@ -552,12 +594,13 @@ export async function runNotionSync(cp, opts) {
     (moved ? `, ${moved} moved stage` : '') +
     (reslotted ? `, ${reslotted} visit date${reslotted === 1 ? '' : 's'}` : '') +
     (metricsUpdated ? `, ${metricsUpdated} content/metrics` : '') +
+    (ambiguous ? `, ${ambiguous} left alone (this form is linked to more than one campaign)` : '') +
     (skipped ? ', ' + skipped + ' skipped' : '') +
     (newCreators ? ', ' + newCreators + ' new creators' : '') +
     (dedupe.mergedCreators ? `, ${dedupe.mergedCreators} duplicate${dedupe.mergedCreators === 1 ? '' : 's'} merged` : '');
   toast(summary);
-  serverSave({ force: true, silent: true }).then(() =>
-    toast(SERVER.status === 'idle' ? summary + ' — saved' : summary + ' — click Save to store it on the server'));
+  serverSave({ force: true, silent: true }).then((r) =>
+    toastAfterSave(summary, r));
   return stats;
 }
 
@@ -605,8 +648,8 @@ export async function syncAllNotionCampaigns() {
   ok.filter((r) => r.visitWarning).forEach((r) =>
     toast(`${r.campaign.brand}: no visit dates — ${r.visitWarning}`));
 
-  serverSave({ force: true, silent: true }).then(() =>
-    toast(SERVER.status === 'idle' ? summary + ' — saved' : summary + ' — click Save to store it on the server'));
+  serverSave({ force: true, silent: true }).then((r) =>
+    toastAfterSave(summary, r));
 }
 
 /* A mapping saved before a field existed simply has no entry for it, and

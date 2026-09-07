@@ -71,9 +71,12 @@ await step('nothing sensitive is anywhere in the delivered page', async () => {
 
 await step('the columns the POC asked for are all there', async () => {
   const heads = await p.$$eval('th', (n) => n.map((x) => x.textContent.replace(/\s+/g, ' ').trim()));
-  for (const want of ['크리에이터', '방문 일정', '예약 시간', '인원수', 'Email', 'IG 팔로워수', '성별', '국적', '참고', 'Notes'])
+  for (const want of ['크리에이터', '방문 일정', '예약 시간', '인원수', 'Email', 'IG 팔로워수', '성별', '국적', '참고'])
     if (!heads.some((h) => h.includes(want))) throw new Error('missing column: ' + want + ' | ' + heads.join(' / '));
-  for (const gone of ['Kakao', 'Message'])
+  /* Other SNS and Notes were empty on every row of a real link, so they
+     went — from the page and from the payload behind it. 참고 / Remark is
+     the column that carries anything the partner needs to know. */
+  for (const gone of ['Kakao', 'Message', 'Other SNS', 'Notes'])
     if (heads.some((h) => h.includes(gone))) throw new Error(gone + ' should have been removed');
 });
 
@@ -111,6 +114,51 @@ await step('인원수 is shown, so a table can be held for the right number', as
 await step('참고 from the Notion Remark column is shown', async () => {
   const text = await p.$eval('table', (e) => e.innerText);
   if (!/2명 방문 예정/.test(text)) throw new Error('the remark is not on the page');
+});
+
+/* ---- the month at the top ------------------------------------------
+   A partner reads this page to answer one question — who is coming, and
+   when. These check the month actually answers it, and that picking a
+   day and picking a project agree with each other. */
+await step('a month is shown above the list', async () => {
+  const cal = await p.$('.cal');
+  if (!cal) throw new Error('no calendar on the page');
+  const marked = await p.$$eval('.cal-d.has', (n) => n.length);
+  if (!marked) throw new Error('no day is marked as having a visit');
+});
+
+await step('every marked day is a day someone is actually visiting', async () => {
+  const marked = await p.$$eval('.cal-d.has', (n) => n.map((x) => x.dataset.day).sort());
+  const dates = await p.evaluate(() => [...new Set(DATA.rows.map((r) => r.visitDate).filter(Boolean))].sort());
+  const monthsShown = [...new Set(marked.map((d) => d.slice(0, 7)))];
+  const want = dates.filter((d) => monthsShown.includes(d.slice(0, 7))).sort();
+  if (JSON.stringify(marked) !== JSON.stringify(want))
+    throw new Error('marked ' + marked.join(',') + ' but the data says ' + want.join(','));
+});
+
+await step('picking a day narrows the list to that day', async () => {
+  const day = await p.$eval('.cal-d.has', (e) => e.dataset.day);
+  await p.click(`.cal-d.has[data-day="${day}"]`);
+  await p.waitForTimeout(250);
+  const shown = await p.$$eval('tbody tr:not(.thread)', (rows) =>
+    rows.map((r) => r.children[2].textContent.trim()));
+  if (!shown.length) throw new Error('picking ' + day + ' emptied the table');
+  if (shown.some((d) => d !== day)) throw new Error('showing ' + [...new Set(shown)].join(',') + ' for ' + day);
+});
+
+await step('the day can be let go of again', async () => {
+  await p.click('#calClear');
+  await p.waitForTimeout(250);
+  const n = await p.$$eval('tbody tr:not(.thread)', (r) => r.length);
+  const all = await p.evaluate(() => DATA.rows.length);
+  if (n !== all) throw new Error(`${n} rows back, expected ${all}`);
+});
+
+await step('one project shows one chip, however many records are behind it', async () => {
+  /* two campaign records under one brand used to make two identical
+     chips, both lit at once because both matched the same filter */
+  const chips = await p.$$eval('.chip', (n) => n.map((x) => x.textContent.trim()));
+  if (chips.length !== new Set(chips).size) throw new Error('duplicate chips: ' + chips.join(' / '));
 });
 
 await step('filtering by campaign narrows the list', async () => {

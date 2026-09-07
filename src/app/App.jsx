@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 
-import { DB, SERVER, byCampaign, persist, persistState, serverSave, subscribe, subscribeStatus } from '../model/db.js';
+import { DB, SERVER, byCampaign, persist, persistState, saveOutcomeText, serverSave, subscribe, subscribeStatus } from '../model/db.js';
 import { recomputeCreatorStats } from '../model/creators.js';
 import { campaignStats } from '../model/stats.js';
 import { selectable } from '../model/settings.js';
 import { SYNC } from '../sync/sheets.js';
 import { $, $$, esc } from '../ui/dom.js';
-import { closeDrawer } from '../ui/overlay.js';
+import { closeDrawer, toast } from '../ui/overlay.js';
 import { avatarHtml, downloadFile, flagPill, statusPill, toCsv } from '../ui/html.js';
 import { kmb } from '../lib/format.js';
 
@@ -62,9 +62,23 @@ export default function App() {
   useEffect(() => applyTheme(theme), [theme]);
 
   useEffect(() => {
-    const onHash = () => setRoute(parseHash());
+    /* On a phone the menu is a modal overlay: choosing something from it
+       is the end of the interaction, so it closes itself rather than
+       staying over the page you just asked for. */
+    const onHash = () => { if (onPhone()) togglePanel(false); setRoute(parseHash()); };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
+  /* keep --topbar-h honest: that header wraps, so it is 52px with one row
+     and about 100px with two, and the slide-over has to start below it */
+  useEffect(() => {
+    syncTopbarHeight();
+    window.addEventListener('resize', syncTopbarHeight);
+    const bar = document.querySelector('.topbar');
+    const ro = window.ResizeObserver && bar ? new ResizeObserver(syncTopbarHeight) : null;
+    if (ro) ro.observe(bar);
+    return () => { window.removeEventListener('resize', syncTopbarHeight); if (ro) ro.disconnect(); };
   }, []);
 
   const { section, item, tab, tabs } = route;
@@ -77,9 +91,16 @@ export default function App() {
     recomputeCreatorStats();
     if ($('#drawer') && $('#drawer').classList.contains('open') && !window.__keepDrawer) closeDrawer();
     view.innerHTML = '';
+    /* A redraw triggered by typing must not yank the page back to the
+       top — that is what made filtering a long list feel like it was
+       fighting the user. Read before the node is cleared, because
+       clearing it moves focus to <body>. */
+    const typing = !!(document.activeElement && view.contains(document.activeElement) &&
+      /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName));
+    const keep = typing ? { y: window.scrollY, v: view.scrollTop } : null;
     (RENDERERS[section] || renderOverview)(view, item, tab);
-    window.scrollTo(0, 0);
-    view.scrollTop = 0;
+    if (keep) { window.scrollTo(0, keep.y); view.scrollTop = keep.v; }
+    else { window.scrollTo(0, 0); view.scrollTop = 0; }
     persist();
     /* Deliberately keyed: the panel is rebuilt when the route changes or
        when the data layer says something changed — not on every incidental
@@ -132,10 +153,20 @@ export default function App() {
       'vively-all-campaigns.csv', 'text/csv;charset=utf-8');
   }
 
+  /* Silent, because this says what happened itself — and it says
+     something every time, including "there was nothing to save". Before,
+     a click with an unchanged payload returned before making a request
+     and said nothing at all, which is indistinguishable from a save that
+     failed. Same rule as the legacy shell. */
+  const [saving, setSaving] = useState(false);
   function saveNow() {
     if (SERVER.status === 'conflict' &&
         !confirm('This workspace was saved from another browser more recently. Overwrite it with what you see here?')) return;
-    serverSave({ force: SERVER.status === 'conflict' });
+    setSaving(true);
+    serverSave({ force: SERVER.status === 'conflict', silent: true })
+      .then((r) => toast(saveOutcomeText(r)))
+      .catch((err) => toast('NOT SAVED — ' + err.message))
+      .then(() => setSaving(false));
   }
 
   return (
@@ -182,7 +213,8 @@ export default function App() {
             <div className="spacer" />
             <GlobalSearch />
             <SaveBadge server={SERVER} sync={SYNC} persistState={persistState} />
-            <button className="btn primary sm no-print" title="Save this workspace to the server now" onClick={saveNow}>Save</button>
+            <button className="btn primary sm no-print" title="Save this workspace to the server now"
+                    disabled={saving} onClick={saveNow}>{saving ? 'Saving…' : 'Save'}</button>
             <button className="theme-btn no-print" aria-label="Switch theme"
                     title={theme === 'light' ? 'Switch to dark (T)' : 'Switch to light (T)'}
                     onClick={() => setTheme(toggleTheme())}>{theme === 'light' ? '☀' : '☾'}</button>
@@ -190,7 +222,7 @@ export default function App() {
                          onLogin={() => setAuth({ open: true, mode: 'login' })}
                          onSignup={() => setAuth({ open: true, mode: 'signup' })}
                          onLogout={signOut} />
-            <button className="btn sm no-print" onClick={exportAll}>Export</button>
+            <button className="btn sm no-print" id="btnExportAll" onClick={exportAll}>Export</button>
           </header>
 
           <nav className="tabbar no-print">
@@ -205,6 +237,8 @@ export default function App() {
         </div>
       </div>
 
+      {/* tap anywhere off the phone menu to close it */}
+      <div className="panel-scrim no-print" id="panelScrim" onClick={() => togglePanel(false)} />
       <div className="scrim" id="scrim" onClick={closeDrawer} />
       <aside className="drawer" id="drawer">
         <div className="drawer-head">
@@ -295,8 +329,33 @@ function AuthButtons({ user, onLogin, onSignup, onLogout }) {
   );
 }
 
+/* The two breakpoints disagree about what "open" means. On a desktop the
+   menu is a grid column that is there unless `panel-closed` says
+   otherwise; on a phone it is an overlay that is absent unless
+   `panel-open` says otherwise. Reading only `panel-closed` meant that on
+   a phone — where the body starts with neither class — the first tap of ☰
+   set `panel-closed` on an already-hidden menu and appeared to do
+   nothing. Kept in step with the same rule in index.html. */
+export const PHONE_Q = '(max-width: 760px)';
+export function onPhone() {
+  return !!(window.matchMedia && window.matchMedia(PHONE_Q).matches);
+}
+export function panelIsOpen() {
+  return onPhone() ? document.body.classList.contains('panel-open')
+                   : !document.body.classList.contains('panel-closed');
+}
 export function togglePanel(force) {
-  const closed = force != null ? !force : !document.body.classList.contains('panel-closed');
-  document.body.classList.toggle('panel-closed', closed);
-  document.body.classList.toggle('panel-open', !closed);
+  const open = force != null ? !!force : !panelIsOpen();
+  document.body.classList.toggle('panel-closed', !open);
+  document.body.classList.toggle('panel-open', open);
+}
+
+/* The phone header wraps, so its height is not a constant. Publish
+   whatever it measures as --topbar-h so the slide-over menu and its
+   backdrop start below it rather than on top of it. */
+export function syncTopbarHeight() {
+  const bar = document.querySelector('.topbar');
+  if (!bar) return;
+  const h = Math.round(bar.getBoundingClientRect().height);
+  if (h) document.documentElement.style.setProperty('--topbar-h', h + 'px');
 }

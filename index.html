@@ -158,7 +158,15 @@
 .save-badge.warn { color: #f5c451; }
 .save-badge.warn .sdot { background: var(--warning); }
 .save-badge.off .sdot { background: var(--text-3); }
-@media (max-width: 1240px) { .save-badge { display: none; } }
+/* The badge is the only standing indication of whether the workspace is
+   actually stored anywhere. Hiding the whole thing below 1240px meant a
+   laptop, and every phone, showed no save state at all — so a save that
+   had been failing for an hour looked exactly like one that was fine.
+   Keep the light; drop only the sentence, which the tooltip still has. */
+@media (max-width: 1240px) {
+  .save-badge { padding: 6px 7px; }
+  .save-badge .sb-t { display: none; }
+}
 
 /* theme switch */
 .theme-btn {
@@ -491,6 +499,10 @@ input[type=checkbox] { accent-color: var(--blue); width: 15px; height: 15px; cur
 .scrim {
   position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 100; display: none;
 }
+/* Backdrop for the phone slide-over menu. Always in the DOM so the toggle
+   has nothing to build, and inert above 760px where the menu is a real
+   column rather than an overlay. */
+.panel-scrim { display: none; }
 .scrim.open { display: block; }
 .drawer {
   position: fixed; top: 0; right: 0; height: 100vh; width: min(560px, 92vw); background: var(--surface);
@@ -665,12 +677,33 @@ tr.preferred-row td:first-child { box-shadow: inset 3px 0 0 var(--good); }
      minimum plus four buttons on a row that could not wrap came to
      ~650px. Let the row wrap and let the search shrink to fit. */
   .topbar {
-    height: auto; min-height: 52px; padding: 8px 12px;
-    flex-wrap: wrap; row-gap: 8px; column-gap: 8px;
+    height: auto; min-height: 52px; padding: 7px 12px;
+    flex-wrap: wrap; row-gap: 7px; column-gap: 8px;
   }
   .topbar h1 { font-size: 16px; }
+  /* The breadcrumb repeats what the rail already says, and it was buying
+     a second line inside the title block. */
+  .topbar .crumb { display: none; }
   .topbar .spacer { display: none; }
   .searchbox { min-width: 0; flex: 1 1 100%; order: 5; }
+  /* Measured at 390px: title + Save + theme + Export could not share a
+     row, so the buttons wrapped onto a third one and the header came to
+     168px — taller than the first card beneath it. Export is a desktop
+     action (a CSV download nobody opens on a phone) and it is the button
+     that made the difference. Two rows, ~100px. */
+  #btnExportAll { display: none; }
+  /* 40px targets are right in the body; in a header that has to stay out
+     of the way, 36px is still comfortably above the 34px thumb minimum.
+     Written with the `.sm` class so it outranks the generic rule further
+     down this same block. */
+  .topbar .btn, .topbar .btn.sm { min-height: 36px; padding: 7px 12px; }
+  .topbar .icon-btn, .topbar .theme-btn { min-width: 36px; min-height: 36px; }
+  /* Below about 340px of usable header — the rail takes 56 of the screen —
+     the first row cannot hold everything and the whole thing grows to
+     three rows. The theme toggle is what goes: the theme already follows
+     the phone's own light/dark setting, and a choice made on a desktop is
+     remembered here, so nothing is lost but the switch itself. */
+  @media (max-width: 360px) { .topbar .theme-btn { display: none; } }
 
   /* the tab bar's sticky offset was measured against a top bar fixed
      at 64px, which stops being true the moment that bar can wrap */
@@ -682,13 +715,32 @@ tr.preferred-row td:first-child { box-shadow: inset 3px 0 0 var(--good); }
      that competes with it. */
   .app { grid-template-columns: 56px minmax(0, 1fr); }
   body, body.panel-open, body.panel-closed { --panelw: 0px; }
+  /* The slide-over started at top:0 with z-index 120 against a topbar at
+     z-index 30, so opening the menu covered the page title, the search
+     box, the Save button and the ☰ that opened it. It now starts below
+     the header — whose height is measured at runtime into --topbar-h,
+     because that header wraps and is not a fixed 52px. */
   .panel {
-    position: fixed; left: 56px; top: 0; bottom: 0; height: 100dvh;
-    width: min(300px, calc(100vw - 56px)); z-index: 120;
+    position: fixed; left: 56px; top: var(--topbar-h, 52px); bottom: 0;
+    height: auto;
+    /* 300px of menu beside a 56px rail left a 34px ribbon of page on a
+       390px screen: too narrow to read, too narrow to tap. Leave 56px —
+       a real target for "tap outside to close". */
+    width: min(300px, calc(100vw - 112px)); z-index: 120;
     transform: translateX(-105%); transition: transform .18s ease;
     border-right: 1px solid var(--line-strong); box-shadow: var(--shadow);
   }
   body.panel-open .panel { transform: none; border-right: 1px solid var(--line-strong); }
+
+  /* Sits under the menu and over everything else below the header, so the
+     header stays reachable while the menu is open. */
+  .panel-scrim {
+    display: block; position: fixed; left: 0; right: 0;
+    top: var(--topbar-h, 52px); bottom: 0;
+    background: rgba(0, 0, 0, .42); z-index: 119;
+    opacity: 0; pointer-events: none; transition: opacity .18s ease;
+  }
+  body.panel-open .panel-scrim { opacity: 1; pointer-events: auto; }
 
   .content { padding: 12px; min-width: 0; }
   .card { min-width: 0; }
@@ -810,6 +862,7 @@ tr.preferred-row td:first-child { box-shadow: inset 3px 0 0 var(--good); }
   </div>
 </div>
 
+<div class="panel-scrim no-print" id="panelScrim"></div>
 <div class="scrim" id="scrim"></div>
 <aside class="drawer" id="drawer">
   <div class="drawer-head">
@@ -1267,6 +1320,37 @@ function workspaceIsEmpty(d) {
   return !(x.campaigns || []).length && !(x.creators || []).length && !(x.participants || []).length;
 }
 let serverSaveTimer = null;
+/* Saves are serialised through this. Before it existed, a save that
+   arrived while another was in flight hit `if (SERVER.busy) return` and
+   was dropped — and its promise resolved anyway, so the caller could not
+   tell. "Create campaign" saves immediately, the autosave debounce is
+   two seconds, so a campaign created within two seconds of any other
+   change reported success, stored nothing, and vanished on the next
+   reload. */
+let saveChain = Promise.resolve();
+/* the last status a person was told about, so a persistent failure is
+   reported once rather than every two seconds */
+let lastReportedSaveStatus = 'idle';
+
+/* One sentence for whatever just happened. Every caller uses this rather
+   than reading SERVER.status and guessing, which is what let a refused
+   save read as a successful one. */
+function saveOutcomeText(r) {
+  if (!r) return 'Not saved — click Save to try again';
+  if (r.ok && r.reason === 'unchanged') return 'Already saved — nothing had changed';
+  if (r.ok) return 'Saved';
+  if (r.reason === 'not-configured') return 'Not connected to the server — this is in this browser only';
+  if (r.reason === 'conflict') return 'Not saved — someone else saved more recently. Click Save again to overwrite.';
+  if (r.reason === 'empty') return 'Nothing is loaded, so nothing was saved. Reload the page first.';
+  return 'NOT SAVED — ' + (r.error || SERVER.error || 'the server refused it') + '. Click Save to try again.';
+}
+
+/* "I did the thing, and here is what happened to it on the server." Used
+   by every action that writes and then saves, so none of them can report
+   success on the strength of the local half alone. */
+function toastAfterSave(what, r) {
+  toast(r && r.ok && r.reason !== 'unchanged' ? what + ' — saved' : what + ' — ' + saveOutcomeText(r));
+}
 
 function workspacePayload() { return dbPayload(); }
 
@@ -1329,12 +1413,34 @@ async function serverLoad() {
   }
 }
 
-async function serverSave(opts) {
+/* The public entry point. Every save queues behind the one before it,
+   so none is ever silently dropped, and every caller gets the real
+   outcome of its own save rather than a promise that resolves whatever
+   happened. */
+function serverSave(opts) {
+  const run = () => serverSaveNow(opts);
+  saveChain = saveChain.then(run, run);
+  return saveChain;
+}
+
+/* An autosave says nothing when it works. When it stops working the
+   person has to be told, or the first they hear of it is a reload with
+   their work missing — which is exactly what happened. Told once per
+   transition into trouble, not once per attempt. */
+function reportSaveTrouble(result) {
+  const bad = SERVER.status === 'error' || SERVER.status === 'conflict';
+  if (bad && SERVER.status !== lastReportedSaveStatus) toast(saveOutcomeText(result));
+  lastReportedSaveStatus = SERVER.status;
+}
+
+async function serverSaveNow(opts) {
   opts = opts || {};
-  if (SERVER.busy) return;
-  if (SERVER.configured === false && !opts.force) return;
+  /* cannot normally happen now that saves are serialised, but a direct
+     caller must still get an answer rather than undefined */
+  if (SERVER.busy) return { ok: false, reason: 'busy' };
+  if (SERVER.configured === false && !opts.force) return { ok: false, reason: 'not-configured' };
   const json = JSON.stringify(workspacePayload());
-  if (!opts.force && json === lastServerJson) return;
+  if (!opts.force && json === lastServerJson) return { ok: true, reason: 'unchanged' };
 
   /* Layer 1. An empty workspace is almost never something anybody
      asked for — it is what memory looks like when the load failed, and
@@ -1346,7 +1452,7 @@ async function serverSave(opts) {
     SERVER.status = 'error';
     SERVER.error = 'Nothing is loaded, so nothing was saved. Reload the page to fetch the workspace.';
     notifyStatus();
-    return;
+    return { ok: false, reason: 'empty', error: SERVER.error };
   }
 
   SERVER.busy = true; SERVER.status = 'syncing'; updateSaveBadge();
@@ -1359,15 +1465,16 @@ async function serverSave(opts) {
     });
     if (res.status === 503) {
       SERVER.configured = false; SERVER.status = 'off';
-      return;
+      return { ok: false, reason: 'not-configured' };
     }
     if (res.status === 401 || res.status === 403) {
       const body = await res.json().catch(() => ({}));
       handleAuthFailure(res.status, body);
       SERVER.status = 'error';
       SERVER.error = (body && body.error) || 'Not signed in';
-      if (!opts.silent) toast(SERVER.error);
-      return;
+      const r = { ok: false, reason: 'auth', error: SERVER.error };
+      if (!opts.silent) toast(SERVER.error); else reportSaveTrouble(r);
+      return r;
     }
     if (res.status === 422) {
       /* the server's own guard refused it — say what it said rather
@@ -1375,16 +1482,19 @@ async function serverSave(opts) {
       const body = await res.json().catch(() => ({}));
       SERVER.status = 'error';
       SERVER.error = (body && body.error) || 'The server refused that save.';
-      if (!opts.silent) toast(SERVER.error);
-      return;
+      const r = { ok: false, reason: 'refused', error: SERVER.error };
+      if (!opts.silent) toast(SERVER.error); else reportSaveTrouble(r);
+      return r;
     }
     const out = await res.json().catch(() => ({}));
     if (res.status === 409) {
       SERVER.status = 'conflict';
       SERVER.error = `Saved from another browser at ${out.savedAt ? new Date(out.savedAt).toLocaleString() : 'a later time'}. Click Save again to overwrite it, or reload this page to get their version.`;
       SERVER.revision = out.revision != null ? out.revision : SERVER.revision;
+      const r = { ok: false, reason: 'conflict', error: SERVER.error };
       if (!opts.silent) toast('Someone else saved more recently — click Save again to overwrite');
-      return;
+      else reportSaveTrouble(r);
+      return r;
     }
     if (!res.ok) throw new Error(out.error || ('Server responded ' + res.status));
     SERVER.configured = true;
@@ -1392,10 +1502,14 @@ async function serverSave(opts) {
     SERVER.at = new Date(out.savedAt);
     SERVER.status = 'idle'; SERVER.error = null;
     lastServerJson = json;
+    lastReportedSaveStatus = 'idle';
     if (!opts.silent) toast('Saved');
+    return { ok: true, reason: 'saved', revision: out.revision, savedAt: out.savedAt };
   } catch (err) {
     SERVER.status = 'error'; SERVER.error = err.message;
-    if (!opts.silent) toast('Save failed — ' + err.message);
+    const r = { ok: false, reason: 'failed', error: err.message };
+    if (!opts.silent) toast('Save failed — ' + err.message); else reportSaveTrouble(r);
+    return r;
   } finally {
     SERVER.busy = false; updateSaveBadge();
   }
@@ -2671,10 +2785,14 @@ function openNewCampaign() {
       hashtags: ['#vively'], owner: 'Kunzang', note: $('#ncNote').value, createdAt: iso(TODAY)
     };
     DB.campaigns.push(cp); byCampaign[id] = cp;
+    /* Write the browser's own copy immediately. Creating a campaign used
+       to go straight to the server and nowhere else, so if that save was
+       dropped the campaign existed only in this tab's memory and a
+       refresh lost it with nothing to recover from. */
+    persist(true);
     closeDrawer(); location.hash = '#/campaigns/' + id + '/brief';
-    toast('Campaign created');
-    serverSave({ force: true, silent: true }).then(() =>
-      toast(SERVER.status === 'idle' ? 'Campaign created — saved' : 'Campaign created — click Save to store it on the server'));
+    serverSave({ force: true, silent: true }).then((r) =>
+      toastAfterSave('Campaign created', r));
   });
 }
 
@@ -2837,6 +2955,89 @@ function confirmDeleteCampaign(cp) {
 }
 
 /* removes the campaign and its roster rows. Creators are deliberately left alone. */
+/* ---- two campaigns, one Notion form -------------------------------
+   The guard in the sync stops the roster ping-ponging between them, but
+   a pair already in the workspace stays a pair: two projects with the
+   same name on a partner link, and the people split across both. This
+   says so where it is noticed — on the roster — and offers the two ways
+   out. Merging is the one people want; unlinking is the safe one, and
+   it stops the sync from touching the campaign at all.
+   ------------------------------------------------------------------- */
+function sharedNotionFormBanner(cp) {
+  const twins = campaignsSharingNotionDb(cp);
+  if (!twins.length) return '';
+  const counts = (c) => DB.participants.filter((p) => p.campaignId === c.id).length;
+  return `<div class="note warn" style="margin-bottom:12px">
+    <strong>This campaign shares its Notion form with ${twins.map((c) => '“' + esc(c.name) + '”').join(' and ')}.</strong>
+    Both were built from the same form, so both claim every submission in it — which is why one roster empties
+    when the other is synced, and why a partner link shows the same project twice.
+    <div style="font-size:12px;color:var(--text-3);margin-top:6px">
+      ${esc(cp.name)}: ${counts(cp)} on the roster${twins.map((c) => ` · ${esc(c.name)}: ${counts(c)}`).join('')}
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+      ${twins.map((c) => `<button class="btn sm" data-mergeinto="${esc(c.id)}">Merge into “${esc(c.name)}”</button>`).join('')}
+      <button class="btn sm" id="unlinkNotion">Unlink this one from Notion</button>
+    </div></div>`;
+}
+
+function wireSharedNotionFormBanner(cp) {
+  $$('[data-mergeinto]').forEach((b) => b.addEventListener('click', () => mergeCampaignInto(cp, byCampaign[b.dataset.mergeinto])));
+  const un = $('#unlinkNotion');
+  if (un) un.addEventListener('click', () => {
+    if (!confirm(`Stop syncing “${cp.name}” from Notion? Its roster stays exactly as it is; it simply will not be pulled or moved again.`)) return;
+    delete cp.notionDatabaseId; delete cp.notionMapping; delete cp.notionSyncedAt;
+    persist(true); render();
+    serverSave({ force: true, silent: true }).then((r) => toastAfterSave('Unlinked from Notion', r));
+  });
+}
+
+/* Fold `from` into `into`: every roster row moves across, and the empty
+   shell is removed. Row ids are left exactly as they are — a Google
+   Calendar event id is derived from one and a partner's comments are
+   filed against one, so rewriting them would duplicate the event and
+   orphan the comments. A row for someone already on the destination
+   roster is dropped rather than duplicated, keeping whichever copy has
+   got further through the pipeline. */
+function mergeCampaignInto(from, into) {
+  if (!from || !into || from === into) return;
+  const mine = DB.participants.filter((p) => p.campaignId === from.id);
+  const theirs = DB.participants.filter((p) => p.campaignId === into.id);
+  const byCr = {};
+  theirs.forEach((p) => { byCr[p.creatorId] = p; });
+  const clash = mine.filter((p) => byCr[p.creatorId]).length;
+
+  if (!confirm(
+    `Move all ${mine.length} roster rows from “${from.name}” into “${into.name}” and delete “${from.name}”?\n\n` +
+    (clash ? `${clash} of them are already on “${into.name}” — whichever copy has got further through the pipeline is kept.\n\n` : '') +
+    `No creator is deleted. This cannot be undone from here, so download a backup first if you want one.`)) return;
+
+  let moved = 0, dropped = 0;
+  mine.forEach((p) => {
+    const other = byCr[p.creatorId];
+    if (!other) { p.campaignId = into.id; byCr[p.creatorId] = p; moved++; return; }
+    /* keep the further-along row; a booked visit beats an unbooked one */
+    const better = (STAGE_IDX[p.stage] || 0) > (STAGE_IDX[other.stage] || 0) ||
+                   (!!p.visitAt && !other.visitAt);
+    if (better) {
+      DB.participants.splice(DB.participants.indexOf(other), 1);
+      p.campaignId = into.id; byCr[p.creatorId] = p; moved++;
+    } else {
+      DB.participants.splice(DB.participants.indexOf(p), 1);
+    }
+    dropped++;
+  });
+  /* content records follow their row */
+  (DB.socialContent || []).forEach((c) => { if (c.campaignId === from.id) c.campaignId = into.id; });
+  deleteCampaign(from.id);
+
+  const summary = `Merged “${from.name}” into “${into.name}” — ${moved} rows moved` +
+    (dropped ? `, ${dropped} duplicate row${dropped === 1 ? '' : 's'} resolved` : '');
+  persist(true);
+  location.hash = '#/campaigns/' + into.id + '/roster';
+  render();
+  serverSave({ force: true, silent: true }).then((r) => toastAfterSave(summary, r));
+}
+
 function deleteCampaign(id) {
   const goneRows = new Set(DB.participants.filter((p) => p.campaignId === id).map((p) => p.id));
   DB.socialContent = DB.socialContent.filter((c) => !goneRows.has(c.participantId));
@@ -2865,6 +3066,7 @@ function rosterTab(mount, cp) {
       <button class="icon-btn sm" id="notionDiag" title="Show exactly what Notion returns and what the sync makes of it">&#128269;</button>` : ''}
       <button class="btn primary sm" id="addCreators">+ Add creators</button>
     </div>
+    ${sharedNotionFormBanner(cp)}
     ${upcomingVisitsStrip(cp)}
     <div id="rosterBody"></div>`;
 
@@ -2880,6 +3082,7 @@ function rosterTab(mount, cp) {
   $('#rosterCsv').addEventListener('click', () => exportRoster(cp));
   $('#rosterMetrics').addEventListener('click', () => openMetricsImport(cp));
   $('#notionSync').addEventListener('click', () => openNotionSync(cp));
+  wireSharedNotionFormBanner(cp);
   const notionCfg = $('#notionConfig');
   /* straight to the field mapping — that's what needs fixing 9 times in 10;
      the mapping drawer itself offers "use a different link" */
@@ -4541,6 +4744,36 @@ function reportTab(mount, cp) {
    ============================================================ */
 let creatorSort = { key: 'followers', dir: -1 };
 
+/* ---- the search box, across a re-render -------------------------
+   Typing here re-renders the whole section, and the re-render replaces
+   the very input being typed into. Focus and the caret therefore have
+   to be carried across by hand; without that, the field drops focus
+   after each character and only accepts one letter per click.
+
+   The filtering itself is untouched — the same value still goes into
+   state.creatorFilters.q on every keystroke. Only the redraw is
+   deferred, so a 400-row table is not rebuilt mid-word.
+   ------------------------------------------------------------------ */
+const CREATOR_SEARCH_DEBOUNCE_MS = 140;
+let creatorSearchCaret = null;
+let creatorSearchTimer = null;
+
+/* Called right after the filter card is rebuilt. preventScroll matters
+   on a phone: without it the browser scrolls the refocused input back
+   into view and the page jumps on every keystroke. */
+function restoreCreatorSearchCaret() {
+  const snap = creatorSearchCaret;
+  creatorSearchCaret = null;
+  if (!snap) return;
+  const el = $('#crQ');
+  if (!el) return;
+  el.focus({ preventScroll: true });
+  /* setSelectionRange throws on input types that have no caret; a
+     search box has one, but the guard keeps this safe if the field
+     ever changes type. */
+  try { el.setSelectionRange(snap.start, snap.end); } catch (e) { /* no caret on this type */ }
+}
+
 const CREATOR_SEGMENTS = [
   { id: 'all',       label: 'All creators',      test: () => true },
   { id: 'worked',    label: 'Worked with us',    test: (c) => c.campaignsDone > 0 },
@@ -4631,9 +4864,28 @@ function renderCreators(view, item, tab) {
       <td><button class="btn xs" onclick="event.stopPropagation();showCreator('${c.id}')">View</button></td>
     </tr>`).join('') || `<tr><td colspan="13"><div class="empty">No creators match those filters.</div></td></tr>`;
 
+  restoreCreatorSearchCaret();
+
+  /* the selects fire once per choice, so they redraw straight away */
   const bind = (id, key) => $('#' + id).addEventListener('input', () => { state.creatorFilters[key] = $('#' + id).value; render(); });
-  bind('crQ', 'q'); bind('crTier', 'tier'); bind('crCat', 'cat'); bind('crCountry', 'country'); bind('crPlatform', 'platform');
-  $('#crReset').addEventListener('click', () => { state.creatorFilters = { q: '', tier: '', cat: '', country: '', platform: '', worked: '' }; render(); });
+  bind('crTier', 'tier'); bind('crCat', 'cat'); bind('crCountry', 'country'); bind('crPlatform', 'platform');
+
+  /* the text box fires per keystroke: record where the caret is, write
+     the filter immediately, and let the redraw wait for a short pause.
+     Paste, backspace and clearing all arrive as 'input' too, so they
+     take the same path and keep the caret in the same way. */
+  $('#crQ').addEventListener('input', () => {
+    const el = $('#crQ');
+    state.creatorFilters.q = el.value;
+    creatorSearchCaret = { start: el.selectionStart, end: el.selectionEnd };
+    clearTimeout(creatorSearchTimer);
+    creatorSearchTimer = setTimeout(() => render(), CREATOR_SEARCH_DEBOUNCE_MS);
+  });
+
+  $('#crReset').addEventListener('click', () => {
+    clearTimeout(creatorSearchTimer); creatorSearchCaret = null;
+    state.creatorFilters = { q: '', tier: '', cat: '', country: '', platform: '', worked: '' }; render();
+  });
   $('#crExport').addEventListener('click', () => {
     downloadFile(toCsv(['handle','name','platform','followers','er','avg_views','tier','categories','country','languages','source','rate_krw','campaigns','best_views','rating','last_worked','tags','email','flag','flag_reason'],
       sorted.map((c) => [c.handle, c.name, c.platform, c.followers, c.er, c.avgViews, c.tier, c.categories.join('|'), c.country, c.languages.join('|'),
@@ -5675,6 +5927,21 @@ function applyNotionContent(p, ap, cr) {
   return touched;
 }
 
+/* Notion hands the same database id out in two spellings — dashed in a
+   page URL, undashed from the API — so a straight string compare misses
+   half the duplicates it exists to catch. */
+function notionDbKey(id) {
+  return String(id || '').trim().replace(/-/g, '').toLowerCase();
+}
+/* Every campaign, other than the one given, pointed at the same Notion
+   form. Importing the same form twice is all it takes to make this
+   non-empty. */
+function campaignsSharingNotionDb(cp) {
+  const key = notionDbKey(cp && cp.notionDatabaseId);
+  if (!key) return [];
+  return DB.campaigns.filter((c) => c !== cp && notionDbKey(c.notionDatabaseId) === key);
+}
+
 async function runNotionSync(cp, opts) {
   const batch = opts && opts.batch;
   if (!batch) toast('Syncing from Notion…');
@@ -5688,7 +5955,26 @@ async function runNotionSync(cp, opts) {
     return { campaign: cp, error: err.message };
   }
 
-  let newRows = 0, updated = 0, newCreators = 0, matched = 0, skipped = 0, moved = 0, reslotted = 0, adopted = 0, metricsUpdated = 0, rehomed = 0, heldBack = 0;
+  /* THE LIST-GOES-TO-ZERO BUG.
+
+     The rehoming rule below reads "this submission came from this
+     campaign's form, so the row it matches is this campaign's". That is
+     only true while one campaign owns the form. Import the same Notion
+     database twice — which is also what puts two identically named
+     chips on a partner page — and both campaigns claim every row in it:
+     syncing A drags the entire roster onto A, syncing B drags it all
+     back, and whichever was not synced last shows nothing at all. "Sync
+     all from Notion" does both in a row, so the loser empties every
+     time.
+
+     When the form is shared the page id no longer identifies an owner,
+     so nothing is moved. Counted and named rather than skipped in
+     silence — a roster split across two campaigns is the kind of drift
+     nobody finds for a month. */
+  const twins = campaignsSharingNotionDb(cp);
+  const dbIsShared = twins.length > 0;
+
+  let newRows = 0, updated = 0, newCreators = 0, matched = 0, skipped = 0, moved = 0, reslotted = 0, adopted = 0, metricsUpdated = 0, rehomed = 0, heldBack = 0, ambiguous = 0;
   data.rows.forEach((row) => {
     const ap = notionRowToApplicant(row.properties, cp.notionMapping);
     if (!ap.handle) { skipped++; return; }
@@ -5734,7 +6020,10 @@ async function runNotionSync(cp, opts) {
        belongs to this campaign whatever it currently says. Two campaigns
        that shared an id pooled their rosters under one campaignId; syncing
        either one now pulls its own rows back where they belong. */
-    if (p && p.campaignId !== cp.id && !p.pinnedCampaign) {
+    if (p && p.campaignId !== cp.id && dbIsShared) {
+      /* two campaigns claim this form — leave the row where it is */
+      ambiguous++;
+    } else if (p && p.campaignId !== cp.id && !p.pinnedCampaign) {
       /* Only the campaign changes. The row's own id stays exactly as it is,
          because other things are keyed on it: a Google Calendar event's id is
          derived from it, and a partner's comments are filed against it.
@@ -5824,10 +6113,15 @@ async function runNotionSync(cp, opts) {
     else if (!data.rows.some((r) => r.properties[mappedTo])) visitWarning = `“${mappedTo}” is empty for every row`;
   }
 
-  const stats = { campaign: cp, rows: data.rows.length, newRows, updated, moved, reslotted, skipped, newCreators, adopted, metricsUpdated, rehomed, heldBack, visitWarning };
+  const stats = { campaign: cp, rows: data.rows.length, newRows, updated, moved, reslotted, skipped, newCreators, adopted, metricsUpdated, rehomed, heldBack, ambiguous, twins: twins.map((c) => c.name), visitWarning };
   if (batch) return stats;
 
   render();
+  if (dbIsShared) {
+    toast(`This Notion form is also linked to ${twins.map((c) => '“' + c.name + '”').join(' and ')}. ` +
+      `${ambiguous ? ambiguous + ' rows were left where they are' : 'No rows were moved'} — unlink one of them, ` +
+      `or merge them, so the roster stops moving between the two.`);
+  }
   if (visitWarning) toast(`No visit dates — ${visitWarning}. Click ⚙ next to Sync to pick the column.`);
   const summary = `Synced ${data.rows.length} Notion submission${data.rows.length === 1 ? '' : 's'} — ${newRows} new, ${updated + adopted} updated` +
     (adopted ? ` (${adopted} existing roster row${adopted === 1 ? '' : 's'} linked up)` : '') +
@@ -5836,12 +6130,13 @@ async function runNotionSync(cp, opts) {
     (moved ? `, ${moved} moved stage` : '') +
     (reslotted ? `, ${reslotted} visit date${reslotted === 1 ? '' : 's'}` : '') +
     (metricsUpdated ? `, ${metricsUpdated} content/metrics` : '') +
+    (ambiguous ? `, ${ambiguous} left alone (this form is linked to more than one campaign)` : '') +
     (skipped ? ', ' + skipped + ' skipped' : '') +
     (newCreators ? ', ' + newCreators + ' new creators' : '') +
     (dedupe.mergedCreators ? `, ${dedupe.mergedCreators} duplicate${dedupe.mergedCreators === 1 ? '' : 's'} merged` : '');
   toast(summary);
-  serverSave({ force: true, silent: true }).then(() =>
-    toast(SERVER.status === 'idle' ? summary + ' — saved' : summary + ' — click Save to store it on the server'));
+  serverSave({ force: true, silent: true }).then((r) =>
+    toastAfterSave(summary, r));
   return stats;
 }
 
@@ -5889,8 +6184,8 @@ async function syncAllNotionCampaigns() {
   ok.filter((r) => r.visitWarning).forEach((r) =>
     toast(`${r.campaign.brand}: no visit dates — ${r.visitWarning}`));
 
-  serverSave({ force: true, silent: true }).then(() =>
-    toast(SERVER.status === 'idle' ? summary + ' — saved' : summary + ' — click Save to store it on the server'));
+  serverSave({ force: true, silent: true }).then((r) =>
+    toastAfterSave(summary, r));
 }
 
 /* A mapping saved before a field existed simply has no entry for it, and
@@ -6124,8 +6419,8 @@ function commitMetricsImport() {
   const summary = `Updated ${updated} creator${updated === 1 ? '' : 's'} from ${posts} post${posts === 1 ? '' : 's'}` +
     (st.unmatched.length ? ` — ${st.unmatched.length} row${st.unmatched.length === 1 ? '' : 's'} skipped (not on this roster)` : '');
   toast(summary);
-  serverSave({ force: true, silent: true }).then(() =>
-    toast(SERVER.status === 'idle' ? summary + ' — saved' : summary + ' — click Save to store it on the server'));
+  serverSave({ force: true, silent: true }).then((r) =>
+    toastAfterSave(summary, r));
 }
 
 /* ============================================================
@@ -6355,6 +6650,13 @@ function renderNotionImportStep3() {
   st.parsed.forEach((r) => { byStage[r.stage] = (byStage[r.stage] || 0) + 1; });
 
   const base = st.schema.title || 'Notion campaign';
+  /* A campaign already built from this very form. Creating a second one
+     is almost always a mistake — it duplicates the roster, duplicates the
+     chip on the partner link, and leaves both campaigns claiming every
+     submission, which is what makes a roster empty itself on the next
+     sync. Still possible, because occasionally two projects really do run
+     off one form; it just is not the default any more. */
+  const twin = DB.campaigns.find((c) => notionDbKey(c.notionDatabaseId) === notionDbKey(st.databaseId));
   const brandGuess = base.split(/\s*[xX×]\s*/).map((s) => s.trim()).filter((s) => s && !/^vively$/i.test(s))[0] || base;
 
   $('#niResult').innerHTML = `
@@ -6404,12 +6706,25 @@ function renderNotionImportStep3() {
     <label style="display:flex;align-items:center;gap:9px;text-transform:none;letter-spacing:0;font-size:13px;color:var(--text-2);margin-bottom:16px">
       <input type="checkbox" id="niSkipBlocked" checked/> Skip blacklisted creators
     </label>
+    ${twin ? `<div class="note warn" style="margin-bottom:12px">
+      <strong>“${esc(twin.brand)} — ${esc(twin.name)}” is already built from this same Notion form.</strong>
+      Importing it again makes a second campaign holding the same people, which is what puts two
+      identically named projects on a partner link — and, because both campaigns then claim every
+      submission, syncing one empties the other's roster.
+      <div style="margin-top:8px">Sync the campaign you already have instead.</div></div>` : ''}
     <div style="display:flex;gap:8px">
-      <button class="btn primary" id="niGo">Create campaign with ${st.parsed.length} creators</button>
+      ${twin ? `<button class="btn primary" id="niSyncExisting">Sync “${esc(twin.name)}” instead</button>
+                <button class="btn" id="niGo">Create a second campaign anyway</button>`
+              : `<button class="btn primary" id="niGo">Create campaign with ${st.parsed.length} creators</button>`}
       <button class="btn" onclick="closeDrawer()">Cancel</button>
     </div>`;
 
   $('#niGo').addEventListener('click', commitNotionImport);
+  if (twin) $('#niSyncExisting').addEventListener('click', () => {
+    closeDrawer();
+    location.hash = '#/campaigns/' + twin.id + '/roster';
+    runNotionSync(twin);
+  });
 }
 
 function commitNotionImport() {
@@ -6503,8 +6818,8 @@ function commitNotionImport() {
   const summary = `Created “${cp.name}” from Notion — ${created + matched} creators (${created} new, ${matched} matched)${skipped ? ', ' + skipped + ' skipped' : ''}` +
     (dedupe.mergedCreators ? `, ${dedupe.mergedCreators} duplicate${dedupe.mergedCreators === 1 ? '' : 's'} merged` : '');
   toast(summary);
-  serverSave({ force: true, silent: true }).then(() =>
-    toast(SERVER.status === 'idle' ? summary + ' — saved' : summary + ' — click Save to store it on the server'));
+  serverSave({ force: true, silent: true }).then((r) =>
+    toastAfterSave(summary, r));
 }
 
 /* --------------------------------- wizard --------------------------------- */
@@ -6790,8 +7105,8 @@ function commitImport() {
   const summary = `Imported ${created + matched} creators — ${created} new, ${matched} matched${skipped ? ', ' + skipped + ' skipped' : ''}` +
     (dedupe.mergedCreators ? `, ${dedupe.mergedCreators} duplicate${dedupe.mergedCreators === 1 ? '' : 's'} merged` : '');
   toast(summary);
-  serverSave({ force: true, silent: true }).then(() =>
-    toast(SERVER.status === 'idle' ? summary + ' — saved' : summary + ' — click Save to store it on the server'));
+  serverSave({ force: true, silent: true }).then((r) =>
+    toastAfterSave(summary, r));
 }
 
 /* ---------------------------- blank templates ---------------------------- */
@@ -11284,38 +11599,42 @@ function updateSaveBadge() {
 
   if (SERVER.configured === false) {
     el.className = 'save-badge no-print warn';
-    el.innerHTML = '<i class="sdot"></i>Not connected to server';
+    el.innerHTML = '<i class="sdot"></i><span class="sb-t">Not connected to server</span>';
     el.title = 'MONGODB_URI is not set on the server yet, so Save only writes to this browser for now.';
     return;
   }
   if (SERVER.status === 'conflict') {
     el.className = 'save-badge no-print warn';
-    el.innerHTML = '<i class="sdot"></i>Needs attention';
+    el.innerHTML = '<i class="sdot"></i><span class="sb-t">Needs attention</span>';
     el.title = SERVER.error || 'Another browser saved more recently.';
     return;
   }
   if (SERVER.status === 'error') {
     el.className = 'save-badge no-print warn';
-    el.innerHTML = '<i class="sdot"></i>Save failed';
+    el.innerHTML = '<i class="sdot"></i><span class="sb-t">Save failed</span>';
     el.title = SERVER.error || 'Could not reach the server. Click Save to retry.';
     return;
   }
   if (SYNC.url && (SYNC.status === 'conflict' || SYNC.status === 'error')) {
     el.className = 'save-badge no-print warn';
-    el.innerHTML = '<i class="sdot"></i>Sheet needs attention';
+    el.innerHTML = '<i class="sdot"></i><span class="sb-t">Sheet needs attention</span>';
     el.title = SYNC.error || 'Open Setup → Google Sheet.';
     return;
   }
   if (SERVER.status === 'syncing') {
     el.className = 'save-badge no-print';
-    el.innerHTML = '<i class="sdot"></i>Saving…';
+    el.innerHTML = '<i class="sdot"></i><span class="sb-t">Saving…</span>';
     el.title = 'Saving to the server…';
     return;
   }
 
   const st = SERVER.at ? SERVER.at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
   el.className = 'save-badge no-print';
-  el.innerHTML = st ? `<i class="sdot"></i>Saved ${st}` : '<i class="sdot"></i>Not saved yet — click Save';
+  el.innerHTML = st ? `<i class="sdot"></i><span class="sb-t">Saved ${st}</span>`
+                    : '<i class="sdot"></i><span class="sb-t">Not saved yet — click Save</span>';
+  /* an unsaved workspace is not a neutral state — the dot says so even
+     where there is no room for the sentence */
+  if (!st) el.className = 'save-badge no-print off';
   el.title = st
     ? `Saved to the server at ${SERVER.at.toLocaleString()} — available on any browser.${SYNC.url ? ' Also pushed to the shared Google Sheet.' : ''}`
     : (persistState.on
@@ -11325,6 +11644,14 @@ function updateSaveBadge() {
 
 function render() {
   recomputeCreatorStats();
+  /* A redraw triggered by typing must not yank the page back to the top —
+     that is what made filtering a long list feel like it was fighting the
+     user. Measured before clearing #view, because clearing it moves focus
+     to <body> and the answer would always be no. */
+  const typingInView = !!(document.activeElement && $('#view') &&
+    $('#view').contains(document.activeElement) &&
+    /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName));
+  const keepScroll = typingInView ? { y: window.scrollY, v: $('#view').scrollTop } : null;
   const { section, item, tab, tabs } = parseHash();
   if ($('#drawer').classList.contains('open') && !window.__keepDrawer) closeDrawer();
 
@@ -11347,8 +11674,8 @@ function render() {
   else if (section === 'settings')  renderSettings(view, item);
   else if (item === 'summary' || !item) renderHome(view);
   else                              renderOverview(view, item, tab);
-  window.scrollTo(0, 0);
-  view.scrollTop = 0;
+  if (keepScroll) { window.scrollTo(0, keepScroll.y); view.scrollTop = keepScroll.v; }
+  else { window.scrollTo(0, 0); view.scrollTop = 0; }
   persist();
   updateSaveBadge();
 }
@@ -11378,13 +11705,47 @@ applyTheme(readStoredTheme() || (window.matchMedia && window.matchMedia('(prefer
 $('#themeToggle').addEventListener('click', toggleTheme);
 
 /* panel show / hide */
-function togglePanel(force) {
-  const closed = force != null ? !force : !document.body.classList.contains('panel-closed');
-  document.body.classList.toggle('panel-closed', closed);
-  document.body.classList.toggle('panel-open', !closed);
+const PHONE_Q = '(max-width: 760px)';
+function onPhone() {
+  return !!(window.matchMedia && window.matchMedia(PHONE_Q).matches);
 }
+
+/* The two breakpoints disagree about what "open" means. On a desktop the
+   menu is a grid column that is there unless `panel-closed` says
+   otherwise; on a phone it is an overlay that is absent unless
+   `panel-open` says otherwise. Reading only `panel-closed` meant that on
+   a phone — where the body starts with neither class — the first tap of ☰
+   set `panel-closed` on an already-hidden menu and appeared to do
+   nothing. Ask the breakpoint what state it is in, then write both
+   classes exactly as before, so desktop behaviour is unchanged. */
+function panelIsOpen() {
+  return onPhone() ? document.body.classList.contains('panel-open')
+                   : !document.body.classList.contains('panel-closed');
+}
+function togglePanel(force) {
+  const open = force != null ? !!force : !panelIsOpen();
+  document.body.classList.toggle('panel-closed', !open);
+  document.body.classList.toggle('panel-open', open);
+}
+
+/* The phone header wraps, so its height is not a constant — it is 52px
+   with one row and about 100px with two. Publish whatever it measures as
+   --topbar-h so the slide-over and its backdrop both start below it
+   rather than on top of it. */
+function syncTopbarHeight() {
+  const bar = $('.topbar');
+  if (!bar) return;
+  const h = Math.round(bar.getBoundingClientRect().height);
+  if (h) document.documentElement.style.setProperty('--topbar-h', h + 'px');
+}
+syncTopbarHeight();
+window.addEventListener('resize', syncTopbarHeight);
+if (window.ResizeObserver && $('.topbar')) new ResizeObserver(syncTopbarHeight).observe($('.topbar'));
+
 $('#panelToggle').addEventListener('click', () => togglePanel());
 $('#panelHide').addEventListener('click', () => togglePanel(false));
+/* tap anywhere off the menu */
+$('#panelScrim').addEventListener('click', () => togglePanel(false));
 $('#panelQ').addEventListener('input', (e) => {
   state.panelQ = e.target.value;
   const { section, item } = parseHash();
@@ -11423,7 +11784,7 @@ function wireSearch() {
 $('#drawerClose').addEventListener('click', closeDrawer);
 $('#scrim').addEventListener('click', closeDrawer);
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeDrawer();
+  if (e.key === 'Escape') { closeDrawer(); if (onPhone()) togglePanel(false); }
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
   if (e.key === '/' && !typing) { e.preventDefault(); $('#globalSearch').focus(); }
   if (e.key === '[' && !typing) { e.preventDefault(); togglePanel(); }
@@ -11441,7 +11802,19 @@ $('#btnExportAll').addEventListener('click', () => {
 $('#btnSaveNow').addEventListener('click', () => {
   if (SERVER.status === 'conflict' &&
       !confirm('This workspace was saved from another browser more recently. Overwrite it with what you see here?')) return;
-  serverSave({ force: SERVER.status === 'conflict' });
+  const btn = $('#btnSaveNow');
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Saving…';
+  /* Silent, because this handler reports the outcome itself — and it
+     reports one every time, including "there was nothing to save".
+     Before, a click with an unchanged payload returned before making a
+     request and said nothing at all, which is indistinguishable from a
+     save that failed. A button that sometimes answers with silence is a
+     button people stop believing. */
+  serverSave({ force: SERVER.status === 'conflict', silent: true })
+    .then((r) => toast(saveOutcomeText(r)))
+    .catch((err) => toast('NOT SAVED — ' + err.message))
+    .then(() => { btn.disabled = false; btn.textContent = label; updateSaveBadge(); });
 });
 
 /* ------------------------------ auth ------------------------------ */
@@ -11700,7 +12073,10 @@ authState.user = loadAuthUser();
 refreshAuthButtons();
 bootAuth();
 
-window.addEventListener('hashchange', render);
+/* On a phone the menu is a modal overlay: choosing something from it is
+   the end of the interaction, so it closes itself rather than staying
+   over the page you just asked for. */
+window.addEventListener('hashchange', () => { if (onPhone()) togglePanel(false); render(); });
 window.addEventListener('beforeunload', () => { persist(true); flushServerSaveBeacon(); });
 persistState.on = storageAvailable();
 loadPersisted();
