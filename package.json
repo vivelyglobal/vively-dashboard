@@ -24,6 +24,7 @@
     "check:home": "node tools/seed.mjs > tmp/seed.json && node tools/home-page.mjs",
     "check:phone": "node tools/seed.mjs > tmp/seed.json && node tools/phone-layout.mjs",
     "check:auth": "node tools/auth-http.mjs",
+    "check:guard": "node tools/seed.mjs > tmp/seed.json && node tools/workspace-guard-page.mjs",
     "check:migration": "node tools/rehearse-migration.mjs",
     "migrate:dry": "node tools/migrate-social-content.mjs"
   },

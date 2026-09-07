@@ -261,8 +261,25 @@ export function persist(now) {
    since this one last loaded, the server refuses (409) unless we
    pass force — same conflict shape as the Google Sheet sync.
    ------------------------------------------------------------------ */
-export const SERVER = { status: 'idle', at: null, revision: 0, error: null, busy: false, configured: null };
+/* loadedOk: did the server copy actually arrive this session? Nothing
+   may be written back until it did, or until a valid local copy was
+   restored — see flushServerSaveBeacon. */
+export const SERVER = { status: 'idle', at: null, revision: 0, error: null, busy: false, configured: null, loadedOk: false };
 export let lastServerJson = '';
+export let localLoadedOk = false;
+
+/* Must match RESET_INTENT in server/workspace-guard.js. Spelled as a
+   sentence rather than a boolean so no stray truthy value can produce
+   it, and so it is obvious in a network tab what was asked for. */
+export const RESET_INTENT = 'replace-with-empty';
+
+/* The three collections a workspace is made of. appointments and
+   partnerLinks are deliberately not counted: a real workspace can have
+   none, and one stray row must not be enough to wave a wipe through. */
+export function workspaceIsEmpty(d) {
+  const x = d || DB;
+  return !(x.campaigns || []).length && !(x.creators || []).length && !(x.participants || []).length;
+}
 export let serverSaveTimer = null;
 
 export function workspacePayload() { return dbPayload(); }
@@ -318,6 +335,7 @@ export async function serverLoad() {
     SERVER.at = savedAt ? new Date(savedAt) : null;
     SERVER.status = 'idle'; SERVER.error = null;
     lastServerJson = JSON.stringify(workspacePayload());
+    SERVER.loadedOk = true;
     return 'loaded';
   } catch (err) {
     SERVER.error = err.message; SERVER.status = 'error';
@@ -332,12 +350,26 @@ export async function serverSave(opts) {
   const json = JSON.stringify(workspacePayload());
   if (!opts.force && json === lastServerJson) return;
 
+  /* Layer 1. An empty workspace is almost never something anybody
+     asked for — it is what memory looks like when the load failed, and
+     writing it back replaces the real one. Refused unless the caller
+     states a destructive intent, which only serverResetWorkspace does.
+     Note this is checked before `force`: force settles a revision
+     conflict, it does not authorise discarding everything. */
+  if (workspaceIsEmpty() && opts.intent !== RESET_INTENT) {
+    SERVER.status = 'error';
+    SERVER.error = 'Nothing is loaded, so nothing was saved. Reload the page to fetch the workspace.';
+    notifyStatus();
+    return;
+  }
+
   SERVER.busy = true; SERVER.status = 'syncing'; notifyStatus();
   try {
     const res = await fetch('/api/workspace', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ db: workspacePayload(), settings: SETTINGS, revision: SERVER.revision, force: !!opts.force })
+      body: JSON.stringify({ db: workspacePayload(), settings: SETTINGS, revision: SERVER.revision,
+        force: !!opts.force, intent: opts.intent || undefined })
     });
     if (res.status === 503) {
       SERVER.configured = false; SERVER.status = 'off';
@@ -348,6 +380,15 @@ export async function serverSave(opts) {
       handleAuthFailure(res.status, body);
       SERVER.status = 'error';
       SERVER.error = (body && body.error) || 'Not signed in';
+      if (!opts.silent) toast(SERVER.error);
+      return;
+    }
+    if (res.status === 422) {
+      /* the server's own guard refused it — say what it said rather
+         than the generic failure message */
+      const body = await res.json().catch(() => ({}));
+      SERVER.status = 'error';
+      SERVER.error = (body && body.error) || 'The server refused that save.';
       if (!opts.silent) toast(SERVER.error);
       return;
     }
@@ -376,18 +417,36 @@ export async function serverSave(opts) {
 
 export function scheduleServerSave() {
   if (SERVER.configured === false) return;
+  /* Layer 1, at the earliest point: an autosave is never the way a
+     person empties their workspace, so an empty one is not scheduled. */
+  if (workspaceIsEmpty()) return;
   clearTimeout(serverSaveTimer);
   serverSaveTimer = setTimeout(() => serverSave({ silent: true }), 2000);
 }
 
 /* last-ditch save when the tab is actually closing — fetch() can get
    cancelled mid-flight on unload, sendBeacon is built for exactly this */
+/* Deliberately the last thing that runs before the tab goes. It posts
+   with force:true, which skips the revision check — so it must only
+   fire when this session has something real to write. */
 export function flushServerSaveBeacon() {
   try {
     if (!navigator.sendBeacon) return;
+    /* Layer 2. Either the server copy loaded, or this browser restored
+       a valid one of its own. Neither means we are looking at an empty
+       shell because the load failed, and closing that tab must not
+       save over anybody. */
+    if (!SERVER.loadedOk && !localLoadedOk) return;
+    if (workspaceIsEmpty()) return;
     const body = JSON.stringify({ db: workspacePayload(), settings: SETTINGS, revision: SERVER.revision, force: true });
     navigator.sendBeacon('/api/workspace', new Blob([body], { type: 'application/json' }));
   } catch (e) { /* best effort only */ }
+}
+
+/* The one supported way to empty the stored workspace: stated, not
+   inferred. Everything else refuses. */
+export async function serverResetWorkspace() {
+  return serverSave({ force: true, intent: RESET_INTENT });
 }
 
 export function loadPersisted() {
@@ -411,6 +470,9 @@ export function loadPersisted() {
     if (saved.settings && typeof saved.settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = saved.settings.hideBlocked;
     persistState.at = saved.savedAt ? new Date(saved.savedAt) : null;
     persistState.bytes = raw.length;
+    /* a real workspace came back out of this browser's storage, so this
+       session has something of its own worth writing back */
+    localLoadedOk = !workspaceIsEmpty();
     return true;
   } catch (e) { return false; }
 }

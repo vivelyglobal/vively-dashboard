@@ -95,6 +95,7 @@ const IG_PROBE_BASE = (() => {
 })();
 
 const igWebhook = require("./server/instagram-webhook.js");
+const wsGuard = require("./server/workspace-guard.js");
 const igCollabProbe = require("./server/instagram-collab-probe.js");
 const auth = require("./server/auth.js");
 
@@ -705,8 +706,33 @@ app.post("/api/workspace", requireStaff(async (req, res) => {
 
   try {
     const col = await getWorkspaceCollection();
-    const existing = await col.findOne({ _id: WORKSPACE_ID }, { projection: { revision: 1, savedAt: 1 } });
+    /* $size rather than the document: this only needs to know whether
+       anything is in there, and the document is half a megabyte. */
+    const existing = await col.findOne({ _id: WORKSPACE_ID }, { projection: {
+      revision: 1, savedAt: 1,
+      campaigns: { $size: { $ifNull: ["$db.campaigns", []] } },
+      creators: { $size: { $ifNull: ["$db.creators", []] } },
+      participants: { $size: { $ifNull: ["$db.participants", []] } }
+    } });
     const currentRevision = (existing && existing.revision) || 0;
+
+    /* Checked before the revision lock, and independently of `force`.
+       A caller saying "overwrite their version with mine" is not the
+       same as a caller saying "discard the whole workspace", and until
+       now one flag answered both. */
+    const guard = wsGuard.guardEmptyReplace({
+      incoming: db,
+      existing: existing || {},
+      intent: req.body && req.body.intent
+    });
+    if (!guard.ok) {
+      console.error("POST /api/workspace refused: empty payload over %d campaigns, %d creators, %d participants.",
+        guard.existing.campaigns, guard.existing.creators, guard.existing.participants);
+      return res.status(422).json({ error: guard.message, guard: guard.code, existing: guard.existing });
+    }
+    if (guard.reset) {
+      console.log("POST /api/workspace: explicit destructive reset requested; the workspace will be emptied.");
+    }
 
     if (existing && !force && clientRevision !== currentRevision) {
       return res.status(409).json({
