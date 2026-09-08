@@ -744,12 +744,28 @@ tr.preferred-row td:first-child { box-shadow: inset 3px 0 0 var(--good); }
   body:not(.m-detail) .main { display: none; }
 
   /* --- the bottom bar --- */
+  /* A rounded screen takes a bite out of both bottom corners, and that
+     bite lands exactly on the first and last tab. env(safe-area-inset-*)
+     would say how big it is, but it only resolves to something when the
+     page has opted into drawing under the system UI — which this one has
+     not, so on an iPhone it is plainly 0 and the padding did nothing.
+     max() takes whichever is larger: the real inset where the browser
+     reports one, and a floor that clears the curve where it does not.
+
+     The floor is part of --mbar-h too, so the list and the content
+     underneath reserve the whole bar and nothing hides behind it. */
+  :root {
+    --mbar-safe: max(env(safe-area-inset-bottom, 0px), 12px);
+    --mbar-h: calc(54px + var(--mbar-safe));
+  }
   .mbar {
     display: flex; position: fixed; left: 0; right: 0; bottom: 0;
-    height: var(--mbar-h, 56px); z-index: 90;
+    height: var(--mbar-h); z-index: 90;
     background: var(--bg); border-top: 1px solid var(--line);
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-    box-sizing: content-box;
+    padding-bottom: var(--mbar-safe);
+    padding-left: max(env(safe-area-inset-left, 0px), 10px);
+    padding-right: max(env(safe-area-inset-right, 0px), 10px);
+    box-sizing: border-box;
   }
   .mbar a {
     flex: 1 1 0; min-width: 0; display: flex; flex-direction: column;

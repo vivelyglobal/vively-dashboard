@@ -180,6 +180,23 @@ for (const [label, dev, size] of [['iPhone 13', 'iPhone 13', null], ['narrow 320
     if (labels.some((t) => !t)) throw new Error('an unlabelled tab: ' + JSON.stringify(labels));
   });
 
+  await step('the bar keeps clear of the rounded corners and the bottom edge', async () => {
+    /* A rounded screen bites both bottom corners, and the bite lands on
+       the first and last tab. env(safe-area-inset-*) reports the bite
+       only once a page opts into drawing under the system UI — this one
+       does not, so on a phone it reads 0 and any padding built purely on
+       it does nothing at all. There has to be a floor. */
+    const m = await p.evaluate(() => {
+      const tabs = [...document.querySelectorAll('.mbar a')].map((e) => e.getBoundingClientRect());
+      return { left: Math.round(tabs[0].left),
+               right: Math.round(innerWidth - tabs[tabs.length - 1].right),
+               below: Math.round(Math.min(...tabs.map((r) => innerHeight - r.bottom))) };
+    });
+    if (m.left < 8) throw new Error(`first tab is ${m.left}px from the left edge`);
+    if (m.right < 8) throw new Error(`last tab is ${m.right}px from the right edge`);
+    if (m.below < 8) throw new Error(`labels are ${m.below}px off the bottom edge`);
+  });
+
   await step('every tab is a thumb-sized target', async () => {
     const small = await p.$$eval('.mbar a', (n) => n.map((e) => {
       const r = e.getBoundingClientRect();
