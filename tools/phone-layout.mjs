@@ -110,7 +110,13 @@ await step('every control is big enough to tap', async () => {
     const small = await p.$$eval('#view button, #view a[href], #view select, #view input, .topbar button',
       (ns) => ns.filter((e) => {
         const r = e.getBoundingClientRect();
-        return r.height > 0 && r.width > 0 && r.height < 32;
+        if (!(r.height > 0 && r.width > 0)) return false;
+        /* A link inside a sentence is prose, not a tap target — it is as
+           tall as the line it sits on and nothing can change that short
+           of not writing the sentence. Controls in this codebase are all
+           laid out as boxes, so display:inline is the dividing line. */
+        if (e.tagName === 'A' && getComputedStyle(e).display === 'inline') return false;
+        return r.height < 32;
       }).map((e) => e.tagName + '."' + String(e.innerText || e.value || '').slice(0, 14) + '"'));
     if (small.length) bad.push(`${label}: ${small.slice(0, 4).join(', ')}`);
   }

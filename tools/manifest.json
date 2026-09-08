@@ -3,8 +3,8 @@
   "file": "lib/rng.js",
   "ranges": [
    [
-    935,
-    956
+    1003,
+    1024
    ]
   ],
   "imports": [],
@@ -14,8 +14,8 @@
   "file": "lib/dates.js",
   "ranges": [
    [
-    957,
-    962
+    1025,
+    1030
    ]
   ],
   "imports": [],
@@ -25,8 +25,8 @@
   "file": "lib/format.js",
   "ranges": [
    [
-    1716,
-    1739
+    1784,
+    1807
    ]
   ],
   "imports": [],
@@ -36,8 +36,8 @@
   "file": "lib/csv.js",
   "ranges": [
    [
-    6884,
-    6902
+    6952,
+    6970
    ]
   ],
   "imports": [],
@@ -47,8 +47,8 @@
   "file": "model/vocab.js",
   "ranges": [
    [
-    963,
-    1045
+    1031,
+    1113
    ]
   ],
   "imports": [],
@@ -58,8 +58,8 @@
   "file": "model/settings.js",
   "ranges": [
    [
-    1841,
-    1844
+    1909,
+    1912
    ]
   ],
   "imports": [],
@@ -69,8 +69,8 @@
   "file": "ui/dom.js",
   "ranges": [
    [
-    2104,
-    2109
+    2172,
+    2177
    ]
   ],
   "imports": [],
@@ -80,8 +80,8 @@
   "file": "ui/overlay.js",
   "ranges": [
    [
-    2110,
-    2135
+    2178,
+    2203
    ]
   ],
   "imports": [
@@ -93,8 +93,8 @@
   "file": "ui/html.js",
   "ranges": [
    [
-    2136,
-    2242
+    2204,
+    2310
    ]
   ],
   "imports": [
@@ -111,8 +111,8 @@
   "file": "model/db.js",
   "ranges": [
    [
-    1046,
-    1586
+    1114,
+    1654
    ]
   ],
   "imports": [
@@ -128,8 +128,8 @@
   "file": "model/creators.js",
   "ranges": [
    [
-    1587,
-    1715
+    1655,
+    1783
    ]
   ],
   "imports": [
@@ -142,8 +142,8 @@
   "file": "model/stats.js",
   "ranges": [
    [
-    1740,
-    1840
+    1808,
+    1908
    ]
   ],
   "imports": [
@@ -158,8 +158,8 @@
   "file": "model/suggest.js",
   "ranges": [
    [
-    1845,
-    1864
+    1913,
+    1932
    ]
   ],
   "imports": [
@@ -171,8 +171,8 @@
   "file": "model/calendar.js",
   "ranges": [
    [
-    2522,
-    2547
+    2590,
+    2615
    ]
   ],
   "imports": [
@@ -185,8 +185,8 @@
   "file": "charts/index.js",
   "ranges": [
    [
-    1865,
-    2103
+    1933,
+    2171
    ]
   ],
   "imports": [
@@ -199,8 +199,8 @@
   "file": "lib/xlsx.js",
   "ranges": [
    [
-    5051,
-    5322
+    5119,
+    5390
    ]
   ],
   "imports": [
@@ -212,8 +212,8 @@
   "file": "import/excel.js",
   "ranges": [
    [
-    5323,
-    5544
+    5391,
+    5612
    ]
   ],
   "imports": [],
@@ -223,8 +223,8 @@
   "file": "import/notion.js",
   "ranges": [
    [
-    5545,
-    6228
+    5613,
+    6296
    ]
   ],
   "imports": [
@@ -242,8 +242,8 @@
   "file": "import/metrics.js",
   "ranges": [
    [
-    6229,
-    6425
+    6297,
+    6493
    ]
   ],
   "imports": [
@@ -265,8 +265,8 @@
   "file": "sync/sheets.js",
   "ranges": [
    [
-    7126,
-    7371
+    7194,
+    7439
    ]
   ],
   "imports": [
@@ -281,8 +281,8 @@
   "file": "docs/docx.js",
   "ranges": [
    [
-    7462,
-    7592
+    7530,
+    7660
    ]
   ],
   "imports": [
@@ -296,8 +296,8 @@
   "file": "docs/contracts.js",
   "ranges": [
    [
-    7593,
-    8064
+    7661,
+    8132
    ]
   ],
   "imports": [
@@ -310,8 +310,8 @@
   "file": "views/overview.js",
   "ranges": [
    [
-    2243,
-    2506
+    2311,
+    2574
    ]
   ],
   "imports": [
@@ -330,8 +330,8 @@
   "file": "views/calendarView.js",
   "ranges": [
    [
-    2548,
-    2680
+    2616,
+    2748
    ]
   ],
   "imports": [
@@ -351,12 +351,12 @@
   "file": "views/campaigns.js",
   "ranges": [
    [
-    2507,
-    2521
+    2575,
+    2589
    ],
    [
-    2681,
-    3692
+    2749,
+    3760
    ]
   ],
   "imports": [
@@ -391,8 +391,8 @@
   "file": "views/social.js",
   "ranges": [
    [
-    3709,
-    3972
+    3777,
+    4040
    ]
   ],
   "imports": [
@@ -410,12 +410,12 @@
   "file": "views/analytics.js",
   "ranges": [
    [
-    3693,
-    3707
+    3761,
+    3775
    ],
    [
-    3973,
-    4174
+    4041,
+    4242
    ]
   ],
   "imports": [
@@ -435,8 +435,8 @@
   "file": "views/messages.js",
   "ranges": [
    [
-    4175,
-    4596
+    4243,
+    4664
    ]
   ],
   "imports": [
@@ -458,8 +458,8 @@
   "file": "views/report.js",
   "ranges": [
    [
-    4597,
-    4740
+    4665,
+    4808
    ]
   ],
   "imports": [
@@ -477,8 +477,8 @@
   "file": "views/creators.js",
   "ranges": [
    [
-    4741,
-    5050
+    4809,
+    5118
    ]
   ],
   "imports": [
@@ -500,8 +500,8 @@
   "file": "views/notionDiag.js",
   "ranges": [
    [
-    6426,
-    6524
+    6494,
+    6592
    ]
   ],
   "imports": [
@@ -518,8 +518,8 @@
   "file": "views/notionImport.js",
   "ranges": [
    [
-    6525,
-    6824
+    6593,
+    6892
    ]
   ],
   "imports": [
@@ -540,12 +540,12 @@
   "file": "views/excelImport.js",
   "ranges": [
    [
-    6825,
-    6883
+    6893,
+    6951
    ],
    [
-    6903,
-    7125
+    6971,
+    7193
    ]
   ],
   "imports": [
@@ -567,8 +567,8 @@
   "file": "views/sheetsSettings.js",
   "ranges": [
    [
-    7372,
-    7461
+    7440,
+    7529
    ]
   ],
   "imports": [
@@ -583,8 +583,8 @@
   "file": "views/contracts.js",
   "ranges": [
    [
-    8065,
-    8396
+    8133,
+    8464
    ]
   ],
   "imports": [
@@ -601,8 +601,8 @@
   "file": "views/settings.js",
   "ranges": [
    [
-    8397,
-    8687
+    8465,
+    8755
    ]
   ],
   "imports": [
@@ -627,19 +627,19 @@
   "ranges": [
    [
     11,
-    813
+    871
    ]
   ],
   "raw": true,
   "imports": [],
-  "sha256": "2ad6a011f88a7b0e619b36ccd75dbe96c61904293362ad66594b04f47fb8baf1"
+  "sha256": "f3bad86653c7c5b80f130e6edbc6ce65a31e97d01c26fbaee70675b036d70366"
  },
  {
   "file": "sync/gcal.js",
   "ranges": [
    [
-    9185,
-    9536
+    9253,
+    9604
    ]
   ],
   "imports": [
@@ -655,8 +655,8 @@
   "file": "views/calendar.js",
   "ranges": [
    [
-    9539,
-    9789
+    9607,
+    9857
    ]
   ],
   "imports": [
@@ -674,8 +674,8 @@
   "file": "sync/partner.js",
   "ranges": [
    [
-    8903,
-    9008
+    8971,
+    9076
    ]
   ],
   "imports": [
@@ -688,8 +688,8 @@
   "file": "views/partners.js",
   "ranges": [
    [
-    9009,
-    9184
+    9077,
+    9252
    ]
   ],
   "imports": [
@@ -709,8 +709,8 @@
   "file": "sync/notionWriteback.js",
   "ranges": [
    [
-    8787,
-    8902
+    8855,
+    8970
    ]
   ],
   "imports": [
@@ -725,8 +725,8 @@
   "file": "model/duplicates.js",
   "ranges": [
    [
-    8688,
-    8785
+    8756,
+    8853
    ]
   ],
   "imports": [
@@ -742,8 +742,8 @@
   "file": "model/socialStats.js",
   "ranges": [
    [
-    9791,
-    10090
+    9859,
+    10158
    ]
   ],
   "imports": [
@@ -755,8 +755,8 @@
   "file": "charts/socialViz.js",
   "ranges": [
    [
-    10091,
-    10188
+    10159,
+    10256
    ]
   ],
   "imports": [
@@ -770,8 +770,8 @@
   "file": "views/socialOverview.js",
   "ranges": [
    [
-    10189,
-    10655
+    10257,
+    10723
    ]
   ],
   "imports": [
@@ -790,8 +790,8 @@
   "file": "model/homeStats.js",
   "ranges": [
    [
-    10657,
-    11076
+    10725,
+    11144
    ]
   ],
   "imports": [
@@ -806,8 +806,8 @@
   "file": "views/home.js",
   "ranges": [
    [
-    11078,
-    11452
+    11146,
+    11520
    ]
   ],
   "imports": [

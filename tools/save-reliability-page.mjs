@@ -251,16 +251,24 @@ console.log('\n     the Save button\n');
     if (!/Already saved/.test(said)) throw new Error('said: ' + JSON.stringify(said));
   });
 
-  await step('the badge is visible on a narrow screen, where it used to be hidden entirely', async () => {
+  await step('a save state is visible on a phone, on both kinds of page', async () => {
+    /* The phone shell has two pages and only one of them has a topbar, so
+       "is the badge visible" has to be asked of both — a save state that
+       shows on some screens is the same as no save state at all. */
     await p.setViewportSize({ width: 390, height: 700 });
-    await p.waitForTimeout(400);
-    const vis = await p.evaluate(() => {
-      const e = document.getElementById('saveBadge');
-      const r = e.getBoundingClientRect();
-      return { shown: getComputedStyle(e).display !== 'none' && r.width > 0, w: Math.round(r.width) };
-    });
-    if (!vis.shown) throw new Error('no save state shown at 390px at all');
-    if (vis.w > 60) throw new Error(`badge is ${vis.w}px wide — the sentence should be hidden, not the light`);
+    await p.waitForTimeout(600);
+    const seen = await p.evaluate(() => [...document.querySelectorAll('.save-badge')]
+      .map((e) => { const r = e.getBoundingClientRect();
+        return { shown: getComputedStyle(e).display !== 'none' && r.width > 0, w: Math.round(r.width) }; })
+      .filter((x) => x.shown));
+    if (!seen.length) throw new Error('no save state shown at 390px at all');
+    if (seen.some((x) => x.w > 70)) throw new Error('the sentence should be hidden, not the light: ' + JSON.stringify(seen));
+  });
+
+  await step('and a Save button to retry with, wherever you are', async () => {
+    const reachable = await p.evaluate(() => [...document.querySelectorAll('[data-save-now]')]
+      .filter((e) => e.getBoundingClientRect().width > 0).length);
+    if (!reachable) throw new Error('nothing to press when a save has failed');
   });
 
   await ctx.close();

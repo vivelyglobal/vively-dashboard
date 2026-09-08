@@ -503,6 +503,9 @@ input[type=checkbox] { accent-color: var(--blue); width: 15px; height: 15px; cur
    has nothing to build, and inert above 760px where the menu is a real
    column rather than an overlay. */
 .panel-scrim { display: none; }
+.mbar { display: none; }
+/* things that exist only on a phone */
+[data-m-only] { display: none !important; }
 .scrim.open { display: block; }
 .drawer {
   position: fixed; top: 0; right: 0; height: 100vh; width: min(560px, 92vw); background: var(--surface);
@@ -676,74 +679,129 @@ tr.preferred-row td:first-child { box-shadow: inset 3px 0 0 var(--good); }
   /* The top bar was the main offender: a search box with a 230px
      minimum plus four buttons on a row that could not wrap came to
      ~650px. Let the row wrap and let the search shrink to fit. */
-  .topbar {
-    height: auto; min-height: 52px; padding: 7px 12px;
-    flex-wrap: wrap; row-gap: 7px; column-gap: 8px;
-  }
-  .topbar h1 { font-size: 16px; }
-  /* The breadcrumb repeats what the rail already says, and it was buying
-     a second line inside the title block. */
-  .topbar .crumb { display: none; }
-  .topbar .spacer { display: none; }
-  .searchbox { min-width: 0; flex: 1 1 100%; order: 5; }
-  /* Measured at 390px: title + Save + theme + Export could not share a
-     row, so the buttons wrapped onto a third one and the header came to
-     168px — taller than the first card beneath it. Export is a desktop
-     action (a CSV download nobody opens on a phone) and it is the button
-     that made the difference. Two rows, ~100px. */
-  #btnExportAll { display: none; }
-  /* 40px targets are right in the body; in a header that has to stay out
-     of the way, 36px is still comfortably above the 34px thumb minimum.
-     Written with the `.sm` class so it outranks the generic rule further
-     down this same block. */
-  .topbar .btn, .topbar .btn.sm { min-height: 36px; padding: 7px 12px; }
-  .topbar .icon-btn, .topbar .theme-btn { min-width: 36px; min-height: 36px; }
-  /* Below about 340px of usable header — the rail takes 56 of the screen —
-     the first row cannot hold everything and the whole thing grows to
-     three rows. The theme toggle is what goes: the theme already follows
-     the phone's own light/dark setting, and a choice made on a desktop is
-     remembered here, so nothing is lost but the switch itself. */
-  @media (max-width: 360px) { .topbar .theme-btn { display: none; } }
+  /* ===================================================================
+     THE PHONE IS NOT A NARROW DESKTOP.
 
-  /* the tab bar's sticky offset was measured against a top bar fixed
-     at 64px, which stops being true the moment that bar can wrap */
-  .tabbar { position: static; padding: 0 12px; }
+     What was here before was the three-column shell with the middle
+     column turned into a slide-over: a 56px icon rail of unlabelled
+     glyphs, a 113px header carrying a search box nobody uses on a
+     phone, and a menu covering 278 of 390px with a sliver of the page
+     showing beside it. Three layers deep to reach one campaign.
 
-  /* Two columns, not three. 56px of rail plus 250px of side menu
-     leaves 80px for the content on a 390px screen, so the menu
-     becomes an overlay that slides over the page instead of a track
-     that competes with it. */
-  .app { grid-template-columns: 56px minmax(0, 1fr); }
+     This is a different shape, and only below 760px. One column, one
+     page at a time, and a bottom bar — the same drill-down every phone
+     app uses. The pages themselves are untouched: the views still
+     render into #view exactly as they do on a desktop.
+
+       list  →  body has no .m-detail: the panel IS the page
+       detail → body.m-detail: the main column IS the page, ← goes back
+     =================================================================== */
+
+  /* one column; the rail's job is the bottom bar's job now */
+  .app { grid-template-columns: minmax(0, 1fr); }
   body, body.panel-open, body.panel-closed { --panelw: 0px; }
-  /* The slide-over started at top:0 with z-index 120 against a topbar at
-     z-index 30, so opening the menu covered the page title, the search
-     box, the Save button and the ☰ that opened it. It now starts below
-     the header — whose height is measured at runtime into --topbar-h,
-     because that header wraps and is not a fixed 52px. */
+  .rail { display: none; }
+  .panel-scrim { display: none !important; }
+
+  /* --- the header: one row, ~52px, not three rows and 113px --- */
+  .topbar {
+    height: auto; min-height: 52px; padding: 8px 12px;
+    flex-wrap: nowrap; column-gap: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  .topbar h1 {
+    font-size: 17px; font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .topbar > div { min-width: 0; }
+  .topbar .crumb { display: none; }
+  .topbar .spacer { flex: 1; }
+  /* Search lives inside each list, where you reach for it — not
+     permanently across the top costing a row of height. */
+  .topbar .searchbox { display: none; }
+  #btnExportAll, .topbar .theme-btn, .auth-actions { display: none; }
+  .topbar .btn, .topbar .btn.sm { min-height: 34px; padding: 6px 12px; font-size: 13px; }
+  .topbar .icon-btn { min-width: 34px; min-height: 34px; }
+
+  /* --- list page: the panel, full screen, above the bottom bar --- */
   .panel {
-    position: fixed; left: 56px; top: var(--topbar-h, 52px); bottom: 0;
-    height: auto;
-    /* 300px of menu beside a 56px rail left a 34px ribbon of page on a
-       390px screen: too narrow to read, too narrow to tap. Leave 56px —
-       a real target for "tap outside to close". */
-    width: min(300px, calc(100vw - 112px)); z-index: 120;
-    transform: translateX(-105%); transition: transform .18s ease;
-    border-right: 1px solid var(--line-strong); box-shadow: var(--shadow);
+    position: fixed; left: 0; right: 0; top: 0; bottom: var(--mbar-h, 56px);
+    width: auto; height: auto; z-index: 40;
+    transform: none; border-right: 0; box-shadow: none;
+    background: var(--bg);
   }
-  body.panel-open .panel { transform: none; border-right: 1px solid var(--line-strong); }
-
-  /* Sits under the menu and over everything else below the header, so the
-     header stays reachable while the menu is open. */
-  .panel-scrim {
-    display: block; position: fixed; left: 0; right: 0;
-    top: var(--topbar-h, 52px); bottom: 0;
-    background: rgba(0, 0, 0, .42); z-index: 119;
-    opacity: 0; pointer-events: none; transition: opacity .18s ease;
+  .panel-head {
+    padding: 12px 16px 10px; min-height: 0;
+    display: flex; align-items: center; gap: 8px;
   }
-  body.panel-open .panel-scrim { opacity: 1; pointer-events: auto; }
+  .panel-head .pt { font-size: 21px; font-weight: 600; letter-spacing: -.01em; flex: 1; min-width: 0; }
+  [data-m-only] { display: inline-flex !important; }
+  .panel-head .btn.sm { min-height: 34px; padding: 6px 12px; font-size: 13px; }
+  #panelHide { display: none; }          /* nothing to hide it into */
+  .panel-search { padding: 0 16px 10px; }
+  .panel-list { padding: 0 8px 16px; }
+  .panel-item { padding: 13px 12px; border-radius: 10px; }
+  .panel-item .pi-t { font-size: 15px; }
+  .panel-item .pi-s { font-size: 12.5px; }
+  .panel-group { padding: 14px 12px 6px; }
 
-  .content { padding: 12px; min-width: 0; }
-  .card { min-width: 0; }
+  /* --- detail page: the main column, full screen --- */
+  .main { min-width: 0; }
+  .content { padding-bottom: calc(var(--mbar-h, 56px) + 20px); }
+
+  /* one at a time */
+  body.m-detail .panel { display: none; }
+  body:not(.m-detail) .main { display: none; }
+
+  /* --- the bottom bar --- */
+  .mbar {
+    display: flex; position: fixed; left: 0; right: 0; bottom: 0;
+    height: var(--mbar-h, 56px); z-index: 90;
+    background: var(--bg); border-top: 1px solid var(--line);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    box-sizing: content-box;
+  }
+  .mbar a {
+    flex: 1 1 0; min-width: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 3px;
+    color: var(--text-3); text-decoration: none; padding: 6px 2px;
+  }
+  .mbar a .mi { font-size: 18px; line-height: 1; }
+  .mbar a .ml {
+    font-size: 10.5px; letter-spacing: .01em; max-width: 100%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .mbar a.active { color: var(--blue-hi); }
+  .mbar a .mb {
+    position: absolute; transform: translate(14px, -10px);
+    background: var(--blue-soft); color: var(--blue-hi);
+    font-size: 9.5px; line-height: 1; padding: 2px 5px; border-radius: 8px;
+  }
+
+  /* the tab strip scrolls rather than wrapping into three rows */
+  .tabbar {
+    position: static; padding: 0 12px; overflow-x: auto;
+    flex-wrap: nowrap; -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .tabbar::-webkit-scrollbar { height: 0; }
+  .tabbar .tab { white-space: nowrap; flex: 0 0 auto; }
+
+  /* the last control on a page must clear the bottom bar, not hide under
+     it — written here, after the shorthand, or the shorthand wins */
+  .content {
+    padding: 12px 12px calc(var(--mbar-h, 56px) + 24px);
+    min-width: 0;
+  }
+
+  /* Desktop card padding is 20px and a stat value is 30px; six of those
+     filled the whole first screen of a campaign before the roster. */
+  .card { min-width: 0; padding: 14px; }
+  .card.stat { padding: 12px 13px; }
+  .stat .label { font-size: 11.5px; }
+  .stat .value { font-size: 22px; margin: 3px 0 1px; }
+  .stat .foot, .stat .delta { font-size: 11px; }
+  .sec-title { margin-top: 18px; }
 
   /* A wide table scrolls inside its own box. Without the max-width it
      pushed the whole document instead, which is what made the page
@@ -826,6 +884,12 @@ tr.preferred-row td:first-child { box-shadow: inset 3px 0 0 var(--good); }
   <aside class="panel">
     <div class="panel-head">
       <span class="pt" id="panelTitle">Menu</span>
+      <!-- On a phone the list is a page in its own right, with no topbar
+           above it. Without these, sitting on a list meant seeing no save
+           state at all — which is exactly how a workspace goes unsaved for
+           an hour without anyone noticing. Hidden above 760px. -->
+      <span class="save-badge no-print" data-m-only title="Where your data is stored"></span>
+      <button class="btn primary sm no-print" data-m-only data-save-now title="Save this workspace to the server now">Save</button>
       <button class="icon-btn no-print" id="panelHide" title="Hide menu">&#8676;</button>
     </div>
     <div class="panel-search" id="panelSearchWrap" style="display:none;">
@@ -848,7 +912,7 @@ tr.preferred-row td:first-child { box-shadow: inset 3px 0 0 var(--good); }
         <input type="search" id="globalSearch" placeholder="Search creators, campaigns…" autocomplete="off" />
       </div>
       <span class="save-badge no-print" id="saveBadge" title="Where your data is stored"></span>
-      <button class="btn primary sm no-print" id="btnSaveNow" title="Save this workspace to the server now">Save</button>
+      <button class="btn primary sm no-print" id="btnSaveNow" data-save-now title="Save this workspace to the server now">Save</button>
       <button class="theme-btn no-print" id="themeToggle" title="Switch between light and dark (T)" aria-label="Switch theme">☾</button>
       <div class="auth-actions no-print">
         <button class="btn sm" id="btnLogin">Login</button>
@@ -862,6 +926,10 @@ tr.preferred-row td:first-child { box-shadow: inset 3px 0 0 var(--good); }
   </div>
 </div>
 
+<!-- Phones only. The one thing always on screen: four places you go, and
+     everything else behind More. Hidden above 760px, where the rail does
+     this job. -->
+<nav class="mbar no-print" id="mbar"></nav>
 <div class="panel-scrim no-print" id="panelScrim"></div>
 <div class="scrim" id="scrim"></div>
 <aside class="drawer" id="drawer">
@@ -11577,6 +11645,9 @@ function renderPanel(section, item) {
     if (inp.value !== state.panelQ) inp.value = state.panelQ;
   }
 
+  /* set BEFORE the rows are wired below */
+  const wantDetailOnPick = () => { mobileWant = 'detail'; };
+
   $('#panelList').innerHTML = p.groups.map((g) => `
     ${g.label ? `<div class="panel-group">${esc(g.label)}</div>` : ''}
     ${g.items.map((it) => `<a class="panel-item ${it.id === item ? 'active' : ''}" href="#/${section}/${it.id}">
@@ -11586,6 +11657,10 @@ function renderPanel(section, item) {
     </a>`).join('')}`).join('') ||
     `<div class="panel-empty">${state.panelQ ? 'Nothing matches that filter.'
       : (section === 'campaigns' || section === 'messages') ? 'No campaigns yet. Import a sheet or create one.' : 'Nothing here yet.'}</div>`;
+
+  /* Picking something from the list is the one gesture that means
+     "take me in". On a desktop it changes nothing. */
+  $$('.panel-item', $('#panelList')).forEach((a) => a.addEventListener('click', wantDetailOnPick));
 }
 
 function renderTabs(section, item, tab, tabs) {
@@ -11593,8 +11668,14 @@ function renderTabs(section, item, tab, tabs) {
     `<a class="tab ${id === tab ? 'active' : ''}" href="#/${section}/${item}/${id}">${esc(label)}</a>`).join('');
 }
 
+/* Every save badge on the page, not just the topbar's — the phone's list
+   pages carry one too, and a save state that is only visible on some
+   screens is the same as no save state at all. */
 function updateSaveBadge() {
-  const el = $('#saveBadge');
+  $$('.save-badge').forEach(paintSaveBadge);
+}
+
+function paintSaveBadge(el) {
   if (!el) return;
 
   if (SERVER.configured === false) {
@@ -11658,6 +11739,10 @@ function render() {
   renderRail(section);
   renderPanel(section, item);
   renderTabs(section, item, tab, tabs);
+  /* the phone shell, decided after the panel exists so it knows whether
+     this section has a list to show at all */
+  renderMobileBar(section);
+  applyMobileShell(section, item);
   $('#pageTitle').textContent = titleFor(section, item);
   const sectLabel = (SECTIONS.find((s) => s.id === section) || {}).label;
   $('#crumb').textContent = (section === 'campaigns' || section === 'messages') && byCampaign[item]
@@ -11710,42 +11795,114 @@ function onPhone() {
   return !!(window.matchMedia && window.matchMedia(PHONE_Q).matches);
 }
 
-/* The two breakpoints disagree about what "open" means. On a desktop the
-   menu is a grid column that is there unless `panel-closed` says
-   otherwise; on a phone it is an overlay that is absent unless
-   `panel-open` says otherwise. Reading only `panel-closed` meant that on
-   a phone — where the body starts with neither class — the first tap of ☰
-   set `panel-closed` on an already-hidden menu and appeared to do
-   nothing. Ask the breakpoint what state it is in, then write both
-   classes exactly as before, so desktop behaviour is unchanged. */
-function panelIsOpen() {
-  return onPhone() ? document.body.classList.contains('panel-open')
-                   : !document.body.classList.contains('panel-closed');
-}
+/* Desktop only now. On a phone the menu is not a thing you open and
+   close — it is one of the two pages, and the bottom bar decides which. */
+function panelIsOpen() { return !document.body.classList.contains('panel-closed'); }
 function togglePanel(force) {
   const open = force != null ? !!force : !panelIsOpen();
   document.body.classList.toggle('panel-closed', !open);
   document.body.classList.toggle('panel-open', open);
 }
 
-/* The phone header wraps, so its height is not a constant — it is 52px
-   with one row and about 100px with two. Publish whatever it measures as
-   --topbar-h so the slide-over and its backdrop both start below it
-   rather than on top of it. */
-function syncTopbarHeight() {
-  const bar = $('.topbar');
-  if (!bar) return;
-  const h = Math.round(bar.getBoundingClientRect().height);
-  if (h) document.documentElement.style.setProperty('--topbar-h', h + 'px');
-}
-syncTopbarHeight();
-window.addEventListener('resize', syncTopbarHeight);
-if (window.ResizeObserver && $('.topbar')) new ResizeObserver(syncTopbarHeight).observe($('.topbar'));
+/* ------------------------------------------------------------------
+   THE PHONE SHELL
 
-$('#panelToggle').addEventListener('click', () => togglePanel());
+   Two pages and a bottom bar, which is how every phone app people
+   already know is built:
+
+     list    the section's own list — campaigns, creator segments
+     detail  the page you picked, with ← back to the list
+
+   Which one shows is decided by what was tapped, not by parsing the
+   route, because the route cannot tell the difference between "I chose
+   this campaign" and "this is where I already was". A bottom tab and
+   the back arrow ask for the list; a list row asks for the detail;
+   anything else keeps you where you are, so a data refresh never
+   throws you back to a list mid-edit.
+   ------------------------------------------------------------------ */
+const MOBILE_TABS = ['overview', 'campaigns', 'creators', 'social'];
+let mobileWant = 'list';      /* first paint opens on the list */
+let mobileRoute = null;
+
+function inMobileDetail() { return document.body.classList.contains('m-detail'); }
+
+function applyMobileShell(section, item) {
+  const tog = $('#panelToggle');
+  if (!onPhone()) {
+    document.body.classList.remove('m-detail');
+    if (tog) { tog.innerHTML = '&#9776;'; tog.title = 'Show / hide menu'; }
+    mobileRoute = null;
+    return;
+  }
+  /* a section with nothing to list has no list page to show */
+  const hasList = !!$('#panelList').querySelector('.panel-item');
+  const key = section + '/' + item;
+
+  let detail;
+  if (mobileWant === 'list') detail = false;
+  else if (mobileWant === 'detail') detail = true;
+  else if (mobileRoute !== null && key !== mobileRoute) detail = true;
+  else detail = inMobileDetail();
+  if (!hasList) detail = true;
+
+  mobileWant = null;
+  mobileRoute = key;
+  document.body.classList.toggle('m-detail', detail);
+  if (tog) {
+    tog.innerHTML = detail ? '&#8592;' : '&#9776;';
+    tog.title = detail ? 'Back' : 'Show / hide menu';
+  }
+}
+
+function renderMobileBar(section) {
+  const bar = $('#mbar');
+  if (!bar) return;
+  const inBar = new Set(MOBILE_TABS);
+  const tabs = MOBILE_TABS.map((id) => SECTIONS.find((x) => x.id === id)).filter(Boolean);
+  bar.innerHTML = tabs.map((sec) => {
+    const n = sec.badge ? sec.badge() : 0;
+    return `<a href="#/${sec.id}" data-mtab="${sec.id}" class="${sec.id === section ? 'active' : ''}">
+      <span class="mi">${sec.icon}</span>${n ? `<span class="mb">${n > 99 ? '99+' : n}</span>` : ''}
+      <span class="ml">${esc(sec.label)}</span></a>`;
+  }).join('') +
+  `<a href="#" id="mMore" class="${inBar.has(section) ? '' : 'active'}">
+     <span class="mi">&#8943;</span><span class="ml">More</span></a>`;
+
+  /* A tab always lands you on that section's list, even if you were
+     already deep inside it — same as tapping the tab you are on in any
+     phone app. */
+  $$('[data-mtab]', bar).forEach((a) => a.addEventListener('click', () => { mobileWant = 'list'; }));
+  $('#mMore').addEventListener('click', (e) => { e.preventDefault(); openMobileMore(); });
+}
+
+function openMobileMore() {
+  const inBar = new Set(MOBILE_TABS);
+  const rest = SECTIONS.filter((x) => !inBar.has(x.id));
+  openDrawer('More', `<div class="panel-list" style="padding:0">${rest.map((sec) => {
+    const n = sec.badge ? sec.badge() : 0;
+    return `<a class="panel-item" href="#/${sec.id}" data-mmore>
+      <span class="pi-main"><span class="pi-t">${esc(sec.label)}</span></span>
+      ${n ? `<span class="pi-n">${n}</span>` : ''}</a>`;
+  }).join('')}</div>`);
+  $$('[data-mmore]').forEach((a) => a.addEventListener('click', () => { mobileWant = 'list'; closeDrawer(); }));
+}
+
+/* ☰ on a desktop, ← on a phone — the same button, because in the one
+   place it appears on a phone (a detail page) "back" is the only thing
+   it could usefully mean. */
+$('#panelToggle').addEventListener('click', () => {
+  if (onPhone()) { mobileWant = 'list'; applyMobileShell(...routeKeyParts()); return; }
+  togglePanel();
+});
+function routeKeyParts() {
+  const { section, item } = parseHash();
+  return [section, item];
+}
 $('#panelHide').addEventListener('click', () => togglePanel(false));
-/* tap anywhere off the menu */
-$('#panelScrim').addEventListener('click', () => togglePanel(false));
+window.addEventListener('resize', () => {
+  const { section, item } = parseHash();
+  applyMobileShell(section, item);
+});
 $('#panelQ').addEventListener('input', (e) => {
   state.panelQ = e.target.value;
   const { section, item } = parseHash();
@@ -11784,7 +11941,7 @@ function wireSearch() {
 $('#drawerClose').addEventListener('click', closeDrawer);
 $('#scrim').addEventListener('click', closeDrawer);
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { closeDrawer(); if (onPhone()) togglePanel(false); }
+  if (e.key === 'Escape') closeDrawer();
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
   if (e.key === '/' && !typing) { e.preventDefault(); $('#globalSearch').focus(); }
   if (e.key === '[' && !typing) { e.preventDefault(); togglePanel(); }
@@ -11799,10 +11956,10 @@ $('#btnExportAll').addEventListener('click', () => {
   downloadFile(toCsv(['brand','campaign','type','status','start','end','target','contacted','confirmed','delivered','views','reach','engagements','er','spend_krw','cpm','cpv','cpe','viral_posts'], rows),
     'vively-all-campaigns.csv', 'text/csv;charset=utf-8');
 });
-$('#btnSaveNow').addEventListener('click', () => {
+$$('[data-save-now]').forEach((b) => b.addEventListener('click', () => saveNowFrom(b)));
+function saveNowFrom(btn) {
   if (SERVER.status === 'conflict' &&
       !confirm('This workspace was saved from another browser more recently. Overwrite it with what you see here?')) return;
-  const btn = $('#btnSaveNow');
   const label = btn.textContent;
   btn.disabled = true; btn.textContent = 'Saving…';
   /* Silent, because this handler reports the outcome itself — and it
@@ -11815,7 +11972,7 @@ $('#btnSaveNow').addEventListener('click', () => {
     .then((r) => toast(saveOutcomeText(r)))
     .catch((err) => toast('NOT SAVED — ' + err.message))
     .then(() => { btn.disabled = false; btn.textContent = label; updateSaveBadge(); });
-});
+}
 
 /* ------------------------------ auth ------------------------------ */
 const authState = { mode: 'login', user: null };
@@ -12076,7 +12233,7 @@ bootAuth();
 /* On a phone the menu is a modal overlay: choosing something from it is
    the end of the interaction, so it closes itself rather than staying
    over the page you just asked for. */
-window.addEventListener('hashchange', () => { if (onPhone()) togglePanel(false); render(); });
+window.addEventListener('hashchange', render);
 window.addEventListener('beforeunload', () => { persist(true); flushServerSaveBeacon(); });
 persistState.on = storageAvailable();
 loadPersisted();

@@ -140,99 +140,141 @@ console.log('\n     creator search · desktop 1440x900\n');
   await ctx.close();
 }
 
-/* ================= 2. the phone menu ================= */
+/* ================= 2. the phone shell ================= */
+/* The old shape was a desktop three-column layout with the middle column
+   turned into a slide-over: a 56px rail of unlabelled glyphs, a 113px
+   header carrying a search box, and a menu covering 278 of 390px. Three
+   layers deep to reach one campaign, and no way to tell where you were.
+
+   The shape now is one column, one page at a time, and a bottom bar:
+   tap a section, get its list, tap a row, get the page, ← to go back. */
 for (const [label, dev, size] of [['iPhone 13', 'iPhone 13', null], ['narrow 320x640', null, { width: 320, height: 640 }]]) {
-  console.log(`\n     phone menu · ${label}\n`);
+  console.log(`\n     phone shell · ${label}\n`);
   const { ctx, p } = await open(dev, size);
   const vw = p.viewportSize().width;
-
   const box = (sel) => p.evaluate((s) => {
     const e = document.querySelector(s);
     if (!e) return null;
-    const r = e.getBoundingClientRect();
     const cs = getComputedStyle(e);
+    if (cs.display === 'none') return 'hidden';
+    const r = e.getBoundingClientRect();
     return { top: Math.round(r.top), left: Math.round(r.left), right: Math.round(r.right),
-             w: Math.round(r.width), h: Math.round(r.height),
-             z: cs.zIndex, pos: cs.position, opacity: +cs.opacity, events: cs.pointerEvents };
+             w: Math.round(r.width), h: Math.round(r.height) };
   }, sel);
+  const inDetail = () => p.evaluate(() => document.body.classList.contains('m-detail'));
 
-  await step('the header is one or two rows, not three', async () => {
+  await step('there is no icon rail eating the width', async () => {
+    eq(await box('.rail'), 'hidden', '.rail');
+  });
+
+  await step('the bottom bar is there, and is the full width', async () => {
+    const b = await box('.mbar');
+    if (b === 'hidden' || !b) throw new Error('no bottom bar');
+    eq(b.w, vw, 'bar width');
+    if (b.h < 44) throw new Error(`bar is only ${b.h}px tall`);
+  });
+
+  await step('it names five places, in words rather than glyphs', async () => {
+    const labels = await p.$$eval('.mbar a .ml', (n) => n.map((x) => x.textContent.trim()));
+    eq(labels.length, 5, 'tab count');
+    if (labels.some((t) => !t)) throw new Error('an unlabelled tab: ' + JSON.stringify(labels));
+  });
+
+  await step('every tab is a thumb-sized target', async () => {
+    const small = await p.$$eval('.mbar a', (n) => n.map((e) => {
+      const r = e.getBoundingClientRect();
+      return { w: Math.round(r.width), h: Math.round(r.height) };
+    }).filter((r) => r.h < 40 || r.w < 40));
+    if (small.length) throw new Error(JSON.stringify(small));
+  });
+
+  await step('a section opens on its list, not on a page you did not pick', async () => {
+    await go(p, '#/campaigns/all/active');
+    await p.click('[data-mtab="campaigns"]');
+    await p.waitForTimeout(700);
+    if (await inDetail()) throw new Error('landed in a detail page');
+    const rows = await p.$$eval('.panel-item', (n) => n.length);
+    if (!rows) throw new Error('the list is empty');
+  });
+
+  await step('the list is the whole screen above the bar — no sliver of another page', async () => {
+    const pn = await box('.panel'), bar = await box('.mbar');
+    eq(pn.left, 0, 'list left');
+    eq(pn.w, vw, 'list width');
+    if (Math.abs(pn.top + pn.h - bar.top) > 2)
+      throw new Error(`list ends at ${pn.top + pn.h}, bar starts at ${bar.top}`);
+  });
+
+  await step('tapping a row opens that page', async () => {
+    const name = await p.$eval('.panel-item:not(.active) .pi-t', (e) => e.textContent.trim());
+    await p.click('.panel-item:not(.active)');
+    await p.waitForTimeout(800);
+    if (!(await inDetail())) throw new Error('still on the list');
+    const title = await p.$eval('#pageTitle', (e) => e.textContent.trim());
+    if (!title) throw new Error('no title on the page');
+    if (await box('.panel') !== 'hidden') throw new Error('the list is still on top of it');
+    return name;
+  });
+
+  await step('the header is one row, and carries a back arrow', async () => {
     const t = await box('.topbar');
-    if (t.h > 120) throw new Error(`topbar is ${t.h}px tall`);
+    if (t.h > 64) throw new Error(`header is ${t.h}px tall`);
+    eq(t.left, 0, 'header left');
+    const glyph = await p.$eval('#panelToggle', (e) => e.textContent.trim());
+    if (glyph !== '\u2190') throw new Error('the button says ' + JSON.stringify(glyph) + ', not back');
   });
 
-  await step('one tap of ☰ opens the menu', async () => {
+  await step('back returns to the list', async () => {
     await p.click('#panelToggle');
-    await p.waitForTimeout(400);
-    if (!(await p.evaluate(() => document.body.classList.contains('panel-open'))))
-      throw new Error('first tap did not open it');
-    const pn = await box('.panel');
-    if (pn.left < 0) throw new Error(`still off-screen at left ${pn.left}`);
+    await p.waitForTimeout(600);
+    if (await inDetail()) throw new Error('still in the page');
+    if (!(await p.$('.panel-item'))) throw new Error('the list did not come back');
   });
 
-  await step('the menu starts below the header instead of covering it', async () => {
-    const t = await box('.topbar'), pn = await box('.panel');
-    if (pn.top < t.h - 1) throw new Error(`menu top ${pn.top} is above header bottom ${t.h}`);
+  await step('another tab switches section and opens on its list', async () => {
+    await p.click('[data-mtab="creators"]');
+    await p.waitForTimeout(900);
+    if (await inDetail()) throw new Error('jumped straight into a page');
+    const active = await p.$eval('.mbar a.active .ml', (e) => e.textContent.trim());
+    eq(active, 'Creators', 'active tab');
   });
 
-  await step('the whole header is still reachable with the menu open', async () => {
-    const hidden = await p.evaluate(() => {
-      const out = [];
-      for (const sel of ['#panelToggle', '#pageTitle', '#btnSaveNow', '#globalSearch']) {
-        const e = document.querySelector(sel);
-        if (!e) continue;
-        const r = e.getBoundingClientRect();
-        if (r.width === 0) continue;
-        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-        if (!hit || (hit !== e && !e.contains(hit) && !hit.contains(e))) out.push(sel + ' → ' + (hit ? hit.id || hit.className : 'nothing'));
-      }
-      return out;
+  await step('More reaches the sections that are not in the bar', async () => {
+    await p.click('#mMore');
+    await p.waitForTimeout(600);
+    const rest = await p.$$eval('[data-mmore] .pi-t', (n) => n.map((x) => x.textContent.trim()));
+    for (const want of ['Messages', 'Contracts', 'Analytics', 'Setup'])
+      if (!rest.includes(want)) throw new Error(want + ' is unreachable: ' + rest.join(', '));
+    await p.click('[data-mmore]');
+    await p.waitForTimeout(800);
+  });
+
+  await step('nothing hides under the bottom bar', async () => {
+    await go(p, '#/campaigns/all/active');
+    await p.waitForTimeout(600);
+    const covered = await p.evaluate(() => {
+      const bar = document.querySelector('.mbar').getBoundingClientRect();
+      const view = document.querySelector('#view');
+      view.scrollTop = view.scrollHeight;
+      window.scrollTo(0, document.body.scrollHeight);
+      const last = [...view.querySelectorAll('button, a[href], select')].pop();
+      if (!last) return null;
+      const r = last.getBoundingClientRect();
+      return r.bottom > bar.top + 1 ? last.textContent.trim().slice(0, 30) : null;
     });
-    if (hidden.length) throw new Error('covered: ' + hidden.join(', '));
+    if (covered) throw new Error('the bar sits on top of: ' + covered);
   });
 
-  await step('there is a backdrop behind it', async () => {
-    const sc = await box('.panel-scrim');
-    if (!sc) throw new Error('no .panel-scrim in the page');
-    if (sc.opacity < 0.2) throw new Error(`backdrop is invisible (opacity ${sc.opacity})`);
-    if (sc.events === 'none') throw new Error('backdrop does not take taps');
-  });
-
-  await step('the menu leaves a strip of page wide enough to aim at', async () => {
-    const pn = await box('.panel');
-    const strip = vw - pn.right;
-    if (strip < 40) throw new Error(`only ${strip}px of page left beside a ${pn.w}px menu`);
-  });
-
-  await step('tapping that strip closes the menu', async () => {
-    const pn = await box('.panel');
-    const t = await box('.topbar');
-    await p.mouse.click(pn.right + Math.min(24, (vw - pn.right) / 2), t.h + 120);
-    await p.waitForTimeout(400);
-    if (await p.evaluate(() => document.body.classList.contains('panel-open')))
-      throw new Error('still open');
-  });
-
-  await step('picking something from the menu closes it', async () => {
-    await p.click('#panelToggle');
-    await p.waitForTimeout(350);
-    await go(p, '#/creators/all');
-    if (await p.evaluate(() => document.body.classList.contains('panel-open')))
-      throw new Error('menu stayed over the page it just opened');
-  });
-
-  await step('the rail is still there once the menu is closed', async () => {
-    const r = await box('.rail');
-    if (!r || r.w < 40) throw new Error('rail is gone');
-  });
-
-  await step('the page still does not scroll sideways', async () => {
+  await step('the page does not scroll sideways', async () => {
     const over = await p.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-    if (over > 2) throw new Error(`document is ${over}px wider than the screen`);
+    if (over > 2) throw new Error(`${over}px wider than the screen`);
   });
 
-  await step('typing in the creator search works here too', async () => {
-    await go(p, '#/creators/all');
+  await step('typing in the creator search still works here', async () => {
+    await p.click('[data-mtab="creators"]');
+    await p.waitForTimeout(700);
+    await p.click('.panel-item');
+    await p.waitForTimeout(800);
     await p.click('#crQ');
     await p.keyboard.type('julia', { delay: 45 });
     await settle(p);
@@ -242,29 +284,36 @@ for (const [label, dev, size] of [['iPhone 13', 'iPhone 13', null], ['narrow 320
   await ctx.close();
 }
 
-/* ================= 3. the desktop menu is untouched ================= */
-console.log('\n     desktop 1440x900 · the menu is still a column\n');
+/* ================= 3. the desktop is untouched ================= */
+console.log('\n     desktop 1440x900 · unchanged\n');
 {
   const { ctx, p } = await open(null, { width: 1440, height: 900 });
-  await step('the menu is a sticky column, not an overlay', async () => {
+  await step('the rail and the menu are both still columns', async () => {
     const m = await p.evaluate(() => {
-      const e = document.querySelector('.panel');
-      const cs = getComputedStyle(e);
-      return { pos: cs.position, left: Math.round(e.getBoundingClientRect().left) };
+      const panel = document.querySelector('.panel');
+      const rail = document.querySelector('.rail');
+      return { pos: getComputedStyle(panel).position,
+               left: Math.round(panel.getBoundingClientRect().left),
+               rail: getComputedStyle(rail).display };
     });
-    eq(m.pos, 'sticky', 'position');
-    if (m.left < 40) throw new Error('menu is not beside the rail');
+    eq(m.pos, 'sticky', 'menu position');
+    if (m.rail === 'none') throw new Error('the rail is gone on a desktop');
+    if (m.left < 40) throw new Error('the menu is not beside the rail');
   });
-  await step('the backdrop stays out of the way', async () => {
-    eq(await p.evaluate(() => getComputedStyle(document.querySelector('.panel-scrim')).display), 'none', 'scrim display');
+  await step('there is no bottom bar in the way', async () => {
+    eq(await p.evaluate(() => getComputedStyle(document.querySelector('.mbar')).display), 'none', 'bar display');
   });
-  await step('hiding and showing it still works the same way', async () => {
+  await step('hiding and showing the menu still works the same way', async () => {
     await p.click('#panelToggle');
     await p.waitForTimeout(300);
     if (!(await p.evaluate(() => document.body.classList.contains('panel-closed')))) throw new Error('did not hide');
     await p.click('#panelToggle');
     await p.waitForTimeout(300);
     if (await p.evaluate(() => document.body.classList.contains('panel-closed'))) throw new Error('did not come back');
+  });
+  await step('the desktop never enters the phone drill-down', async () => {
+    if (await p.evaluate(() => document.body.classList.contains('m-detail')))
+      throw new Error('m-detail leaked onto the desktop');
   });
   await ctx.close();
 }
