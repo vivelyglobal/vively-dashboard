@@ -982,10 +982,15 @@ const PARTNER_STATUS = {
   "waiting approval": { ko: "승인 대기", en: "Waiting Approval", tone: "amber", theirs: true },
   "brand accepted":   { ko: "확정", en: "Confirmed", tone: "green" },
   "confirmed":        { ko: "확정", en: "Confirmed", tone: "green" },
-  "brand rejected":   { ko: "브랜드 거절", en: "Brand Rejected", tone: "red" },
-  "declined":         { ko: "거절", en: "Refused", tone: "grey" },
-  "cancelled":        { ko: "거절", en: "Refused", tone: "grey" },
-  "canceled":         { ko: "거절", en: "Refused", tone: "grey" },
+  /* A rejection is not a roster entry. `hidden` keeps these off the
+     partner view entirely — 브랜드 거절 and 거절 alike — so a partner
+     browsing their link sees who is coming, not a list of the people who
+     were turned down or who said no. Withheld at the source, so the names
+     are not in the response for anyone to find in devtools either. */
+  "brand rejected":   { ko: "브랜드 거절", en: "Brand Rejected", tone: "red", hidden: true },
+  "declined":         { ko: "거절", en: "Refused", tone: "grey", hidden: true },
+  "cancelled":        { ko: "거절", en: "Refused", tone: "grey", hidden: true },
+  "canceled":         { ko: "거절", en: "Refused", tone: "grey", hidden: true },
   "re-schedule":      { ko: "업로드 대기", en: "Waiting For upload", tone: "blue" },
   "waiting upload":   { ko: "업로드 대기", en: "Waiting For upload", tone: "blue" },
   "uploaded":         { ko: "업로드 완료", en: "Uploaded", tone: "green" }
@@ -1000,8 +1005,16 @@ const STAGE_TO_PARTNER = {
   submitted:   { ko: "업로드 대기", en: "Waiting For upload", tone: "blue" },
   review:      { ko: "업로드 대기", en: "Waiting For upload", tone: "blue" },
   live:        { ko: "업로드 완료", en: "Uploaded", tone: "green" },
-  dropped:     { ko: "거절", en: "Refused", tone: "grey" }
+  dropped:     { ko: "거절", en: "Refused", tone: "grey", hidden: true }
 };
+
+/* Two reasons a row never reaches the partner, and they are different
+   things: `theirs` is still waiting on their own decision, `hidden` has
+   been decided against. Both are withheld; keeping them apart means the
+   withheld count still explains itself. */
+function partnerWithholds(st) {
+  return !!(st && (st.theirs || st.hidden));
+}
 
 function partnerStatusOf(p) {
   const raw = String(p.importedStatus || "").trim().toLowerCase();
@@ -1068,7 +1081,7 @@ function buildPartnerRows(db, partner) {
      settled. Filtered HERE rather than in the page, so an unapproved creator
      is never in the response for anyone to find in devtools. */
   const rows = (db.participants || []).filter((p) => ids.has(p.campaignId))
-    .filter((p) => !partnerStatusOf(p).theirs)
+    .filter((p) => !partnerWithholds(partnerStatusOf(p)))
     .map((p) => {
     const cr = byCreator[p.creatorId] || {};
     const cp = byCampaign[p.campaignId] || {};
@@ -1106,7 +1119,7 @@ function buildPartnerRows(db, partner) {
                       (a.visitTime || "").localeCompare(b.visitTime || "") ||
                       a.creator.localeCompare(b.creator));
   const withheld = (db.participants || []).filter((p) => ids.has(p.campaignId))
-    .filter((p) => partnerStatusOf(p).theirs).length;
+    .filter((p) => partnerWithholds(partnerStatusOf(p))).length;
   return { partner, withheld, contested: [...contested],
     campaigns: mine.map((c) => ({ id: c.id, brand: c.brand, name: c.name, start: c.start, end: c.end })), rows };
 }

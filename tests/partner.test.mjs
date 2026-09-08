@@ -56,7 +56,7 @@ test('a creator still awaiting brand approval is ABSENT, not just hidden', () =>
   assert.ok(!json.includes('two@x.com'), 'an unapproved creator\'s email reached the payload');
 });
 
-test('every other status still comes through', () => {
+test('a booking that is still on comes through; a rejection does not', () => {
   const many = { ...db, participants: [
     { id: 'a-x1', campaignId: 'a', creatorId: 'c1', stage: 'confirmed',  importedStatus: 'Confirmed' },
     { id: 'a-x2', campaignId: 'a', creatorId: 'c1', stage: 'dropped',    importedStatus: 'Brand Rejected' },
@@ -69,9 +69,18 @@ test('every other status still comes through', () => {
     { id: 'a-x9', campaignId: 'a', creatorId: 'c1', stage: 'shortlisted', importedStatus: 'Waiting Approval' }
   ] };
   const out = buildPartnerRows(many, 'SPLABAB');
+  /* x2 Brand Rejected, x3 Declined and x8 Cancelled are all rejections —
+     브랜드 거절 and 거절 alike — and a partner link is a list of who is
+     coming, not of who was turned down or who said no. x9 is still
+     waiting on the brand's own decision, so it is withheld as before. */
   assert.deepEqual(out.rows.map((r) => r.pid).sort(),
-    ['a-x1', 'a-x2', 'a-x3', 'a-x4', 'a-x5', 'a-x6', 'a-x7', 'a-x8']);
-  assert.equal(out.withheld, 1);
+    ['a-x1', 'a-x4', 'a-x5', 'a-x6', 'a-x7']);
+  assert.equal(out.withheld, 4, 'one awaiting approval and three rejections');
+  /* not merely absent from the table — absent from the response, so the
+     names are not in devtools either */
+  const json = JSON.stringify(out);
+  ['a-x2', 'a-x3', 'a-x8'].forEach((pid) =>
+    assert.ok(!json.includes(pid), pid + ' reached the partner payload'));
 });
 
 test('a shortlisted row with no Notion status is withheld too', () => {

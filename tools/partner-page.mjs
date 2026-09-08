@@ -104,6 +104,19 @@ await step('a withheld creator is not in the payload at all', async () => {
   if (/WITHHELD-MARKER/.test(html)) throw new Error('a withheld row is in the page source');
 });
 
+await step('no rejected creator appears anywhere on the page', async () => {
+  /* 브랜드 거절 and 거절 alike: a partner link is a list of who is coming,
+     not of who was turned down or who said no. Checked against the whole
+     delivered page, not just the table, so a rejection cannot survive in
+     the payload behind it. */
+  const html = await p.content();
+  for (const label of ['브랜드 거절', 'Brand Rejected', 'Refused'])
+    if (html.includes(label)) throw new Error(label + ' is on the partner page');
+  const gone = await p.evaluate(() =>
+    (DATA.rows || []).filter((r) => /reject|refus|거절/i.test(r.status.en + r.status.ko)).length);
+  if (gone) throw new Error(gone + ' rejected rows reached the payload');
+});
+
 await step('인원수 is shown, so a table can be held for the right number', async () => {
   const counts = await p.evaluate(() => DATA.rows.map((r) => r.headcount).filter(Boolean));
   if (!counts.length) throw new Error('no headcounts in the payload');
