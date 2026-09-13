@@ -390,6 +390,23 @@ body.auth-locked .auth-close { display: none; }
 }
 .sec-title:first-child { margin-top: 0; }
 
+/* "Notion does not agree with this" — small, amber, never in the way */
+.vmis {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 15px; height: 15px; border-radius: 50%; margin-left: 5px;
+  font-size: 10.5px; font-weight: 700; line-height: 1; cursor: help;
+  vertical-align: middle; flex-shrink: 0;
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+}
+.vmis-note {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 12px;
+  font-size: 12.5px; color: var(--text-2);
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--line));
+  background: color-mix(in srgb, var(--warning) 7%, transparent);
+  border-radius: var(--r-lg); padding: 9px 12px;
+}
+
 /* stat tile */
 .card.stat { align-self: stretch; }
 .stat .label { font-size: 12.5px; color: var(--text-2); display: flex; align-items: center; gap: 6px; }
@@ -2700,7 +2717,7 @@ function renderCampaignCalendar(view, scope) {
               const vSlot = visitSlotOf(v.p);
               const time = /\d{1,2}:\d{2}/.test(vSlot) ? vSlot.slice(-5) : '';
               return `<div class="cal-item" title="${esc(v.cr.handle)} · ${esc(v.cp.brand)} — ${esc(vSlot)}${visitSlotMoved(v.p) ? ` (moved from ${esc(v.p.visitAt)})` : ''}" data-pid="${esc(v.p.id)}">
-                <span class="cal-dot" style="background:${avColor(v.cr.handle)}"></span>
+                <span class="cal-dot" style="background:${avColor(v.cr.handle)}"></span>${visitMismatchMark(v.p)}
                 <span class="cal-name">${time ? `<span class="cal-time">${time}</span> ` : ''}${esc(v.cr.handle)}</span>
               </div>`;
             }).join('')}
@@ -2750,7 +2767,7 @@ function upcomingVisitsStrip(cp) {
         const time = /\d{1,2}:\d{2}/.test(vSlot) ? ' ' + vSlot.slice(-5) : '';
         const day = v.at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
         return `<span class="cal-item" data-pid="${esc(v.p.id)}" style="width:auto;padding:3px 9px;border:1px solid var(--line);border-radius:20px">
-          <span class="cal-dot" style="background:${avColor(v.cr.handle)}"></span>
+          <span class="cal-dot" style="background:${avColor(v.cr.handle)}"></span>${visitMismatchMark(v.p)}
           <span>${esc(v.cr.handle)}</span>
           <span style="color:var(--text-3)">${esc(day + time)}</span>
         </span>`;
@@ -3047,6 +3064,22 @@ function confirmDeleteCampaign(cp) {
    out. Merging is the one people want; unlinking is the safe one, and
    it stops the sync from touching the campaign at all.
    ------------------------------------------------------------------- */
+/* Said once in words above the board, because a row of small amber dots
+   tells you something is wrong but not what to do about it. */
+function visitMismatchBanner(cp) {
+  const off = visitMismatchesIn(cp.id);
+  if (!off.length) return '';
+  const names = off.slice(0, 4).map((p) => {
+    const cr = byCreator[p.creatorId] || {};
+    return esc(cr.handle || p.fullName || 'a creator');
+  }).join(', ');
+  return `<div class="vmis-note">
+    <span class="vmis" style="margin-left:0">!</span>
+    <span><strong>${off.length} visit ${off.length === 1 ? 'date differs' : 'dates differ'} from Notion.</strong>
+    ${names}${off.length > 4 ? ` and ${off.length - 4} more` : ''} — the time confirmed here is what the calendar
+    and the partner link use, so Notion is the one that is out of date. Open a card to see both.</span></div>`;
+}
+
 function sharedNotionFormBanner(cp) {
   const twins = campaignsSharingNotionDb(cp);
   if (!twins.length) return '';
@@ -3151,6 +3184,7 @@ function rosterTab(mount, cp) {
       <button class="btn primary sm" id="addCreators">+ Add creators</button>
     </div>
     ${sharedNotionFormBanner(cp)}
+    ${visitMismatchBanner(cp)}
     ${upcomingVisitsStrip(cp)}
     <div id="rosterBody"></div>`;
 
@@ -3187,7 +3221,7 @@ function renderBoard(mount, cp) {
         return `<div class="kb-card" draggable="true" data-pid="${p.id}">
           ${whoHtml(cr)}
           <div class="kb-meta"><span>ER ${cr.er}%</span><span>${esc(cr.country)}</span>${p.fee ? `<span>${wonK(p.fee)}</span>` : ''}</div>
-          ${visitSlotOf(p) ? `<div style="font-size:11px;color:var(--text-2);margin-top:5px">🗓 ${esc(visitSlotOf(p))}${p.confirmedVisitAt ? ' <span style="color:var(--text-3)">confirmed</span>' : ''}</div>` : ''}
+          ${visitSlotOf(p) ? `<div style="font-size:11px;color:var(--text-2);margin-top:5px">🗓 ${esc(visitSlotOf(p))}${p.confirmedVisitAt ? ' <span style="color:var(--text-3)">confirmed</span>' : ''}${visitMismatchMark(p)}</div>` : ''}
           ${p.dropReason ? `<div style="font-size:11px;color:var(--text-3);margin-top:5px">${esc(p.dropReason)}</div>` : ''}
           ${p.content && p.content.views ? `<div style="font-size:11px;color:var(--text-2);margin-top:5px">${kmb(p.content.views)} views${p.content.metricsAt ? ` <span style="color:var(--text-3)">as of ${esc(String(p.content.metricsAt).slice(0, 10))}</span>` : ''}</div>` : ''}
         </div>`;
@@ -3231,7 +3265,7 @@ function renderRosterTable(mount, cp) {
   const ps = partsOf(cp.id);
   mount.innerHTML = `<div class="card" style="padding:0"><div class="tbl-wrap" style="max-height:56vh;overflow-y:auto"><table class="tbl">
     <thead><tr><th>Creator</th><th>Source</th><th class="num">Followers</th><th class="num">ER</th><th>Stage</th>
-      <th>Contacted</th><th>Confirmed</th><th class="num">Fee</th><th class="num">Views</th><th></th></tr></thead>
+      <th>Visit</th><th>Contacted</th><th>Confirmed</th><th class="num">Fee</th><th class="num">Views</th><th></th></tr></thead>
     <tbody>${ps.map((p) => {
       const cr = byCreator[p.creatorId];
       return `<tr>
@@ -3241,6 +3275,7 @@ function renderRosterTable(mount, cp) {
         <td><select data-pid="${p.id}" class="stageSel" style="width:150px;padding:5px 8px;font-size:12px">
           ${STAGES.map((st) => `<option value="${st.id}" ${p.stage === st.id ? 'selected' : ''}>${st.label}</option>`).join('')}
         </select></td>
+        <td style="white-space:nowrap">${visitSlotOf(p) ? esc(visitSlotOf(p)) + visitMismatchMark(p) : '<span style="color:var(--text-3)">—</span>'}</td>
         <td>${daysAgo(p.contactedAt)}</td><td>${daysAgo(p.confirmedAt)}</td>
         <td class="num">${p.fee ? wonK(p.fee) : '—'}</td>
         <td class="num">${p.content && p.content.views ? num(p.content.views) : '—'}</td>
@@ -3267,6 +3302,13 @@ function exportRoster(cp) {
 /* --------------------------- add creators (autosuggest) --------------------------- */
 function openAddCreators(cp) {
   const already = new Set(partsOf(cp.id).map((p) => p.creatorId));
+  /* Read BEFORE the drawer is built, because the drawer's own markup uses
+     it. It used to be declared twenty lines below this point, so the
+     template literal hit it inside its temporal dead zone and threw
+     "Cannot access 'hiddenBlocked' before initialization". The throw died
+     inside the click handler with nothing to catch it, so the button
+     looked simply dead — no drawer, no error, nothing. */
+  const hiddenBlocked = DB.creators.filter((c) => !already.has(c.id) && isBlocked(c)).length;
   openDrawer(`Add creators — ${esc(cp.brand)}`, `
     <div class="note" style="margin-bottom:16px;">
       Type a handle, name, category or country. Suggestions are scored against this campaign:
@@ -3291,7 +3333,6 @@ function openAddCreators(cp) {
     .map((c) => ({ c, ...suggestScore(c, cp) }))
     .filter((s) => !s.blocked)
     .sort((a, b) => b.score - a.score);
-  const hiddenBlocked = DB.creators.filter((c) => !already.has(c.id) && isBlocked(c)).length;
 
   function renderPicked() {
     $('#acCount').textContent = picked.size;
@@ -5766,6 +5807,28 @@ function visitSlotMoved(p) {
   return !!(p && p.confirmedVisitAt && p.visitAt && p.confirmedVisitAt !== p.visitAt);
 }
 
+/* The dashboard and Notion disagree about when someone is coming more
+   often than anyone notices. A time confirmed here is never touched by
+   the sync, while `visitAt` keeps whatever the creator's Notion row still
+   says — so the moment a booking is moved from this side, the two drift
+   apart and stay that way until somebody edits Notion.
+
+   That fact already lived on the row; the only place it was ever shown
+   was the participant drawer, one creator at a time. This is the same
+   fact, on every list actually read. */
+function visitMismatchTitle(p) {
+  return `Notion still says ${p.visitAt}, this dashboard says ${p.confirmedVisitAt}. `
+    + 'The confirmed time is the one the calendar, the partner link and the confirmation '
+    + 'message all use — update Notion so the two agree.';
+}
+function visitMismatchMark(p) {
+  if (!visitSlotMoved(p)) return '';
+  return `<span class="vmis" title="${esc(visitMismatchTitle(p))}" aria-label="visit date differs from Notion">!</span>`;
+}
+function visitMismatchesIn(campaignId) {
+  return DB.participants.filter((p) => p.campaignId === campaignId && visitSlotMoved(p));
+}
+
 /* A stored slot split for the two <input>s that edit it. A date with no
    time is legitimate — plenty of bookings are "that Tuesday" — so an
    empty time is carried through rather than defaulted to midnight, which
@@ -6059,9 +6122,24 @@ async function runNotionSync(cp, opts) {
   const dbIsShared = twins.length > 0;
 
   let newRows = 0, updated = 0, newCreators = 0, matched = 0, skipped = 0, moved = 0, reslotted = 0, adopted = 0, metricsUpdated = 0, rehomed = 0, heldBack = 0, ambiguous = 0;
-  data.rows.forEach((row) => {
+  /* "1 skipped" is a useless thing to be told. There are exactly two
+     reasons a submission is dropped and they need completely different
+     fixes — a handle the parser could not read is a typo in Notion, while
+     a duplicate means two submissions for one person. Record which, and
+     for whom. */
+  const skips = [];
+  const skip = (why, label) => { skipped++; skips.push({ why, label }); };
+
+  data.rows.forEach((row, rowIdx) => {
     const ap = notionRowToApplicant(row.properties, cp.notionMapping);
-    if (!ap.handle) { skipped++; return; }
+    if (!ap.handle) {
+      const col = (cp.notionMapping || {}).instagram;
+      const raw = col ? String(row.properties[col] == null ? '' : row.properties[col]).trim() : '';
+      skip('no-handle', `row ${rowIdx + 1}: ` + (raw
+        ? `could not read a handle from "${raw.slice(0, 40)}"`
+        : (col ? `"${col}" is empty` : 'no column is mapped to Instagram')));
+      return;
+    }
 
     let cr = findCreatorByHandle(ap.handle);
     if (!cr) {
@@ -6169,7 +6247,14 @@ async function runNotionSync(cp, opts) {
     } else {
       /* only rows already claimed by a *different* submission are duplicates
          now — unclaimed ones were adopted above */
-      if (DB.participants.some((x) => x.campaignId === cp.id && x.creatorId === cr.id)) { skipped++; return; }
+      const twin = DB.participants.find((x) => x.campaignId === cp.id && x.creatorId === cr.id);
+      if (twin) {
+        /* Someone submitted twice. The first submission owns the roster
+           row; this one has nowhere to go without creating a duplicate
+           person on the campaign. */
+        skip('duplicate', `${ap.handle} is already on this roster under an earlier submission`);
+        return;
+      }
       const np = {
         id: cp.id + '-' + cr.id, campaignId: cp.id, creatorId: cr.id, stage: ap.stage,
         source: 'Notion form', fee: 0, contactedAt: null, repliedAt: null, confirmedAt: null, shippedAt: null,
@@ -6197,7 +6282,7 @@ async function runNotionSync(cp, opts) {
     else if (!data.rows.some((r) => r.properties[mappedTo])) visitWarning = `“${mappedTo}” is empty for every row`;
   }
 
-  const stats = { campaign: cp, rows: data.rows.length, newRows, updated, moved, reslotted, skipped, newCreators, adopted, metricsUpdated, rehomed, heldBack, ambiguous, twins: twins.map((c) => c.name), visitWarning };
+  const stats = { campaign: cp, rows: data.rows.length, newRows, updated, moved, reslotted, skipped, skips, newCreators, adopted, metricsUpdated, rehomed, heldBack, ambiguous, twins: twins.map((c) => c.name), visitWarning };
   if (batch) return stats;
 
   render();
@@ -6215,7 +6300,11 @@ async function runNotionSync(cp, opts) {
     (reslotted ? `, ${reslotted} visit date${reslotted === 1 ? '' : 's'}` : '') +
     (metricsUpdated ? `, ${metricsUpdated} content/metrics` : '') +
     (ambiguous ? `, ${ambiguous} left alone (this form is linked to more than one campaign)` : '') +
-    (skipped ? ', ' + skipped + ' skipped' : '') +
+    /* A skipped submission is a person who is not on the roster and will
+       not be on the next sync either. The bare count sent people hunting
+       through Notion for a row they could not identify, so it says which. */
+    (skipped ? `, ${skipped} skipped (${skips.slice(0, 2).map((x) => x.label).join('; ')}` +
+      (skips.length > 2 ? `; +${skips.length - 2} more, see the 🔍 diagnostic)` : ')') : '') +
     (newCreators ? ', ' + newCreators + ' new creators' : '') +
     (dedupe.mergedCreators ? `, ${dedupe.mergedCreators} duplicate${dedupe.mergedCreators === 1 ? '' : 's'} merged` : '');
   toast(summary);
@@ -6535,6 +6624,9 @@ async function openNotionDiagnostic(cp) {
   add(`  participants: ${ps.length}`);
   add(`  with notionPageId: ${ps.filter((p) => p.notionPageId).length}`);
   add(`  with visitAt: ${ps.filter((p) => p.visitAt).length}`);
+  const off = ps.filter(visitSlotMoved);
+  add(`  visit dates confirmed here that differ from Notion: ${off.length}`);
+  off.forEach((p) => add(`    ${(byCreator[p.creatorId] || {}).handle || p.id}: notion="${p.visitAt}" dashboard="${p.confirmedVisitAt}"`));
   add(`  stages: ${Object.entries(ps.reduce((m, p) => { m[p.stage] = (m[p.stage] || 0) + 1; return m; }, {})).map(([k, v]) => k + '=' + v).join(', ') || '(none)'}`);
 
   let schema = null, data = null, err = null;
@@ -6563,16 +6655,46 @@ async function openNotionDiagnostic(cp) {
       add(`    ${p.name} | ${p.type} | ${hit ? String(hit.properties[p.name]).slice(0, 50) : '(empty in every row)'}`);
     });
 
-    add('');
-    add('  WHAT THE SYNC MAKES OF THE FIRST 5 ROWS');
-    data.rows.slice(0, 5).forEach((row, i) => {
+    /* The skipped row is the whole reason anyone opens this, and with
+       more than five submissions it used to be off the bottom of the
+       list. Every row, and the ones that will not land named first. */
+    const verdicts = data.rows.map((row, i) => {
       const ap = notionRowToApplicant(row.properties, cp.notionMapping || {});
       const known = DB.participants.find((x) => x.notionPageId === row.pageId);
       const byCr = ap.handle ? findCreatorByHandle(ap.handle) : null;
       const orphan = byCr && DB.participants.find((x) => x.campaignId === cp.id && x.creatorId === byCr.id && !x.notionPageId);
-      add(`    row ${i + 1}: pageId=${row.pageId.slice(0, 8)}… handle=${ap.handle || '(NONE - row will be skipped)'} ` +
-          `visitAt="${ap.visitAt}" status="${ap.statusRaw}" -> stage=${ap.stage}`);
-      add(`            matches existing row by pageId: ${known ? 'yes' : 'no'}; unclaimed roster row to adopt: ${orphan ? 'yes' : 'no'}`);
+      const twin = !known && !orphan && byCr &&
+        DB.participants.find((x) => x.campaignId === cp.id && x.creatorId === byCr.id);
+      let verdict, skipWhy = null;
+      if (!ap.handle) {
+        const col = (cp.notionMapping || {}).instagram;
+        const raw = col ? String(row.properties[col] == null ? '' : row.properties[col]).trim() : '';
+        verdict = 'SKIPPED';
+        skipWhy = raw ? `no handle could be read from "${raw.slice(0, 60)}"`
+                      : (col ? `the mapped column "${col}" is empty on this row` : 'no column is mapped to Instagram');
+      } else if (twin) {
+        verdict = 'SKIPPED';
+        skipWhy = `${ap.handle} is already on this roster under an earlier submission (row id ${twin.id})`;
+      } else if (known) verdict = 'updates an existing roster row';
+      else if (orphan) verdict = 'adopts an unclaimed roster row';
+      else verdict = 'creates a new roster row';
+      return { i, row, ap, verdict, skipWhy };
+    });
+
+    const dropped = verdicts.filter((v) => v.skipWhy);
+    add('');
+    add(`  ROWS THAT WILL NOT LAND: ${dropped.length}`);
+    if (!dropped.length) add('    (none — every submission reaches the roster)');
+    dropped.forEach((v) => {
+      add(`    row ${v.i + 1} (pageId ${v.row.pageId.slice(0, 8)}…): ${v.skipWhy}`);
+      add(`      full name on the row: "${v.ap.fullName || '(blank)'}"  status: "${v.ap.statusRaw}"`);
+    });
+
+    add('');
+    add('  WHAT THE SYNC MAKES OF EVERY ROW');
+    verdicts.forEach((v) => {
+      add(`    row ${v.i + 1}: handle=${v.ap.handle || '(none)'} visitAt="${v.ap.visitAt}" ` +
+          `status="${v.ap.statusRaw}" -> stage=${v.ap.stage} :: ${v.verdict}`);
     });
 
     const withHandle = data.rows.filter((r) => notionRowToApplicant(r.properties, cp.notionMapping || {}).handle).length;

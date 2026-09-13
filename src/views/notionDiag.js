@@ -1,6 +1,6 @@
-import { NOTION_FIELD_DEFS, healNotionMapping, notionRowToApplicant, openNotionLinkDrawer, openNotionMappingDrawer, runNotionSync } from '../import/notion.js';
+import { NOTION_FIELD_DEFS, healNotionMapping, notionRowToApplicant, openNotionLinkDrawer, openNotionMappingDrawer, runNotionSync, visitSlotMoved } from '../import/notion.js';
 import { findCreatorByHandle } from '../model/creators.js';
-import { DB } from '../model/db.js';
+import { DB, byCreator } from '../model/db.js';
 import { $, esc } from '../ui/dom.js';
 import { copyText } from '../ui/html.js';
 import { openDrawer, toast } from '../ui/overlay.js';
@@ -33,6 +33,9 @@ export async function openNotionDiagnostic(cp) {
   add(`  participants: ${ps.length}`);
   add(`  with notionPageId: ${ps.filter((p) => p.notionPageId).length}`);
   add(`  with visitAt: ${ps.filter((p) => p.visitAt).length}`);
+  const off = ps.filter(visitSlotMoved);
+  add(`  visit dates confirmed here that differ from Notion: ${off.length}`);
+  off.forEach((p) => add(`    ${(byCreator[p.creatorId] || {}).handle || p.id}: notion="${p.visitAt}" dashboard="${p.confirmedVisitAt}"`));
   add(`  stages: ${Object.entries(ps.reduce((m, p) => { m[p.stage] = (m[p.stage] || 0) + 1; return m; }, {})).map(([k, v]) => k + '=' + v).join(', ') || '(none)'}`);
 
   let schema = null, data = null, err = null;
@@ -61,16 +64,46 @@ export async function openNotionDiagnostic(cp) {
       add(`    ${p.name} | ${p.type} | ${hit ? String(hit.properties[p.name]).slice(0, 50) : '(empty in every row)'}`);
     });
 
-    add('');
-    add('  WHAT THE SYNC MAKES OF THE FIRST 5 ROWS');
-    data.rows.slice(0, 5).forEach((row, i) => {
+    /* The skipped row is the whole reason anyone opens this, and with
+       more than five submissions it used to be off the bottom of the
+       list. Every row, and the ones that will not land named first. */
+    const verdicts = data.rows.map((row, i) => {
       const ap = notionRowToApplicant(row.properties, cp.notionMapping || {});
       const known = DB.participants.find((x) => x.notionPageId === row.pageId);
       const byCr = ap.handle ? findCreatorByHandle(ap.handle) : null;
       const orphan = byCr && DB.participants.find((x) => x.campaignId === cp.id && x.creatorId === byCr.id && !x.notionPageId);
-      add(`    row ${i + 1}: pageId=${row.pageId.slice(0, 8)}… handle=${ap.handle || '(NONE - row will be skipped)'} ` +
-          `visitAt="${ap.visitAt}" status="${ap.statusRaw}" -> stage=${ap.stage}`);
-      add(`            matches existing row by pageId: ${known ? 'yes' : 'no'}; unclaimed roster row to adopt: ${orphan ? 'yes' : 'no'}`);
+      const twin = !known && !orphan && byCr &&
+        DB.participants.find((x) => x.campaignId === cp.id && x.creatorId === byCr.id);
+      let verdict, skipWhy = null;
+      if (!ap.handle) {
+        const col = (cp.notionMapping || {}).instagram;
+        const raw = col ? String(row.properties[col] == null ? '' : row.properties[col]).trim() : '';
+        verdict = 'SKIPPED';
+        skipWhy = raw ? `no handle could be read from "${raw.slice(0, 60)}"`
+                      : (col ? `the mapped column "${col}" is empty on this row` : 'no column is mapped to Instagram');
+      } else if (twin) {
+        verdict = 'SKIPPED';
+        skipWhy = `${ap.handle} is already on this roster under an earlier submission (row id ${twin.id})`;
+      } else if (known) verdict = 'updates an existing roster row';
+      else if (orphan) verdict = 'adopts an unclaimed roster row';
+      else verdict = 'creates a new roster row';
+      return { i, row, ap, verdict, skipWhy };
+    });
+
+    const dropped = verdicts.filter((v) => v.skipWhy);
+    add('');
+    add(`  ROWS THAT WILL NOT LAND: ${dropped.length}`);
+    if (!dropped.length) add('    (none — every submission reaches the roster)');
+    dropped.forEach((v) => {
+      add(`    row ${v.i + 1} (pageId ${v.row.pageId.slice(0, 8)}…): ${v.skipWhy}`);
+      add(`      full name on the row: "${v.ap.fullName || '(blank)'}"  status: "${v.ap.statusRaw}"`);
+    });
+
+    add('');
+    add('  WHAT THE SYNC MAKES OF EVERY ROW');
+    verdicts.forEach((v) => {
+      add(`    row ${v.i + 1}: handle=${v.ap.handle || '(none)'} visitAt="${v.ap.visitAt}" ` +
+          `status="${v.ap.statusRaw}" -> stage=${v.ap.stage} :: ${v.verdict}`);
     });
 
     const withHandle = data.rows.filter((r) => notionRowToApplicant(r.properties, cp.notionMapping || {}).handle).length;

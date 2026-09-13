@@ -28,7 +28,8 @@
     "check:migration": "node tools/rehearse-migration.mjs",
     "migrate:dry": "node tools/migrate-social-content.mjs",
     "check:uifixes": "node tools/seed.mjs > tmp/seed.json && node tools/ui-fixes-page.mjs",
-    "check:save": "node tools/seed.mjs > tmp/seed.json && node tools/save-reliability-page.mjs"
+    "check:save": "node tools/seed.mjs > tmp/seed.json && node tools/save-reliability-page.mjs",
+    "check:syncskips": "node tools/seed.mjs > tmp/seed.json && node tools/sync-skips-page.mjs"
   },
   "engines": {
     "node": ">=18"

@@ -146,6 +146,28 @@ export function visitSlotMoved(p) {
   return !!(p && p.confirmedVisitAt && p.visitAt && p.confirmedVisitAt !== p.visitAt);
 }
 
+/* The dashboard and Notion disagree about when someone is coming more
+   often than anyone notices. A time confirmed here is never touched by
+   the sync, while `visitAt` keeps whatever the creator's Notion row still
+   says — so the moment a booking is moved from this side, the two drift
+   apart and stay that way until somebody edits Notion.
+
+   That fact already lived on the row; the only place it was ever shown
+   was the participant drawer, one creator at a time. This is the same
+   fact, on every list actually read. */
+export function visitMismatchTitle(p) {
+  return `Notion still says ${p.visitAt}, this dashboard says ${p.confirmedVisitAt}. `
+    + 'The confirmed time is the one the calendar, the partner link and the confirmation '
+    + 'message all use — update Notion so the two agree.';
+}
+export function visitMismatchMark(p) {
+  if (!visitSlotMoved(p)) return '';
+  return `<span class="vmis" title="${esc(visitMismatchTitle(p))}" aria-label="visit date differs from Notion">!</span>`;
+}
+export function visitMismatchesIn(campaignId) {
+  return DB.participants.filter((p) => p.campaignId === campaignId && visitSlotMoved(p));
+}
+
 /* A stored slot split for the two <input>s that edit it. A date with no
    time is legitimate — plenty of bookings are "that Tuesday" — so an
    empty time is carried through rather than defaulted to midnight, which
@@ -439,9 +461,24 @@ export async function runNotionSync(cp, opts) {
   const dbIsShared = twins.length > 0;
 
   let newRows = 0, updated = 0, newCreators = 0, matched = 0, skipped = 0, moved = 0, reslotted = 0, adopted = 0, metricsUpdated = 0, rehomed = 0, heldBack = 0, ambiguous = 0;
-  data.rows.forEach((row) => {
+  /* "1 skipped" is a useless thing to be told. There are exactly two
+     reasons a submission is dropped and they need completely different
+     fixes — a handle the parser could not read is a typo in Notion, while
+     a duplicate means two submissions for one person. Record which, and
+     for whom. */
+  const skips = [];
+  const skip = (why, label) => { skipped++; skips.push({ why, label }); };
+
+  data.rows.forEach((row, rowIdx) => {
     const ap = notionRowToApplicant(row.properties, cp.notionMapping);
-    if (!ap.handle) { skipped++; return; }
+    if (!ap.handle) {
+      const col = (cp.notionMapping || {}).instagram;
+      const raw = col ? String(row.properties[col] == null ? '' : row.properties[col]).trim() : '';
+      skip('no-handle', `row ${rowIdx + 1}: ` + (raw
+        ? `could not read a handle from "${raw.slice(0, 40)}"`
+        : (col ? `"${col}" is empty` : 'no column is mapped to Instagram')));
+      return;
+    }
 
     let cr = findCreatorByHandle(ap.handle);
     if (!cr) {
@@ -549,7 +586,14 @@ export async function runNotionSync(cp, opts) {
     } else {
       /* only rows already claimed by a *different* submission are duplicates
          now — unclaimed ones were adopted above */
-      if (DB.participants.some((x) => x.campaignId === cp.id && x.creatorId === cr.id)) { skipped++; return; }
+      const twin = DB.participants.find((x) => x.campaignId === cp.id && x.creatorId === cr.id);
+      if (twin) {
+        /* Someone submitted twice. The first submission owns the roster
+           row; this one has nowhere to go without creating a duplicate
+           person on the campaign. */
+        skip('duplicate', `${ap.handle} is already on this roster under an earlier submission`);
+        return;
+      }
       const np = {
         id: cp.id + '-' + cr.id, campaignId: cp.id, creatorId: cr.id, stage: ap.stage,
         source: 'Notion form', fee: 0, contactedAt: null, repliedAt: null, confirmedAt: null, shippedAt: null,
@@ -577,7 +621,7 @@ export async function runNotionSync(cp, opts) {
     else if (!data.rows.some((r) => r.properties[mappedTo])) visitWarning = `“${mappedTo}” is empty for every row`;
   }
 
-  const stats = { campaign: cp, rows: data.rows.length, newRows, updated, moved, reslotted, skipped, newCreators, adopted, metricsUpdated, rehomed, heldBack, ambiguous, twins: twins.map((c) => c.name), visitWarning };
+  const stats = { campaign: cp, rows: data.rows.length, newRows, updated, moved, reslotted, skipped, skips, newCreators, adopted, metricsUpdated, rehomed, heldBack, ambiguous, twins: twins.map((c) => c.name), visitWarning };
   if (batch) return stats;
 
   notify();
@@ -595,7 +639,11 @@ export async function runNotionSync(cp, opts) {
     (reslotted ? `, ${reslotted} visit date${reslotted === 1 ? '' : 's'}` : '') +
     (metricsUpdated ? `, ${metricsUpdated} content/metrics` : '') +
     (ambiguous ? `, ${ambiguous} left alone (this form is linked to more than one campaign)` : '') +
-    (skipped ? ', ' + skipped + ' skipped' : '') +
+    /* A skipped submission is a person who is not on the roster and will
+       not be on the next sync either. The bare count sent people hunting
+       through Notion for a row they could not identify, so it says which. */
+    (skipped ? `, ${skipped} skipped (${skips.slice(0, 2).map((x) => x.label).join('; ')}` +
+      (skips.length > 2 ? `; +${skips.length - 2} more, see the 🔍 diagnostic)` : ')') : '') +
     (newCreators ? ', ' + newCreators + ' new creators' : '') +
     (dedupe.mergedCreators ? `, ${dedupe.mergedCreators} duplicate${dedupe.mergedCreators === 1 ? '' : 's'} merged` : '');
   toast(summary);

@@ -1,6 +1,6 @@
 import { SERIES_HEX, barsH, fitHeight, lineChart, sparkSvg, splitBar } from '../charts/index.js';
 import { openMetricsImport } from '../import/metrics.js';
-import { campaignsSharingNotionDb, joinSlot, notionLinkedCampaigns, openNotionMappingDrawer, splitSlot, syncAllNotionCampaigns, visitSlotMoved, visitSlotOf } from '../import/notion.js';
+import { campaignsSharingNotionDb, joinSlot, notionLinkedCampaigns, openNotionMappingDrawer, splitSlot, syncAllNotionCampaigns, visitMismatchMark, visitMismatchesIn, visitSlotMoved, visitSlotOf } from '../import/notion.js';
 import { DAY, TODAY, addDays, dLabel, iso } from '../lib/dates.js';
 import { engagementsOf, kmb, money2, num, pct, won, wonK } from '../lib/format.js';
 import { recomputeCreatorStats } from '../model/creators.js';
@@ -323,6 +323,22 @@ export function confirmDeleteCampaign(cp) {
    out. Merging is the one people want; unlinking is the safe one, and
    it stops the sync from touching the campaign at all.
    ------------------------------------------------------------------- */
+/* Said once in words above the board, because a row of small amber dots
+   tells you something is wrong but not what to do about it. */
+export function visitMismatchBanner(cp) {
+  const off = visitMismatchesIn(cp.id);
+  if (!off.length) return '';
+  const names = off.slice(0, 4).map((p) => {
+    const cr = byCreator[p.creatorId] || {};
+    return esc(cr.handle || p.fullName || 'a creator');
+  }).join(', ');
+  return `<div class="vmis-note">
+    <span class="vmis" style="margin-left:0">!</span>
+    <span><strong>${off.length} visit ${off.length === 1 ? 'date differs' : 'dates differ'} from Notion.</strong>
+    ${names}${off.length > 4 ? ` and ${off.length - 4} more` : ''} — the time confirmed here is what the calendar
+    and the partner link use, so Notion is the one that is out of date. Open a card to see both.</span></div>`;
+}
+
 export function sharedNotionFormBanner(cp) {
   const twins = campaignsSharingNotionDb(cp);
   if (!twins.length) return '';
@@ -427,6 +443,7 @@ export function rosterTab(mount, cp) {
       <button class="btn primary sm" id="addCreators">+ Add creators</button>
     </div>
     ${sharedNotionFormBanner(cp)}
+    ${visitMismatchBanner(cp)}
     ${upcomingVisitsStrip(cp)}
     <div id="rosterBody"></div>`;
 
@@ -463,7 +480,7 @@ export function renderBoard(mount, cp) {
         return `<div class="kb-card" draggable="true" data-pid="${p.id}">
           ${whoHtml(cr)}
           <div class="kb-meta"><span>ER ${cr.er}%</span><span>${esc(cr.country)}</span>${p.fee ? `<span>${wonK(p.fee)}</span>` : ''}</div>
-          ${visitSlotOf(p) ? `<div style="font-size:11px;color:var(--text-2);margin-top:5px">🗓 ${esc(visitSlotOf(p))}${p.confirmedVisitAt ? ' <span style="color:var(--text-3)">confirmed</span>' : ''}</div>` : ''}
+          ${visitSlotOf(p) ? `<div style="font-size:11px;color:var(--text-2);margin-top:5px">🗓 ${esc(visitSlotOf(p))}${p.confirmedVisitAt ? ' <span style="color:var(--text-3)">confirmed</span>' : ''}${visitMismatchMark(p)}</div>` : ''}
           ${p.dropReason ? `<div style="font-size:11px;color:var(--text-3);margin-top:5px">${esc(p.dropReason)}</div>` : ''}
           ${p.content && p.content.views ? `<div style="font-size:11px;color:var(--text-2);margin-top:5px">${kmb(p.content.views)} views${p.content.metricsAt ? ` <span style="color:var(--text-3)">as of ${esc(String(p.content.metricsAt).slice(0, 10))}</span>` : ''}</div>` : ''}
         </div>`;
@@ -507,7 +524,7 @@ export function renderRosterTable(mount, cp) {
   const ps = partsOf(cp.id);
   mount.innerHTML = `<div class="card" style="padding:0"><div class="tbl-wrap" style="max-height:56vh;overflow-y:auto"><table class="tbl">
     <thead><tr><th>Creator</th><th>Source</th><th class="num">Followers</th><th class="num">ER</th><th>Stage</th>
-      <th>Contacted</th><th>Confirmed</th><th class="num">Fee</th><th class="num">Views</th><th></th></tr></thead>
+      <th>Visit</th><th>Contacted</th><th>Confirmed</th><th class="num">Fee</th><th class="num">Views</th><th></th></tr></thead>
     <tbody>${ps.map((p) => {
       const cr = byCreator[p.creatorId];
       return `<tr>
@@ -517,6 +534,7 @@ export function renderRosterTable(mount, cp) {
         <td><select data-pid="${p.id}" class="stageSel" style="width:150px;padding:5px 8px;font-size:12px">
           ${STAGES.map((st) => `<option value="${st.id}" ${p.stage === st.id ? 'selected' : ''}>${st.label}</option>`).join('')}
         </select></td>
+        <td style="white-space:nowrap">${visitSlotOf(p) ? esc(visitSlotOf(p)) + visitMismatchMark(p) : '<span style="color:var(--text-3)">—</span>'}</td>
         <td>${daysAgo(p.contactedAt)}</td><td>${daysAgo(p.confirmedAt)}</td>
         <td class="num">${p.fee ? wonK(p.fee) : '—'}</td>
         <td class="num">${p.content && p.content.views ? num(p.content.views) : '—'}</td>
@@ -543,6 +561,13 @@ export function exportRoster(cp) {
 /* --------------------------- add creators (autosuggest) --------------------------- */
 export function openAddCreators(cp) {
   const already = new Set(partsOf(cp.id).map((p) => p.creatorId));
+  /* Read BEFORE the drawer is built, because the drawer's own markup uses
+     it. It used to be declared twenty lines below this point, so the
+     template literal hit it inside its temporal dead zone and threw
+     "Cannot access 'hiddenBlocked' before initialization". The throw died
+     inside the click handler with nothing to catch it, so the button
+     looked simply dead — no drawer, no error, nothing. */
+  const hiddenBlocked = DB.creators.filter((c) => !already.has(c.id) && isBlocked(c)).length;
   openDrawer(`Add creators — ${esc(cp.brand)}`, `
     <div class="note" style="margin-bottom:16px;">
       Type a handle, name, category or country. Suggestions are scored against this campaign:
@@ -567,7 +592,6 @@ export function openAddCreators(cp) {
     .map((c) => ({ c, ...suggestScore(c, cp) }))
     .filter((s) => !s.blocked)
     .sort((a, b) => b.score - a.score);
-  const hiddenBlocked = DB.creators.filter((c) => !already.has(c.id) && isBlocked(c)).length;
 
   function renderPicked() {
     $('#acCount').textContent = picked.size;
