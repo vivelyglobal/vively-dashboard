@@ -2,10 +2,11 @@ import { STATUS_MAP, TEMPLATES } from '../import/excel.js';
 import { iso } from '../lib/dates.js';
 import { num } from '../lib/format.js';
 import { duplicateCreatorGroups, mergeDuplicateCreators } from '../model/creators.js';
-import { DB, byCampaign, byCreator, clearPersisted, linkSocialContent, notify, persist, persistState } from '../model/db.js';
+import { DB, byCampaign, byCreator, clearPersisted, linkSocialContent, notify, persist, persistState, serverSave, toastAfterSave } from '../model/db.js';
 import { SETTINGS } from '../model/settings.js';
 import { SOURCES, newId, tierOf } from '../model/vocab.js';
-import { $, esc } from '../ui/dom.js';
+import { SM, SM_CONTENT_ALIASES, SM_CREATOR_ALIASES, commitSheetMetrics, dryRunSheetMetrics, fetchSheetTab, guessSheetColumns, saveSheetMetricsConfig } from '../sync/sheetMetrics.js';
+import { $, $$, esc } from '../ui/dom.js';
 import { downloadFile, flagPill, stagePill, statCard, whoHtml } from '../ui/html.js';
 import { toast } from '../ui/overlay.js';
 import { settingsCalendar } from './calendar.js';
@@ -19,6 +20,7 @@ export const SETTINGS_ITEMS = [
   { id: 'templates',    label: 'Campaign templates',  sub: 'the two Excel sheets' },
   { id: 'blacklist',    label: 'Creator blacklist',   sub: 'blocked, flagged, preferred' },
   { id: 'sheet',        label: 'Google Sheet',        sub: 'shared store for the team' },
+  { id: 'sheetmetrics', label: 'Sheet metrics',       sub: 'read performance from a scraper Sheet' },
   { id: 'calendar',     label: 'Google Calendar',     sub: 'push bookings to a calendar' },
   { id: 'notion',       label: 'Notion',              sub: 'stage changes written back' },
   { id: 'partners',     label: 'Partners',            sub: 'share progress, read their comments' },
@@ -30,6 +32,7 @@ export const SETTINGS_ITEMS = [
 
 export function renderSettings(view, item) {
   if (item === 'templates')  return settingsTemplates(view);
+  if (item === 'sheetmetrics') return settingsSheetMetrics(view);
   if (item === 'blacklist')  return settingsBlacklist(view);
   if (item === 'sheet')      return settingsSheets(view);
   if (item === 'calendar')   return settingsCalendar(view);
@@ -173,6 +176,237 @@ export function renderSettings(view, item) {
       <span class="tag">Imported CSV</span> and immediately appear in campaign auto-suggest.</p>
     </div>
   </div>`;
+}
+
+/* ------------------------------------------------------------------
+   Setup → Sheet metrics.
+
+   Deliberately a different panel from Setup → Google Sheet. That one is
+   the workspace mirror and its Pull replaces everything; this one only
+   ever reads numbers onto records that already exist. Keeping them apart
+   on screen is as much a part of the safety as keeping the code apart.
+   ------------------------------------------------------------------ */
+export let SM_DRY = null;
+
+export function smTabRows() {
+  return (SM.contentTabs || []).map((t, i) => `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+      <input type="checkbox" data-smton="${i}" ${t.on ? 'checked' : ''}/>
+      <input type="text" data-smtname="${i}" value="${esc(t.name || '')}" placeholder="tab name (yours, for reading)" style="flex:1"/>
+      <input type="text" data-smtgid="${i}" value="${esc(t.gid || '')}" placeholder="gid" style="width:120px"/>
+      <button class="btn xs" data-smtdel="${i}">Remove</button>
+    </div>`).join('');
+}
+
+export function smMapRows(which, fields, map) {
+  return fields.map((f) => `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:5px">
+      <code style="width:120px;font-size:11.5px;color:var(--text-3)">${f}</code>
+      <input type="text" data-smmap="${which}" data-field="${f}" value="${esc((map || {})[f] || '')}"
+        placeholder="the column header in your Sheet" style="flex:1"/>
+    </div>`).join('');
+}
+
+export function settingsSheetMetrics(view) {
+  view.innerHTML = `
+    <div class="card" style="max-width:860px;margin-bottom:14px">
+      <div class="card-head"><h3>Performance from your scraper Sheet</h3><div class="sp"></div>
+        <span class="pill ${SM.at ? 'green' : 'grey'}">${SM.at ? 'read ' + SM.at.toLocaleString() : 'never read'}</span></div>
+      <p class="card-sub">Reads views, likes and comments onto content and creators that are already here.
+        It never writes to the Sheet, never creates a creator, and never changes which campaign anyone is on.
+        This is not the workspace mirror in <strong>Setup → Google Sheet</strong> — that one is a two-way copy
+        of everything and its Pull replaces the workspace. These two share no settings.</p>
+
+      <div class="field" style="margin-top:14px"><label>Sheet link — published to the web, or the normal /spreadsheets/d/… link</label>
+        <input type="text" id="smBase" value="${esc(SM.base)}" placeholder="https://docs.google.com/spreadsheets/d/…"/></div>
+      <div class="grid g2" style="gap:10px">
+        <div class="field"><label>Engagement rate in the Sheet</label>
+          <select id="smEr">
+            <option value="percent" ${SM.erUnit === 'percent' ? 'selected' : ''}>Percent — 4.2 means 4.2%</option>
+            <option value="decimal" ${SM.erUnit === 'decimal' ? 'selected' : ''}>Decimal — 0.042 means 4.2%</option>
+          </select></div>
+        <div class="field"><label>A zero in the Sheet</label>
+          <select id="smZero">
+            <option value="skip" ${SM.skipZero ? 'selected' : ''}>Treat as blank — keep what we have</option>
+            <option value="take" ${SM.skipZero ? '' : 'selected'}>Take it literally — write the zero</option>
+          </select></div>
+      </div>
+      <p class="card-sub" style="margin-top:-4px">A scraper that failed writes 0 far more often than a post
+        genuinely has none, which is why blank is the default reading.</p>
+    </div>
+
+    <div class="card" style="max-width:860px;margin-bottom:14px">
+      <div class="card-head"><h3>Content tabs</h3><div class="sp"></div>
+        <button class="btn xs" id="smAddTab">+ Add tab</button></div>
+      <p class="card-sub">One consolidated tab or one per campaign — tick the ones to read. They all feed the
+        same importer. A campaign name on a row or a tab is shown in the preview and used for nothing else.</p>
+      <div style="margin-top:12px" id="smTabs">${smTabRows() || '<p class="card-sub">No tabs yet.</p>'}</div>
+      <div class="divider"></div>
+      <div class="lbl">Content columns</div>
+      <p class="card-sub">Leave a row empty to ignore that field. <strong>postUrl</strong> or <strong>postId</strong>
+        is the one that must be filled — it is how a row finds its post.</p>
+      <div style="margin-top:10px">${smMapRows('content',
+        ['postUrl','postId','handle','views','likes','comments','shares','saves','reach','publishedAt','scrapedAt','campaign'],
+        SM.contentMap)}</div>
+    </div>
+
+    <div class="card" style="max-width:860px;margin-bottom:14px">
+      <div class="card-head"><h3>Creator profile tab</h3></div>
+      <p class="card-sub">Profile figures scraped from the public account. Country and category fill a blank
+        and never overwrite something chosen here. Creator status stays on the Vively flag —
+        Preferred, Flagged, Blacklist — and nothing in the Sheet changes it.</p>
+      <div style="display:flex;gap:8px;align-items:center;margin:12px 0">
+        <input type="checkbox" id="smCrOn" ${SM.creatorTab.on ? 'checked' : ''}/>
+        <input type="text" id="smCrName" value="${esc(SM.creatorTab.name || '')}" placeholder="tab name" style="flex:1"/>
+        <input type="text" id="smCrGid" value="${esc(SM.creatorTab.gid || '')}" placeholder="gid" style="width:120px"/>
+      </div>
+      <div class="lbl">Creator columns</div>
+      <div style="margin-top:10px">${smMapRows('creator',
+        ['handle','followers','er','avgViews','avgLikes','avgComments','country','category','scrapedAt'],
+        SM.creatorMap)}</div>
+    </div>
+
+    <div class="card" style="max-width:860px">
+      <div class="card-head"><h3>Read and preview</h3></div>
+      <p class="card-sub">Nothing is written until you have seen what would change.</p>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn primary" id="smDry" ${SM.base ? '' : 'disabled'}>Read the Sheet</button>
+        <button class="btn" id="smGuess" ${SM.base ? '' : 'disabled'}>Guess the columns for me</button>
+      </div>
+      <div id="smOut" style="margin-top:14px"></div>
+    </div>`;
+
+  wireSheetMetrics(view);
+}
+
+export function wireSheetMetrics(view) {
+  const save = () => { saveSheetMetricsConfig(); };
+  const redraw = () => { notify(); };
+
+  $('#smBase').addEventListener('change', (e) => { SM.base = e.target.value.trim(); save(); redraw(); });
+  $('#smEr').addEventListener('change', (e) => { SM.erUnit = e.target.value; save(); });
+  $('#smZero').addEventListener('change', (e) => { SM.skipZero = e.target.value === 'skip'; save(); });
+
+  $('#smAddTab').addEventListener('click', () => {
+    SM.contentTabs = (SM.contentTabs || []).concat([{ name: '', gid: '', on: true }]);
+    save(); redraw();
+  });
+  $$('[data-smtdel]').forEach((b) => b.addEventListener('click', () => {
+    SM.contentTabs.splice(+b.dataset.smtdel, 1); save(); redraw();
+  }));
+  $$('[data-smton]').forEach((c) => c.addEventListener('change', () => {
+    SM.contentTabs[+c.dataset.smton].on = c.checked; save();
+  }));
+  $$('[data-smtname]').forEach((i) => i.addEventListener('change', () => {
+    SM.contentTabs[+i.dataset.smtname].name = i.value.trim(); save();
+  }));
+  $$('[data-smtgid]').forEach((i) => i.addEventListener('change', () => {
+    SM.contentTabs[+i.dataset.smtgid].gid = i.value.trim(); save();
+  }));
+
+  $('#smCrOn').addEventListener('change', (e) => { SM.creatorTab.on = e.target.checked; save(); });
+  $('#smCrName').addEventListener('change', (e) => { SM.creatorTab.name = e.target.value.trim(); save(); });
+  $('#smCrGid').addEventListener('change', (e) => { SM.creatorTab.gid = e.target.value.trim(); save(); });
+
+  $$('[data-smmap]').forEach((i) => i.addEventListener('change', () => {
+    const target = i.dataset.smmap === 'content' ? SM.contentMap : SM.creatorMap;
+    if (i.value.trim()) target[i.dataset.field] = i.value.trim();
+    else delete target[i.dataset.field];
+    save();
+  }));
+
+  /* Reads the first selected tab of each kind and fills the mapping from
+     its header row, so the usual case is one click rather than twenty
+     fields typed by hand. */
+  $('#smGuess').addEventListener('click', async () => {
+    try {
+      const t = (SM.contentTabs || []).find((x) => x.on);
+      if (t) {
+        const rows = await fetchSheetTab(t.gid);
+        SM.contentMap = guessSheetColumns(rows[0] || [], SM_CONTENT_ALIASES);
+      }
+      if (SM.creatorTab.on) {
+        const rows = await fetchSheetTab(SM.creatorTab.gid);
+        SM.creatorMap = guessSheetColumns(rows[0] || [], SM_CREATOR_ALIASES);
+      }
+      save(); toast('Columns guessed — check them before reading'); notify();
+    } catch (err) { toast(err.message); }
+  });
+
+  $('#smDry').addEventListener('click', async () => {
+    $('#smOut').innerHTML = '<p class="card-sub">Reading…</p>';
+    try {
+      SM_DRY = await dryRunSheetMetrics();
+      renderSheetMetricsPreview();
+    } catch (err) {
+      $('#smOut').innerHTML = `<div class="note bad">${esc(err.message)}</div>`;
+    }
+  });
+}
+
+export function smChangeLine(c) {
+  if (c.fillOnly) return c.field + ' ← ' + esc(String(c.to)) + ' (was blank)';
+  return c.field + ' ' + num(c.from) + ' → ' + num(c.to);
+}
+
+export function renderSheetMetricsPreview() {
+  const d = SM_DRY;
+  const c = d.content || { updates: [], unmatched: [], skipped: [], rowsRead: 0 };
+  const cr = d.creators || { updates: [], unmatched: [], skipped: [], rowsRead: 0 };
+
+  $('#smOut').innerHTML = `
+    ${d.errors.length ? `<div class="note bad" style="margin-bottom:12px">${d.errors.map(esc).join('<br>')}</div>` : ''}
+    <div class="grid g4" style="gap:10px;margin-bottom:14px">
+      ${statCard('Rows read', c.rowsRead + cr.rowsRead, { foot: (d.tabs || []).length + ' content tab(s)' })}
+      ${statCard('Posts to update', c.updates.length, { foot: c.unmatched.length + ' not in the library' })}
+      ${statCard('Creators to update', cr.updates.length, { foot: cr.unmatched.length + ' not in the database' })}
+      ${statCard('Rows skipped', c.skipped.length + cr.skipped.length, { foot: 'blank, zero or nothing new' })}
+    </div>
+
+    ${c.unmatched.length ? `<div class="note warn" style="margin-bottom:12px">
+      <strong>${c.unmatched.length} post${c.unmatched.length === 1 ? '' : 's'} in the Sheet are not in the content library.</strong>
+      Nothing is created from here — add the link on the roster first and read again.
+      <div style="margin-top:6px;font-size:12px">${esc(c.unmatched.slice(0, 6).map((u) => u.url).join(' · '))}${c.unmatched.length > 6 ? ' …' : ''}</div>
+    </div>` : ''}
+    ${cr.unmatched.length ? `<div class="note warn" style="margin-bottom:12px">
+      <strong>${cr.unmatched.length} handle${cr.unmatched.length === 1 ? '' : 's'} are not in the creator database.</strong>
+      No creator is ever created from the Sheet.
+      <div style="margin-top:6px;font-size:12px">${esc(cr.unmatched.slice(0, 10).map((u) => u.handle).join(' · '))}${cr.unmatched.length > 10 ? ' …' : ''}</div>
+    </div>` : ''}
+
+    ${c.updates.length ? `<div class="lbl">Content</div>
+    <div class="tbl-wrap" style="max-height:260px;overflow-y:auto;margin-bottom:14px"><table class="tbl">
+      <thead><tr><th>Post</th><th>Matched by</th><th>Changes</th></tr></thead><tbody>
+      ${c.updates.slice(0, 200).map((u) => `<tr>
+        <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis">${esc(u.rec.postUrl || u.rec.url || u.rec.platformPostId)}</td>
+        <td><span class="pill grey">${esc(u.by)}</span></td>
+        <td style="font-size:12px">${u.changes.map(smChangeLine).map(esc).join('<br>') || '<span style="color:var(--text-3)">timestamp only</span>'}</td>
+      </tr>`).join('')}</tbody></table></div>` : ''}
+
+    ${cr.updates.length ? `<div class="lbl">Creator profiles</div>
+    <div class="tbl-wrap" style="max-height:260px;overflow-y:auto;margin-bottom:14px"><table class="tbl">
+      <thead><tr><th>Creator</th><th>Changes</th></tr></thead><tbody>
+      ${cr.updates.slice(0, 200).map((u) => `<tr>
+        <td class="strong">${esc(u.cr.handle)}</td>
+        <td style="font-size:12px">${u.changes.map(smChangeLine).map(esc).join('<br>') || '<span style="color:var(--text-3)">timestamp only</span>'}</td>
+      </tr>`).join('')}</tbody></table></div>` : ''}
+
+    <div style="display:flex;gap:8px">
+      <button class="btn primary" id="smApply" ${(c.updates.length + cr.updates.length) ? '' : 'disabled'}>
+        Apply ${c.updates.length} post${c.updates.length === 1 ? '' : 's'} and ${cr.updates.length} creator${cr.updates.length === 1 ? '' : 's'}</button>
+      <button class="btn" id="smDiscard">Discard</button>
+    </div>`;
+
+  const apply = $('#smApply');
+  if (apply) apply.addEventListener('click', () => {
+    const r = commitSheetMetrics(SM_DRY);
+    SM_DRY = null;
+    const msg = `Updated ${r.content} post${r.content === 1 ? '' : 's'} and ${r.creators} creator${r.creators === 1 ? '' : 's'} from the Sheet`;
+    toast(msg);
+    notify();
+    serverSave({ force: true, silent: true }).then((res) => toastAfterSave(msg, res));
+  });
+  $('#smDiscard').addEventListener('click', () => { SM_DRY = null; notify(); });
 }
 
 export function settingsTemplates(view) {

@@ -50,7 +50,11 @@ export const SHEET_SCHEMA = {
     ['id','s'],['handle','s'],['name','s'],['platform','s'],['followers','n'],['er','n'],['avgViews','n'],
     ['categories','a'],['country','s'],['nationality','s'],['languages','a'],['tier','s'],['source','s'],
     ['rate','n'],['reliability','n'],['avgTurnaroundDays','n'],['lastWorked','s'],['email','s'],
-    ['contact','s'],['address','s'],['tags','a'],['notes','s'],['flag','s'],['flagReason','s'],['flagAt','s']
+    ['contact','s'],['address','s'],['tags','a'],['notes','s'],['flag','s'],['flagReason','s'],['flagAt','s'],
+    /* filled by the read-only Sheet metrics import, listed here only so a
+       pull of the workspace mirror does not drop them. Nothing about the
+       mirror's behaviour changes. */
+    ['avgLikes','n'],['avgComments','n'],['metricsSource','s'],['metricsSyncedAt','s']
   ],
   participants: [
     ['id','s'],['campaignId','s'],['creatorId','s'],['stage','s'],['source','s'],['fee','n'],
