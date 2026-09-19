@@ -98,6 +98,8 @@ const igWebhook = require("./server/instagram-webhook.js");
 const wsGuard = require("./server/workspace-guard.js");
 const igCollabProbe = require("./server/instagram-collab-probe.js");
 const auth = require("./server/auth.js");
+const bookingStore = require("./server/booking-store.js");
+const bookingRoutes = require("./server/booking-routes.js");
 
 /* ------------------------------------------------------------------
    Who is allowed into the workspace.
@@ -144,6 +146,10 @@ function getMongoClient() {
         } catch (e) {
           console.error("Could not ensure users email index:", e.message);
         }
+        /* the booking indexes, and in particular the two partial unique
+           ones that make "one confirmed booking per creator per campaign"
+           the database's rule rather than a race this code has to win */
+        await bookingRoutes.ensureBookingIndexes(c, MONGODB_DB);
         return c;
       })
       .catch((err) => {
@@ -690,6 +696,10 @@ app.get("/api/workspace", requireStaff(async (req, res) => {
   }
 }));
 
+/* Set when the booking routes mount. The workspace save reads live
+   bookings through it so a stale client cannot un-book anybody. */
+let bookingApi = null;
+
 app.post("/api/workspace", requireStaff(async (req, res) => {
   if (!MONGODB_URI) {
     return res.status(503).json({ error: "Database not configured on the server yet — set MONGODB_URI." });
@@ -742,6 +752,23 @@ app.post("/api/workspace", requireStaff(async (req, res) => {
       });
     }
 
+    /* A booking owns the time it booked. This client's copy may predate
+       it — and `force` skips the revision check entirely — so every live
+       booking is re-applied onto the payload on the way in rather than
+       trusted out of it. Corrections are reported back so the open
+       dashboard can stop showing a time that is no longer true. */
+    let bookingFixes = null;
+    if (bookingApi) {
+      try {
+        const live = await bookingApi.liveBookings();
+        const applied = bookingStore.applyBookingSlots(db, live);
+        if (applied.corrected.length || applied.linked) bookingFixes = applied;
+      } catch (err) {
+        /* a booking lookup that fails must not cost somebody their save */
+        console.error("Booking projection skipped on this save:", err.message);
+      }
+    }
+
     const savedAt = new Date().toISOString();
     const nextRevision = currentRevision + 1;
     await col.updateOne(
@@ -749,7 +776,7 @@ app.post("/api/workspace", requireStaff(async (req, res) => {
       { $set: { db, settings: req.body.settings || {}, savedAt, revision: nextRevision } },
       { upsert: true }
     );
-    return res.json({ ok: true, savedAt, revision: nextRevision });
+    return res.json({ ok: true, savedAt, revision: nextRevision, bookings: bookingFixes });
   } catch (err) {
     console.error("POST /api/workspace failed:", err.message);
     return res.status(502).json({ error: "Could not reach the database." });
@@ -1837,6 +1864,15 @@ app.get("/api/diagnostics/instagram-collab", async (req, res) => {
   } finally {
     probeRunning = false;
   }
+});
+
+/* ---------------------------- booking -------------------------------
+
+   Mounted last among the API routes and before the catch-all, and handed
+   what it needs rather than reaching for it. The handle it returns is
+   what POST /api/workspace reads live bookings through. */
+bookingApi = bookingRoutes.mountBookingRoutes(app, {
+  getMongoClient, MONGODB_DB, MONGODB_URI, loadWorkspaceDoc, requireStaff
 });
 
 app.get("*", (req, res) => {
