@@ -90,3 +90,118 @@ test('the client and the server agree on the intent string', async () => {
   assert.ok(m, 'the client has no RESET_INTENT');
   assert.equal(m[1], G.RESET_INTENT);
 });
+
+/* ------------------------------------------------------------------
+   The guard and the booking projection, in the order POST /api/workspace
+   actually runs them.
+
+   Two separate protections meet on this path and they are not
+   interchangeable. The guard answers "is this payload a wipe?" and can
+   refuse the whole save. applyBookingSlots answers "is this payload's
+   idea of a booked visit current?" and rewrites rather than refuses.
+   Getting the order or the interaction wrong loses one of them, so the
+   cases below run them together rather than one at a time.
+   ------------------------------------------------------------------ */
+
+const B = require('../server/booking-store.js');
+
+const bookingFor = (pid, over) => Object.assign({
+  _id: 'bk_1', campaignId: 'cp_1', participantId: pid,
+  date: '2026-09-14', time: '13:00', status: 'confirmed'
+}, over || {});
+
+/* the shape server.js has at that point: a validated payload, the counts
+   of what is stored, and the live bookings */
+function saveAttempt({ incoming, existing, intent, bookings }) {
+  const guard = G.guardEmptyReplace({ incoming, existing, intent });
+  if (!guard.ok) return { refused: true, guard, written: null };
+  const applied = B.applyBookingSlots(incoming, bookings || []);
+  return { refused: false, guard, applied, written: incoming };
+}
+
+test('a stale tab cannot un-book somebody, even saving with force', () => {
+  /* the whole reason the projection exists: this payload was loaded
+     before the creator booked, and force skips the revision check */
+  const stale = {
+    campaigns: [{ id: 'cp_1' }], creators: [{ id: 'cr_1' }],
+    participants: [{ id: 'pt_1', campaignId: 'cp_1', visitAt: '2026-09-14 12:00',
+                    confirmedVisitAt: '2026-09-14 12:00' }]
+  };
+  const r = saveAttempt({ incoming: stale, existing: full, bookings: [bookingFor('pt_1')] });
+  assert.equal(r.refused, false);
+  assert.equal(r.written.participants[0].confirmedVisitAt, '2026-09-14 13:00');
+  assert.equal(r.written.participants[0].bookingId, 'bk_1');
+  assert.equal(r.applied.corrected.length, 1);
+});
+
+test('the guard refuses before any booking is written into the payload', () => {
+  /* order matters: if the projection ran first, a refused save would
+     still have mutated the caller's object, and the next thing to look
+     at it would see a workspace that was never stored */
+  const wipe = { campaigns: [], creators: [], participants: [] };
+  const r = saveAttempt({ incoming: wipe, existing: full, bookings: [bookingFor('pt_1')] });
+  assert.equal(r.refused, true);
+  assert.equal(r.guard.code, 'empty-workspace');
+  assert.deepEqual(wipe.participants, [], 'the refused payload was mutated');
+});
+
+test('a deliberate reset is not resurrected by the bookings', () => {
+  /* somebody asked for the workspace to be emptied on purpose. The
+     projection must not put a participant back to carry a booking. */
+  const wipe = { campaigns: [], creators: [], participants: [] };
+  const r = saveAttempt({ incoming: wipe, existing: full, intent: G.RESET_INTENT,
+                          bookings: [bookingFor('pt_1')] });
+  assert.equal(r.refused, false);
+  assert.equal(r.guard.reset, true);
+  assert.equal(r.written.participants.length, 0);
+});
+
+test('a booking for a roster row that has since been deleted is ignored', () => {
+  /* staff removed the row while the booking still stands. This must not
+     throw, and must not invent a participant to hang it on. */
+  const db = { campaigns: [{ id: 'cp_1' }], creators: [{ id: 'cr_1' }],
+               participants: [{ id: 'pt_other', campaignId: 'cp_1' }] };
+  const out = B.applyBookingSlots(db, [bookingFor('pt_gone')]);
+  assert.equal(out.corrected.length, 0);
+  assert.equal(db.participants.length, 1);
+  assert.equal(db.participants[0].confirmedVisitAt, undefined);
+});
+
+test('the projection never adds, removes or reorders participants', () => {
+  const db = { campaigns: [], creators: [], participants: [
+    { id: 'pt_1', campaignId: 'cp_1' }, { id: 'pt_2', campaignId: 'cp_1' }, { id: 'pt_3', campaignId: 'cp_1' }
+  ] };
+  B.applyBookingSlots(db, [bookingFor('pt_2')]);
+  assert.deepEqual(db.participants.map((p) => p.id), ['pt_1', 'pt_2', 'pt_3']);
+});
+
+test('a payload with no participants array is left alone rather than crashed on', () => {
+  for (const junk of [null, undefined, {}, { participants: null }, { participants: 'nope' }]) {
+    const out = B.applyBookingSlots(junk, [bookingFor('pt_1')]);
+    assert.deepEqual(out, { corrected: [], linked: 0 });
+  }
+});
+
+test('no bookings means the payload comes through byte-identical', () => {
+  const db = { campaigns: [{ id: 'cp_1' }], creators: [], participants: [
+    { id: 'pt_1', campaignId: 'cp_1', confirmedVisitAt: '2026-09-20 11:00' }
+  ] };
+  const before = JSON.stringify(db);
+  for (const none of [[], null, undefined]) B.applyBookingSlots(db, none);
+  assert.equal(JSON.stringify(db), before);
+});
+
+test('two confirmed bookings for one participant resolve the same way every time', () => {
+  /* the partial unique index makes this impossible in the database, so
+     if it ever happens something else is already wrong — the projection
+     still has to be deterministic rather than order-dependent */
+  const rows = [bookingFor('pt_1', { _id: 'bk_a', time: '13:00' }),
+                bookingFor('pt_1', { _id: 'bk_b', time: '15:00' })];
+  const run = (list) => {
+    const db = { participants: [{ id: 'pt_1', campaignId: 'cp_1' }] };
+    B.applyBookingSlots(db, list);
+    return db.participants[0].confirmedVisitAt;
+  };
+  assert.equal(run(rows), '2026-09-14 15:00');   /* the last one wins */
+  assert.equal(run(rows), run(rows.slice()));    /* and does so consistently */
+});

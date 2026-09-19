@@ -32,7 +32,8 @@
     "check:syncskips": "node tools/seed.mjs > tmp/seed.json && node tools/sync-skips-page.mjs",
     "check:booking": "node tools/booking-api.mjs",
     "check:bookpage": "node tools/booking-page.mjs",
-    "check:bookadmin": "node tools/seed.mjs > tmp/seed.json && node tools/booking-admin-page.mjs"
+    "check:bookadmin": "node tools/seed.mjs > tmp/seed.json && node tools/booking-admin-page.mjs",
+    "check:bookrace": "node tools/rehearse-booking.mjs"
   },
   "engines": {
     "node": ">=18"

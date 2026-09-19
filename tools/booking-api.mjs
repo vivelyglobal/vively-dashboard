@@ -217,6 +217,131 @@ ok('a roomful behind one address is not cut off at ten',
 ok('but a scripted flood from one address is eventually limited',
   shared.some((r) => r.status === 429));
 
+/* ---- edges: the states a booking can be asked to leave -----------------
+
+   Cancel, move and match all act on a booking that might have moved on
+   since the caller last looked at it. Each of these is a real sequence —
+   a stale tab, a double tap, a link someone kept — rather than an
+   invented one. */
+
+/* a booking to push around */
+const edgeSlotA = await mk('09:00', 1);
+const edgeSlotB = await mk('09:30', 1);
+const edgeInv = await call('/api/booking/invite', { body: {
+  campaignId: 'cp_1', participantId: 'pt_edge', creatorId: 'cr_edge', name: 'Edge', handle: '@edge' } });
+const edge = await call('/api/book/' + edgeInv.body.invite._id + '/confirm',
+  { body: { slotId: edgeSlotA.body.slot._id } });
+ok('a booking exists to test the edges with', edge.status === 200);
+const edgeTok = edge.body.booking.manageToken;
+
+ok('a manage link that never existed 404s',
+  (await call('/api/book/manage/not-a-real-token')).status === 404);
+ok('cancelling a token that never existed 404s',
+  (await call('/api/book/manage/not-a-real-token/cancel', { method: 'POST' })).status === 404);
+ok('moving a token that never existed 404s',
+  (await call('/api/book/manage/not-a-real-token/move', { body: { slotId: edgeSlotB.body.slot._id } })).status === 404);
+
+ok('moving to a slot on another campaign is refused', await (async () => {
+  const other = await call('/api/booking/schedule', { body: { campaignId: 'cp_2', timezone: 'Asia/Seoul' } });
+  const otherSlot = await call('/api/booking/slot', { body: {
+    scheduleId: other.body.schedule._id, date: day, time: '10:00', capacity: 1 } });
+  const r = await call('/api/book/manage/' + edgeTok + '/move', { body: { slotId: otherSlot.body.slot._id } });
+  return r.status === 404;
+})());
+
+ok('moving to a blocked day is refused', await (async () => {
+  const blockDay = new Date(Date.now() + 12 * 86400000).toISOString().slice(0, 10);
+  const s = await call('/api/booking/slot', { body: { scheduleId, date: blockDay, time: '11:00', capacity: 2 } });
+  await call('/api/booking/date', { body: { scheduleId, date: blockDay, closed: true } });
+  const r = await call('/api/book/manage/' + edgeTok + '/move', { body: { slotId: s.body.slot._id } });
+  await call('/api/booking/date', { body: { scheduleId, date: blockDay, closed: false } });
+  return r.status === 409 && r.body.code === 'date-blocked';
+})());
+
+ok('moving to a time inside the deadline is refused', await (async () => {
+  const soon = new Date(Date.now() + 2 * 3600000).toISOString().slice(0, 10);
+  const s = await call('/api/booking/slot', { body: { scheduleId, date: soon, time: '00:30', capacity: 2 } });
+  if (s.status !== 200) return false;
+  const r = await call('/api/book/manage/' + edgeTok + '/move', { body: { slotId: s.body.slot._id } });
+  return r.status === 409 && r.body.code === 'deadline-passed';
+})());
+
+ok('a move with no slot named is refused',
+  (await call('/api/book/manage/' + edgeTok + '/move', { body: {} })).status === 400);
+
+/* the booking is still exactly where it started after all that */
+ok('none of the refused moves moved it', await (async () => {
+  const now = await col('campaign_bookings').findOne({ manageToken: edgeTok });
+  return now.slotId === edgeSlotA.body.slot._id && now.status === 'confirmed';
+})());
+ok('and no seat leaked while they were refused',
+  (await col('booking_slots').findOne({ _id: edgeSlotB.body.slot._id })).booked === 0);
+
+/* now cancel it, and try to use it afterwards */
+await call('/api/book/manage/' + edgeTok + '/cancel', { method: 'POST' });
+ok('moving a cancelled booking 404s rather than reviving it',
+  (await call('/api/book/manage/' + edgeTok + '/move', { body: { slotId: edgeSlotB.body.slot._id } })).status === 404);
+ok('its seat went back exactly once',
+  (await col('booking_slots').findOne({ _id: edgeSlotA.body.slot._id })).booked === 0);
+ok('and the row is kept as cancelled rather than deleted', await (async () => {
+  const row = await col('campaign_bookings').findOne({ manageToken: edgeTok });
+  return row && row.status === 'cancelled' && row.history.some((h) => h.action === 'cancelled');
+})());
+
+/* ---- edges: matching ---- */
+
+/* A matched booking made here rather than borrowed from earlier: by this
+   point pt_1's booking has been moved and cancelled, and a check that
+   depends on leftover state passes or fails for the wrong reason. */
+const mSlot = await mk('20:00', 1);
+const mInv = await call('/api/booking/invite', { body: {
+  campaignId: 'cp_1', participantId: 'pt_held', creatorId: 'cr_held', name: 'Held', handle: '@held' } });
+const mBooking = await call('/api/book/' + mInv.body.invite._id + '/confirm',
+  { body: { slotId: mSlot.body.slot._id } });
+ok('a matched booking exists for the match edges', mBooking.status === 200);
+const mId = (await col('campaign_bookings').findOne({ manageToken: mBooking.body.booking.manageToken }))._id;
+
+ok('matching a booking that is already matched is refused',
+  (await call('/api/booking/booking/' + mId + '/match',
+    { body: { participantId: 'pt_other' } })).status === 409);
+
+ok('matching a cancelled booking is refused', await (async () => {
+  const dead = await col('campaign_bookings').findOne({ manageToken: edgeTok });
+  return (await call('/api/booking/booking/' + dead._id + '/match',
+    { body: { participantId: 'pt_free' } })).status === 404;
+})());
+
+ok('matching with no roster row named is refused', await (async () => {
+  const anyB = await col('campaign_bookings').findOne({ status: 'confirmed' });
+  return (await call('/api/booking/booking/' + anyB._id + '/match', { body: {} })).status === 400;
+})());
+
+ok('matching two bookings onto one roster row is refused by the index', await (async () => {
+  /* an unmatched public booking, pointed at the row pt_held already holds */
+  const free = await mk('19:00', 1);
+  const pub = await call('/api/book/' + publicToken + '/confirm', {
+    body: { slotId: free.body.slot._id, name: 'Dup', handle: '@dupcheck' } });
+  if (pub.status !== 200) return false;
+  const row = await col('campaign_bookings').findOne({ 'guest.handleNorm': 'dupcheck' });
+  const r = await call('/api/booking/booking/' + row._id + '/match', { body: { participantId: 'pt_held' } });
+  return r.status === 409;
+})());
+
+ok('a staff move of a cancelled booking is refused', await (async () => {
+  const dead = await col('campaign_bookings').findOne({ manageToken: edgeTok });
+  return (await call('/api/booking/booking/' + dead._id + '/move',
+    { body: { slotId: edgeSlotB.body.slot._id } })).status === 404;
+})());
+
+ok('a paused schedule refuses new bookings', await (async () => {
+  await call('/api/booking/schedule', { body: { campaignId: 'cp_1', timezone: 'Asia/Seoul', status: 'paused' } });
+  const r = await call('/api/book/' + publicToken + '/confirm', {
+    body: { slotId: edgeSlotB.body.slot._id, name: 'Nope', handle: '@nope' } });
+  const view = await call('/api/book/' + publicToken);
+  await call('/api/booking/schedule', { body: { campaignId: 'cp_1', timezone: 'Asia/Seoul', status: 'open' } });
+  return r.status === 409 && view.body.paused === true;
+})());
+
 srv.close();
 console.log(errs.length ? '\n' + errs.length + ' FAILED' : '\nall booking API checks passed');
 process.exit(errs.length ? 1 : 0);
