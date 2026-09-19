@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="robots" content="noindex, nofollow" />
+<title>VIVELY — 방문 예약</title>
+<style>
+/* This page is opened on a phone, from a DM, one-handed, by someone who
+   has never seen it before and will see it once. Everything below serves
+   that: one decision per screen, targets a thumb can hit without aiming,
+   and no state worth losing if the tab is closed. */
+:root{--bg:#f7f7f8;--card:#fff;--line:#e3e3e6;--text:#1a1a1c;--text-2:#55555c;--text-3:#8a8a93;
+ --green:#1e9e6a;--amber:#bd8300;--red:#d03b3b;--blue:#4e8ef7;--accent:#1a1a1c;--on-accent:#fff}
+@media (prefers-color-scheme:dark){:root{--bg:#131315;--card:#1b1b1e;--line:#2c2c31;--text:#eeeef1;
+ --text-2:#b4b4bd;--text-3:#82828c;--accent:#eeeef1;--on-accent:#131315}}
+*{box-sizing:border-box}
+html,body{overflow-x:hidden}
+body{margin:0;background:var(--bg);color:var(--text);
+ font:15px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Malgun Gothic','Apple SD Gothic Neo',sans-serif;
+ -webkit-text-size-adjust:100%}
+header{padding:calc(20px + env(safe-area-inset-top)) 20px 16px;background:var(--card);border-bottom:1px solid var(--line)}
+.brand{font-size:11px;letter-spacing:.16em;color:var(--text-3);margin-bottom:6px}
+h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-.01em}
+.sub{color:var(--text-3);font-size:13px;margin-top:4px}
+main{padding:18px 20px calc(120px + env(safe-area-inset-bottom));max-width:620px;margin:0 auto}
+.lbl{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);margin:0 0 9px}
+
+/* ---- the date strip ------------------------------------------------
+   Full and blocked days stay on the strip rather than vanishing. A day
+   that disappears reads as a mistake; a day marked 마감 reads as an
+   answer, and stops the creator wondering whether to ask about it. */
+.dates{display:flex;gap:9px;overflow-x:auto;padding:2px 20px 10px;margin:0 -20px;
+ scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch}
+.dates::-webkit-scrollbar{display:none}
+.date{flex:0 0 auto;scroll-snap-align:start;min-width:66px;min-height:76px;border:1px solid var(--line);
+ background:var(--card);border-radius:12px;padding:9px 8px;text-align:center;cursor:pointer;
+ color:var(--text);font:inherit;display:flex;flex-direction:column;gap:2px;justify-content:center}
+.date .dow{font-size:11px;color:var(--text-3)}
+.date .d{font-size:19px;font-weight:600;line-height:1.1}
+.date .left{font-size:10.5px;color:var(--green)}
+.date.sun .dow{color:var(--red)}
+.date.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.date.on .dow,.date.on .left{color:var(--on-accent);opacity:.8}
+.date.out{opacity:.45;cursor:not-allowed}
+.date.out .left{color:var(--text-3)}
+
+/* ---- the slots ------------------------------------------------------ */
+.slots{display:flex;flex-direction:column;gap:9px;margin-top:4px}
+.slot{display:flex;align-items:center;gap:12px;min-height:56px;padding:0 16px;border:1px solid var(--line);
+ background:var(--card);border-radius:12px;cursor:pointer;color:var(--text);font:inherit;width:100%;text-align:left}
+.slot .t{font-size:17px;font-weight:600;font-variant-numeric:tabular-nums}
+.slot .n{font-size:12.5px;color:var(--text-3);margin-left:auto}
+.slot .left{font-size:12.5px;color:var(--green);margin-left:auto}
+.slot.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.slot.full{opacity:.5;cursor:not-allowed}
+.slot.full .left{color:var(--text-3)}
+.tz{font-size:12px;color:var(--text-3);margin-top:12px}
+
+/* ---- the form ------------------------------------------------------- */
+.field{margin-bottom:14px}
+.field label{display:block;font-size:12.5px;color:var(--text-2);margin-bottom:5px}
+input,select{width:100%;min-height:48px;padding:0 13px;border:1px solid var(--line);border-radius:10px;
+ background:var(--card);color:var(--text);font:inherit;font-size:16px}
+input[readonly]{color:var(--text-2);background:var(--bg)}
+input:focus,select:focus{outline:2px solid var(--blue);outline-offset:-1px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.kv{display:flex;justify-content:space-between;gap:14px;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px}
+.kv:last-child{border-bottom:0}
+.kv dt{color:var(--text-3)}
+.kv dd{margin:0;text-align:right;font-weight:500}
+
+/* ---- the one button ------------------------------------------------- */
+.bar{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);
+ padding:12px 20px calc(12px + env(safe-area-inset-bottom));z-index:5}
+.bar-in{max-width:620px;margin:0 auto;display:flex;gap:10px}
+button.go{flex:1;min-height:52px;border:0;border-radius:12px;background:var(--accent);color:var(--on-accent);
+ font:inherit;font-size:16px;font-weight:600;cursor:pointer}
+button.go:disabled{opacity:.4;cursor:not-allowed}
+button.alt{flex:1;min-height:52px;border:1px solid var(--line);border-radius:12px;background:var(--card);
+ color:var(--text);font:inherit;font-size:15px;cursor:pointer}
+button.danger{color:var(--red);border-color:color-mix(in srgb,var(--red) 40%,transparent)}
+
+.note{border:1px solid var(--line);border-radius:10px;padding:13px 15px;color:var(--text-2);font-size:13.5px;background:var(--card)}
+.note.warn{border-color:color-mix(in srgb,var(--amber) 45%,transparent);color:var(--amber)}
+.note.bad{border-color:color-mix(in srgb,var(--red) 45%,transparent);color:var(--red)}
+.ok-mark{width:52px;height:52px;border-radius:50%;background:var(--green);color:#fff;display:flex;
+ align-items:center;justify-content:center;font-size:26px;margin:0 auto 14px}
+.centre{text-align:center}
+.link{display:block;word-break:break-all;font-size:12.5px;color:var(--text-3);margin-top:8px}
+h2{font-size:17px;font-weight:600;margin:0 0 4px}
+.muted{color:var(--text-3);font-size:13px}
+section{margin-bottom:26px}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">VIVELY</div>
+  <h1 id="venue">방문 예약</h1>
+  <div class="sub" id="sub">불러오는 중…</div>
+</header>
+<main id="main"></main>
+<div class="bar" id="bar" hidden><div class="bar-in" id="barIn"></div></div>
+<script>
+/* The token is the last path segment for both link shapes:
+     /book/<publicToken>     anyone with the campaign link
+     /book/i/<inviteToken>   one named creator
+   The server tries invite first and falls back to public, so the page
+   does not need to know which kind it holds — only the manage link is a
+   different route, because it addresses a booking rather than a slot. */
+const PARTS = location.pathname.split('/').filter(Boolean);
+const TOKEN = PARTS[PARTS.length - 1] || '';
+const IS_MANAGE = PARTS.includes('manage');
+
+const $ = (s, r) => (r || document).querySelector(s);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
+  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/* Everything the page knows. Nothing is written to storage: a booking
+   half-made is not worth restoring, and the manage link is the only
+   thing worth keeping — which is why it is shown rather than stored. */
+const S = { view: null, date: null, slotId: null, party: 1, busy: false, error: null, done: null };
+
+const DOW = ['일', '월', '화', '수', '목', '금', '토'];
+const MON = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
+
+/* Dates are formatted from their own parts, never through a Date the
+   browser would render in ITS zone. A creator in Seoul and a staffer in
+   London must read the same words off this page. */
+function dparts(iso) {
+  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const y = +m[1], mo = +m[2], d = +m[3];
+  /* day of week without a timezone anywhere near it */
+  const dow = new Date(Date.UTC(y, mo - 1, d)).getUTCDay();
+  return { y, mo, d, dow, label: MON[mo - 1] + ' ' + d + '일', dowLabel: DOW[dow] };
+}
+
+const zoneLabel = (tz) => ({
+  'Asia/Seoul': '한국 시간 (KST)', 'Asia/Tokyo': '일본 시간 (JST)'
+}[tz] || tz);
+
+/* ---- talking to the server ------------------------------------------ */
+
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: body ? 'POST' : 'GET',
+    headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined
+  });
+  let json = {};
+  try { json = await res.json(); } catch (e) { /* server said nothing useful */ }
+  return { status: res.status, ok: res.ok, body: json };
+}
+
+async function load() {
+  const r = await api(IS_MANAGE ? '/api/book/manage/' + TOKEN : '/api/book/' + TOKEN);
+  if (!r.ok) {
+    S.error = r.body.error || '이 링크를 열 수 없습니다.';
+    return render();
+  }
+  adopt(r.body);
+  render();
+}
+
+/* One place where a server payload becomes the page's state, so a fresh
+   grid arriving with a 409 lands exactly like the first load did. */
+function adopt(v) {
+  S.view = v;
+  S.error = null;
+  if (v.booking && !S.done) S.done = v.booking;
+  const open = (v.dates || []).filter((d) => !d.blocked && d.spotsLeft > 0);
+  if (!S.date || !(v.dates || []).some((d) => d.date === S.date)) {
+    S.date = (open[0] || (v.dates || [])[0] || {}).date || null;
+  }
+  /* a slot that has just gone is not a selection any more */
+  if (S.slotId) {
+    const still = (v.dates || []).some((d) => d.slots.some((s) => s.id === S.slotId && s.spotsLeft > 0));
+    if (!still) S.slotId = null;
+  }
+}
+
+/* ---- the screens ----------------------------------------------------- */
+
+function render() {
+  const main = $('#main'), bar = $('#bar'), barIn = $('#barIn');
+  bar.hidden = true; barIn.innerHTML = '';
+
+  if (S.error && !S.view) {
+    $('#sub').textContent = '';
+    main.innerHTML = '<div class="note bad">' + esc(S.error) + '</div>';
+    return;
+  }
+  const v = S.view || {};
+  $('#venue').textContent = v.venueName || '방문 예약';
+  $('#sub').textContent = v.paused ? '지금은 예약을 받고 있지 않습니다.'
+    : (S.done ? '예약이 확정되었습니다' : '방문하실 날짜와 시간을 선택해 주세요');
+
+  if (v.paused) {
+    main.innerHTML = '<div class="note warn">예약이 잠시 중단되었습니다. 담당자에게 문의해 주세요.</div>';
+    return;
+  }
+  if (S.done && !S.changing) return renderDone(main, bar, barIn, v);
+  return renderPicker(main, bar, barIn, v);
+}
+
+/* ---- picking ---------------------------------------------------------- */
+
+function renderPicker(main, bar, barIn, v) {
+  const dates = v.dates || [];
+  if (!dates.length) {
+    main.innerHTML = '<div class="note">아직 예약 가능한 날짜가 없습니다. 담당자에게 문의해 주세요.</div>';
+    return;
+  }
+  const day = dates.find((d) => d.date === S.date) || dates[0];
+  const pre = v.prefill || {};
+  const maxParty = v.maxPartySize || 1;
+
+  main.innerHTML =
+    (S.error ? '<div class="note bad" style="margin-bottom:18px">' + esc(S.error) + '</div>' : '') +
+    (v.noteForCreator ? '<div class="note" style="margin-bottom:18px">' + esc(v.noteForCreator) + '</div>' : '') +
+
+    '<section><p class="lbl">날짜 · Date</p><div class="dates" id="dates">' +
+    dates.map((d) => {
+      const p = dparts(d.date) || {};
+      const out = d.blocked || d.spotsLeft === 0;
+      return '<button class="date' + (d.date === day.date ? ' on' : '') + (out ? ' out' : '') +
+        (p.dow === 0 ? ' sun' : '') + '" data-date="' + esc(d.date) + '"' + (out ? ' disabled' : '') + '>' +
+        '<span class="dow">' + esc(p.dowLabel) + '</span>' +
+        '<span class="d">' + p.d + '</span>' +
+        '<span class="left">' + (d.blocked ? '휴무' : d.spotsLeft === 0 ? '마감' : d.spotsLeft + '자리') + '</span>' +
+        '</button>';
+    }).join('') + '</div></section>' +
+
+    '<section><p class="lbl">시간 · Time</p><div class="slots" id="slots">' +
+    (day.slots.length ? day.slots.map((s) => {
+      const full = day.blocked || s.spotsLeft === 0;
+      return '<button class="slot' + (s.id === S.slotId ? ' on' : '') + (full ? ' full' : '') +
+        '" data-slot="' + esc(s.id) + '"' + (full ? ' disabled' : '') + '>' +
+        '<span class="t">' + esc(s.time) + '</span>' +
+        (s.note ? '<span class="n">' + esc(s.note) + '</span>' : '') +
+        '<span class="left">' + (full ? '마감' : s.spotsLeft + '자리 남음') + '</span>' +
+        '</button>';
+    }).join('') : '<div class="note">이 날은 예약 가능한 시간이 없습니다.</div>') +
+    '</div><p class="tz">모든 시간은 ' + esc(zoneLabel(v.timezone)) + ' 기준입니다.</p></section>' +
+
+    (S.changing ? '' :
+    '<section><p class="lbl">정보 · Your details</p>' +
+    '<div class="field"><label for="f_name">이름 · Name</label>' +
+      '<input id="f_name" type="text" autocomplete="name" value="' + esc(pre.name || '') + '"' +
+      (pre.locked ? ' readonly' : '') + ' /></div>' +
+    '<div class="field"><label for="f_handle">인스타그램 · Instagram</label>' +
+      '<input id="f_handle" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" ' +
+      'placeholder="@yourhandle" value="' + esc(pre.handle || '') + '"' + (pre.locked ? ' readonly' : '') + ' /></div>' +
+    (maxParty > 1
+      ? '<div class="field"><label for="f_party">인원수 · How many are coming</label><select id="f_party">' +
+        Array.from({ length: maxParty }, (_, i) =>
+          '<option value="' + (i + 1) + '"' + (S.party === i + 1 ? ' selected' : '') + '>' + (i + 1) + '명</option>').join('') +
+        '</select></div>'
+      : '') +
+    '</section>') +
+    (S.changing ? '<div class="note">새 시간을 선택하면 기존 예약이 변경됩니다.</div>' : '');
+
+  /* the bar states what is about to happen, in the words of the thing
+     itself — "13:00 예약하기", never a bare "확인" */
+  const chosen = day.slots.find((s) => s.id === S.slotId);
+  bar.hidden = false;
+  barIn.innerHTML = '<button class="go" id="go"' + (chosen && !S.busy ? '' : ' disabled') + '>' +
+    (S.busy ? '예약하는 중…' : chosen
+      ? esc((dparts(day.date) || {}).label + ' ' + chosen.time) + ' 예약하기'
+      : '시간을 선택해 주세요') + '</button>';
+
+  $('#dates').addEventListener('click', (e) => {
+    const b = e.target.closest('.date'); if (!b || b.disabled) return;
+    S.date = b.dataset.date; S.slotId = null; render();
+  });
+  $('#slots').addEventListener('click', (e) => {
+    const b = e.target.closest('.slot'); if (!b || b.disabled) return;
+    S.slotId = b.dataset.slot; render();
+  });
+  const party = $('#f_party');
+  if (party) party.addEventListener('change', () => { S.party = +party.value || 1; });
+  $('#go').addEventListener('click', confirm);
+}
+
+/* ---- confirming -------------------------------------------------------- */
+
+async function confirm() {
+  if (S.busy || !S.slotId) return;
+  const name = ($('#f_name') || {}).value || '';
+  const handle = ($('#f_handle') || {}).value || '';
+  /* Only a NEW booking needs to know who is booking. A move is made from
+     the manage link, which already identifies the booking — and that
+     response carries no prefill, so asking here blocked every reschedule. */
+  if (!S.changing && !S.view.prefill && (!name.trim() || !handle.trim())) {
+    S.error = '이름과 인스타그램 아이디를 모두 입력해 주세요.';
+    return render();
+  }
+  S.busy = true; render();
+
+  const path = S.changing
+    ? '/api/book/manage/' + TOKEN + '/move'
+    : '/api/book/' + TOKEN + '/confirm';
+  const r = await api(path, { slotId: S.slotId, name, handle, partySize: S.party });
+  S.busy = false;
+
+  if (r.ok) {
+    S.done = r.body.booking;
+    S.changing = false;
+    S.error = null;
+    return render();
+  }
+
+  /* A lost race is not an error the creator caused, and it is not worth a
+     dialog. The server sends the refreshed grid with the 409, so the page
+     re-renders with that slot greyed out, the message above it, and every
+     other time still one tap away. */
+  if (r.status === 409 && r.body.code === 'slot_taken') {
+    S.slotId = null;
+    adopt(Object.assign({}, S.view, r.body, { booking: S.done }));
+    S.error = r.body.error;
+    return render();
+  }
+  S.error = r.body.error || '예약을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.';
+  render();
+}
+
+/* ---- confirmed --------------------------------------------------------- */
+
+function renderDone(main, bar, barIn, v) {
+  const b = S.done, p = dparts(b.date) || {};
+  /* The manage link is the only handle the creator has on this booking —
+     there are no notification emails yet — so it is shown in full, on
+     screen, with a copy button, rather than mentioned in passing. */
+  const manage = b.manageToken
+    ? location.origin + '/book/manage/' + b.manageToken
+    : (IS_MANAGE ? location.href : '');
+
+  main.innerHTML =
+    '<section class="centre"><div class="ok-mark">✓</div>' +
+    '<h2>예약이 확정되었습니다</h2>' +
+    '<p class="muted">아래 시간에 방문해 주세요.</p></section>' +
+
+    '<section><div class="card"><dl class="kv" style="display:block">' +
+    (v.venueName ? '<div class="kv"><dt>장소</dt><dd>' + esc(v.venueName) + '</dd></div>' : '') +
+    '<div class="kv"><dt>날짜</dt><dd>' + esc(p.label + ' (' + p.dowLabel + ')') + '</dd></div>' +
+    '<div class="kv"><dt>시간</dt><dd>' + esc(b.time) + '</dd></div>' +
+    (b.partySize > 1 ? '<div class="kv"><dt>인원</dt><dd>' + b.partySize + '명</dd></div>' : '') +
+    '<div class="kv"><dt>기준 시간대</dt><dd>' + esc(zoneLabel(v.timezone || b.timezone)) + '</dd></div>' +
+    '</dl></div></section>' +
+
+    (manage
+      ? '<section><div class="note">이 링크로 언제든 시간을 바꾸거나 취소할 수 있습니다. ' +
+        '<strong>꼭 저장해 두세요.</strong>' +
+        '<span class="link" id="manageUrl">' + esc(manage) + '</span>' +
+        '<button class="alt" id="copyLink" style="min-height:40px;margin-top:10px;font-size:13px">링크 복사</button>' +
+        '</div></section>'
+      : '') +
+
+    (S.error ? '<div class="note bad">' + esc(S.error) + '</div>' : '');
+
+  bar.hidden = false;
+  barIn.innerHTML =
+    '<button class="alt" id="change">시간 변경</button>' +
+    '<button class="alt danger" id="cancel">예약 취소</button>';
+
+  const copy = $('#copyLink');
+  if (copy) copy.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(manage); copy.textContent = '복사되었습니다'; }
+    catch (e) { copy.textContent = '길게 눌러 복사해 주세요'; }
+  });
+
+  $('#change').addEventListener('click', async () => {
+    /* Changing needs the manage route, which only the manage token opens.
+       An invite link that has already been used gets its manage token back
+       from the server, so both roads lead here. */
+    if (!IS_MANAGE && b.manageToken) { location.href = manage; return; }
+    S.changing = true; S.slotId = null; S.error = null;
+    const r = await api('/api/book/manage/' + TOKEN);
+    if (r.ok) adopt(Object.assign({}, r.body, { booking: null }));
+    render();
+  });
+
+  $('#cancel').addEventListener('click', async () => {
+    if (!window.confirm('예약을 취소할까요? 같은 시간이 다시 비어 있다는 보장은 없습니다.')) return;
+    const tok = IS_MANAGE ? TOKEN : b.manageToken;
+    const r = await api('/api/book/manage/' + tok + '/cancel', { reason: '' });
+    if (!r.ok) { S.error = r.body.error || '취소하지 못했습니다.'; return render(); }
+    S.done = null; S.changing = false; S.slotId = null; S.error = null;
+    $('#main').innerHTML = '<section class="centre"><h2>예약이 취소되었습니다</h2>' +
+      '<p class="muted">다시 예약하시려면 담당자에게 문의해 주세요.</p></section>';
+    $('#bar').hidden = true;
+    $('#sub').textContent = '';
+  });
+}
+
+load();
+</script>
+</body>
+</html>

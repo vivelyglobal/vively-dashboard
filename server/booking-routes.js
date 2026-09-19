@@ -105,7 +105,7 @@ function mountBookingRoutes(app, deps) {
   function limited(req, res, limiter, keyExtra) {
     const key = ipOf(req) + "|" + (keyExtra || "");
     if (limiter(key)) return false;
-    res.status(429).json({ error: "Too many requests just now. Give it a minute and try again." });
+    res.status(429).json({ error: "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요." });
     return true;
   }
 
@@ -374,7 +374,7 @@ function mountBookingRoutes(app, deps) {
       } else {
         schedule = await scheduleByToken(req.params.token);
       }
-      if (!schedule) return res.status(404).json({ error: "This link is not valid, or booking has been closed." });
+      if (!schedule) return res.status(404).json({ error: "사용할 수 없는 링크이거나 예약이 마감되었습니다." });
       if (schedule.status === "paused") {
         return res.json({ ok: true, paused: true, venueName: schedule.venueName || "" });
       }
@@ -419,20 +419,20 @@ function mountBookingRoutes(app, deps) {
 
     const body = req.body || {};
     const slotId = String(body.slotId || "").trim();
-    if (!slotId) return res.status(400).json({ error: "Pick a time first." });
+    if (!slotId) return res.status(400).json({ error: "시간을 먼저 선택해 주세요." });
 
     try {
       const inv = await inviteByToken(req.params.token);
       const schedule = inv
         ? await (await schedules()).findOne({ _id: inv.scheduleId })
         : await scheduleByToken(req.params.token);
-      if (!schedule) return res.status(404).json({ error: "This link is not valid, or booking has been closed." });
-      if (schedule.status !== "open") return res.status(409).json({ error: "Booking is not open for this campaign." });
+      if (!schedule) return res.status(404).json({ error: "사용할 수 없는 링크이거나 예약이 마감되었습니다." });
+      if (schedule.status !== "open") return res.status(409).json({ error: "지금은 예약을 받고 있지 않습니다." });
 
       const name = String(inv ? inv.name : body.name || "").trim().slice(0, 120);
       const handleRaw = String(inv ? inv.handle : body.handle || "").trim().slice(0, 120);
       const handle = B.normHandle(handleRaw);
-      if (!name || !handle) return res.status(400).json({ error: "Your name and Instagram handle are both needed." });
+      if (!name || !handle) return res.status(400).json({ error: "이름과 인스타그램 아이디를 모두 입력해 주세요." });
 
       const partySize = Math.min(
         Math.max(1, Math.floor(Number(body.partySize) || 1)),
@@ -441,12 +441,12 @@ function mountBookingRoutes(app, deps) {
 
       const sl = await slots();
       const slot = await sl.findOne({ _id: slotId, scheduleId: schedule._id });
-      if (!slot) return res.status(404).json({ error: "That time is no longer on the list." });
+      if (!slot) return res.status(404).json({ error: "선택하신 시간이 더 이상 없습니다." });
       if ((schedule.closedDates || []).includes(slot.date)) {
-        return res.status(409).json({ error: "That day is not available.", code: "date-blocked" });
+        return res.status(409).json({ error: "선택하신 날짜는 휴무입니다.", code: "date-blocked" });
       }
       if (B.deadlinePassed(slot.startsAt, schedule.deadlineHours, Date.now())) {
-        return res.status(409).json({ error: "That time is too close now to book.", code: "deadline-passed" });
+        return res.status(409).json({ error: "예약 가능 시간이 지났습니다.", code: "deadline-passed" });
       }
 
       /* 1 — the claim */
@@ -455,7 +455,7 @@ function mountBookingRoutes(app, deps) {
       if (!claimed) {
         const view = await publicView(schedule, Date.now());
         return res.status(409).json({
-          error: "Sorry — that slot was just booked. Please choose another time.",
+          error: "방금 다른 분이 예약했습니다. 다른 시간을 선택해 주세요.",
           code: "slot_taken", ...view
         });
       }
@@ -481,7 +481,7 @@ function mountBookingRoutes(app, deps) {
         await sl.updateOne(back.filter, back.update);
         if (err && err.code === 11000) {
           return res.status(409).json({
-            error: "There is already a booking for you on this campaign. Use the link in your confirmation to change it.",
+            error: "이미 예약이 있습니다. 확정 안내의 링크로 시간을 변경해 주세요.",
             code: "already-booked"
           });
         }
@@ -497,7 +497,7 @@ function mountBookingRoutes(app, deps) {
       });
     } catch (err) {
       console.error("POST /api/book confirm failed:", err.message);
-      return res.status(502).json({ error: "Could not complete that booking." });
+      return res.status(502).json({ error: "예약을 완료하지 못했습니다." });
     }
   });
 
@@ -510,10 +510,10 @@ function mountBookingRoutes(app, deps) {
     try {
       const bk = await (await bookings()).findOne({ manageToken: req.params.manageToken });
       if (!bk || bk.status !== "confirmed") {
-        return res.status(404).json({ error: "This booking link is not valid any more." });
+        return res.status(404).json({ error: "사용할 수 없는 예약 링크입니다." });
       }
       const schedule = await (await schedules()).findOne({ _id: bk.scheduleId });
-      if (!schedule) return res.status(404).json({ error: "This booking link is not valid any more." });
+      if (!schedule) return res.status(404).json({ error: "사용할 수 없는 예약 링크입니다." });
 
       const view = await publicView(schedule, Date.now());
       view.booking = { date: bk.date, time: bk.time, partySize: bk.partySize };
@@ -535,25 +535,33 @@ function mountBookingRoutes(app, deps) {
     if (limited(req, res, writeLimit, req.params.manageToken)) return;
 
     const nextSlotId = String((req.body || {}).slotId || "").trim();
-    if (!nextSlotId) return res.status(400).json({ error: "Pick a new time first." });
+    if (!nextSlotId) return res.status(400).json({ error: "새 시간을 먼저 선택해 주세요." });
 
     try {
       const bkCol = await bookings();
       const bk = await bkCol.findOne({ manageToken: req.params.manageToken });
-      if (!bk || bk.status !== "confirmed") return res.status(404).json({ error: "This booking link is not valid any more." });
-      if (bk.slotId === nextSlotId) return res.json({ ok: true, unchanged: true });
+      if (!bk || bk.status !== "confirmed") return res.status(404).json({ error: "사용할 수 없는 예약 링크입니다." });
+      /* the same slot is not an error, but the page still needs a booking
+         to render — returning a bare {unchanged} leaves it with nothing
+         to show and the creator looking at a dead screen */
+      if (bk.slotId === nextSlotId) {
+        return res.json({
+          ok: true, unchanged: true,
+          booking: { date: bk.date, time: bk.time, partySize: bk.partySize, manageToken: bk.manageToken }
+        });
+      }
 
       const schedule = await (await schedules()).findOne({ _id: bk.scheduleId });
-      if (!schedule || schedule.status !== "open") return res.status(409).json({ error: "Booking is not open for this campaign." });
+      if (!schedule || schedule.status !== "open") return res.status(409).json({ error: "지금은 예약을 받고 있지 않습니다." });
 
       const sl = await slots();
       const next = await sl.findOne({ _id: nextSlotId, scheduleId: bk.scheduleId });
-      if (!next) return res.status(404).json({ error: "That time is no longer on the list." });
+      if (!next) return res.status(404).json({ error: "선택하신 시간이 더 이상 없습니다." });
       if ((schedule.closedDates || []).includes(next.date)) {
-        return res.status(409).json({ error: "That day is not available.", code: "date-blocked" });
+        return res.status(409).json({ error: "선택하신 날짜는 휴무입니다.", code: "date-blocked" });
       }
       if (B.deadlinePassed(next.startsAt, schedule.deadlineHours, Date.now())) {
-        return res.status(409).json({ error: "That time is too close now to book.", code: "deadline-passed" });
+        return res.status(409).json({ error: "예약 가능 시간이 지났습니다.", code: "deadline-passed" });
       }
 
       /* 1 — claim the new seat */
@@ -562,7 +570,7 @@ function mountBookingRoutes(app, deps) {
       if (!claimed) {
         const view = await publicView(schedule, Date.now());
         return res.status(409).json({
-          error: "Sorry — that slot was just booked. Your original time is still yours.",
+          error: "방금 다른 분이 예약했습니다. 기존 예약은 그대로 유지됩니다.",
           code: "slot_taken", ...view
         });
       }
@@ -615,7 +623,7 @@ function mountBookingRoutes(app, deps) {
       });
     } catch (err) {
       console.error("POST /api/book move failed:", err.message);
-      return res.status(502).json({ error: "Could not move that booking." });
+      return res.status(502).json({ error: "시간을 변경하지 못했습니다." });
     }
   });
 
@@ -629,7 +637,7 @@ function mountBookingRoutes(app, deps) {
     try {
       const bkCol = await bookings();
       const bk = await bkCol.findOne({ manageToken: req.params.manageToken });
-      if (!bk) return res.status(404).json({ error: "This booking link is not valid any more." });
+      if (!bk) return res.status(404).json({ error: "사용할 수 없는 예약 링크입니다." });
       if (bk.status !== "confirmed") return res.json({ ok: true, alreadyCancelled: true });
 
       const reason = String((req.body || {}).reason || "").slice(0, 500);
@@ -645,7 +653,7 @@ function mountBookingRoutes(app, deps) {
       return res.json({ ok: true });
     } catch (err) {
       console.error("POST /api/book cancel failed:", err.message);
-      return res.status(502).json({ error: "Could not cancel that booking." });
+      return res.status(502).json({ error: "예약을 취소하지 못했습니다." });
     }
   });
 

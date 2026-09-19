@@ -1231,6 +1231,21 @@ app.get("/partner/:token", (req, res) => {
   res.sendFile(path.join(__dirname, "partner.html"));
 });
 
+/* The creator's booking page. Three shapes, one file — the page reads
+   the token off the last path segment and the API resolves which kind it
+   is, so the difference never has to be encoded twice.
+
+     /book/i/<inviteToken>     one named creator, pre-filled
+     /book/<publicToken>       anyone with the campaign link
+     /book/manage/<token>      an existing booking, to move or cancel
+
+   Declared before the "/book/:token" catch so "i" and "manage" are not
+   mistaken for tokens. */
+app.get(["/book/i/:token", "/book/manage/:token", "/book/:token"], (req, res) => {
+  res.set("X-Robots-Tag", "noindex, nofollow");
+  res.sendFile(path.join(__dirname, "book.html"));
+});
+
 /* Writing a status back to Notion.
 
    The dashboard has always read from Notion. This is the one place it
