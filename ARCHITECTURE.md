@@ -143,6 +143,41 @@ clears it once the file is written, because from that point the manifest is
 the new baseline — a `current` flag that survives into a commit tells the next
 re-anchor to skip a module, and its neighbour then swallows it.
 
+### Adding a module: the second edit is the one that bites
+
+Those two facts combine into a trap, and the booking view walked into it.
+
+`rebuild-split` clears `current: true` after writing. So a module added by
+hand is protected from re-anchoring exactly once. Edit `index.html` again and
+re-anchor against `HEAD:index.html` — the reference the workflow above names —
+and the new module is now mapped like any other, through a diff whose reference
+copy **does not contain its block at all**. Nothing matched, so nothing mapped,
+and the range collapsed onto whatever followed it: `src/views/booking.js` came
+out holding the tail of the shell. `check:modules` caught it on the checksum,
+which is the only reason it was a ten-minute detour rather than a silent one.
+
+The reference is "whatever `index.html` looked like when the ranges were last
+correct", and after adding a module that is no longer HEAD — it is the working
+copy from before this edit. Keep one if you can.
+
+If you did not, recover rather than hand-fixing line numbers:
+
+```bash
+git show HEAD:tools/manifest.json > tools/manifest.json   # the 48 that HEAD knows
+python3 tools/reanchor.py <(git show HEAD:index.html)     # map those, correctly
+# then re-add the new module, its range read off its own banner lines in the
+# CURRENT index.html, with current: true
+node tools/rebuild-split.mjs
+node tools/autoimport.mjs views/<new>.js <any-module-that-calls-it>.js
+node tools/rebuild-split.mjs        # again: autoimport changed the headers,
+                                    # and the checksums were taken before that
+npm run check:modules               # immediately — this is what proves it
+```
+
+Run `check:modules` straight after, every time. A mangled range produces a file
+that still parses and still imports cleanly; the checksum is what fails, and
+until it runs you have no signal at all.
+
 `tools/split.mjs` is the record of the extraction: for each module, the exact
 line ranges of `index.html` it came from and a checksum of the result. It is
 re-runnable until the views become components, at which point `index.html`

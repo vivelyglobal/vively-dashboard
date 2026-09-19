@@ -355,6 +355,105 @@ function mountBookingRoutes(app, deps) {
     }
   }));
 
+  /* ---- staff: moving and matching a booking --------------------------
+
+     Staff can do two things a creator cannot: move somebody into a slot
+     that is already full, and attach an unmatched public booking to a
+     roster row. Both are real decisions a person is entitled to make, so
+     they are recorded rather than prevented. */
+
+  app.post("/api/booking/booking/:id/move", requireStaff(async (req, res) => {
+    if (needsDb(res)) return;
+    const nextSlotId = String((req.body || {}).slotId || "").trim();
+    const over = !!(req.body || {}).overCapacity;
+    if (!nextSlotId) return res.status(400).json({ error: "Which slot?" });
+
+    try {
+      const bkCol = await bookings();
+      const bk = await bkCol.findOne({ _id: req.params.id });
+      if (!bk || bk.status !== "confirmed") return res.status(404).json({ error: "No such booking." });
+      if (bk.slotId === nextSlotId) return res.json({ ok: true, unchanged: true });
+
+      const sl = await slots();
+      const next = await sl.findOne({ _id: nextSlotId, scheduleId: bk.scheduleId });
+      if (!next) return res.status(404).json({ error: "No such slot." });
+
+      const previousSlotId = bk.slotId;
+      const seats = bk.partySize;
+
+      /* the same claim the creator's move makes; only the fallback differs */
+      const plan = B.claimPlan(next._id, seats);
+      let claimed = await sl.findOneAndUpdate(plan.filter, plan.update, { returnDocument: "after" });
+      if (!claimed) {
+        if (!over) {
+          return res.status(409).json({
+            error: "That slot is full.", code: "slot_full",
+            free: Math.max(0, (next.capacity || 0) - (next.booked || 0))
+          });
+        }
+        /* deliberately past capacity, because a person said so. The seat
+           count still moves, so the slot reads over-booked rather than
+           quietly hiding an extra visitor. */
+        await sl.updateOne({ _id: next._id }, { $inc: { booked: seats }, $set: { updatedAt: new Date() } });
+      }
+
+      try {
+        const done = await bkCol.updateOne(
+          { _id: bk._id, status: "confirmed", slotId: previousSlotId },
+          { $set: { slotId: next._id, date: next.date, time: next.time, startsAt: next.startsAt,
+                    source: "staff", overCapacity: over && !claimed, updatedAt: new Date() },
+            $push: { history: { at: new Date(), action: "moved", by: "staff",
+                     from: bk.date + " " + bk.time, to: next.date + " " + next.time,
+                     overCapacity: over && !claimed } } }
+        );
+        if (!done.modifiedCount) throw new Error("booking changed underneath the move");
+      } catch (err) {
+        const back = B.releasePlan(next._id, seats);
+        await sl.updateOne(back.filter, back.update);
+        throw err;
+      }
+
+      const release = B.releasePlan(previousSlotId, seats);
+      await sl.updateOne(release.filter, release.update);
+      return res.json({ ok: true, overCapacity: over && !claimed });
+    } catch (err) {
+      console.error("POST /api/booking/booking/move failed:", err.message);
+      return res.status(502).json({ error: "Could not move that booking." });
+    }
+  }));
+
+  /* Points an unmatched booking at a roster row. Creates nothing: if the
+     person is not on the roster, adding them is a separate decision made
+     in the roster itself. The partial unique index still applies, so a row
+     that already has a confirmed booking cannot take a second. */
+  app.post("/api/booking/booking/:id/match", requireStaff(async (req, res) => {
+    if (needsDb(res)) return;
+    const participantId = String((req.body || {}).participantId || "").trim();
+    if (!participantId) return res.status(400).json({ error: "Which roster row?" });
+    try {
+      const bkCol = await bookings();
+      const bk = await bkCol.findOne({ _id: req.params.id });
+      if (!bk || bk.status !== "confirmed") return res.status(404).json({ error: "No such booking." });
+      if (bk.participantId) return res.status(409).json({ error: "That booking is already matched." });
+
+      try {
+        await bkCol.updateOne({ _id: bk._id }, {
+          $set: { participantId, updatedAt: new Date() },
+          $push: { history: { at: new Date(), action: "matched", by: "staff", to: participantId } }
+        });
+      } catch (err) {
+        if (err && err.code === 11000) {
+          return res.status(409).json({ error: "That roster row already has a booking on this campaign." });
+        }
+        throw err;
+      }
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("POST /api/booking/booking/match failed:", err.message);
+      return res.status(502).json({ error: "Could not match that booking." });
+    }
+  }));
+
   /* ---- the public page ----------------------------------------------- */
 
   /* Both link shapes land here. An invite carries the creator's name and

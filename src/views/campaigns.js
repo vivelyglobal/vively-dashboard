@@ -15,6 +15,7 @@ import { syncStageToNotion } from '../sync/notionWriteback.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { FLAGS, avatarHtml, copyText, daysAgo, downloadFile, emptyState, flagPill, stagePill, statCard, statusPill, tierPill, toCsv, whoHtml } from '../ui/html.js';
 import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';
+import { bookingTab, inviteParticipantToBook } from './booking.js';
 import { campaignCalendarTab, renderCampaignCalendar, upcomingVisitsStrip } from './calendarView.js';
 import { openImportWizard } from './excelImport.js';
 import { briefTab, messagesTab } from './messages.js';
@@ -28,7 +29,7 @@ import { reportTab } from './report.js';
    layer 2 = the campaign list · layer 3 = tabs on one campaign
    ============================================================ */
 export const CAMPAIGN_TABS = [
-  ['roster', 'Roster & pipeline'], ['calendar', 'Visit calendar'], ['content', 'Content review'],
+  ['roster', 'Roster & pipeline'], ['booking', 'Booking'], ['calendar', 'Visit calendar'], ['content', 'Content review'],
   ['performance', 'Performance'], ['creators', 'Creator results'], ['messages', 'Messages'],
   ['brief', 'Brief'], ['report', 'Report']
 ];
@@ -190,8 +191,9 @@ export function renderCampaign(view, id, tab) {
   $('#cpDelete').addEventListener('click', () => confirmDeleteCampaign(cp));
 
   const mount = $('#cpTab');
-  ({ roster: rosterTab, calendar: campaignCalendarTab, content: contentTab, performance: campaignPerformanceTab,
-     creators: campaignCreatorsTab, messages: messagesTab, brief: briefTab, report: reportTab }[tab] || rosterTab)(mount, cp);
+  ({ roster: rosterTab, booking: bookingTab, calendar: campaignCalendarTab, content: contentTab,
+     performance: campaignPerformanceTab, creators: campaignCreatorsTab, messages: messagesTab,
+     brief: briefTab, report: reportTab }[tab] || rosterTab)(mount, cp);
 }
 
 /* ------------------------------ edit & delete ------------------------------ */
@@ -720,7 +722,19 @@ export function showParticipant(pid) {
       <div class="field"><label>Content link</label>
         <input type="url" id="pdContentUrl" placeholder="https://www.instagram.com/reel/…" value="${esc((c && c.url) || '')}"/></div>
     </div>
-    <div class="grid g2" style="gap:10px">
+    ${p.bookingId
+      /* The creator booked this themselves. Two date inputs here would
+         invite a hand-edit that the next workspace save puts straight
+         back — the booking owns the time, and it is changed where it
+         lives, on the Booking tab. */
+      ? `<div class="note" style="margin:-4px 0 14px;font-size:12px">
+          <strong>${esc(p.confirmedVisitAt || '—')}</strong> — booked by the creator.
+          ${p.visitAt && p.visitAt !== p.confirmedVisitAt ? `They originally asked for ${esc(p.visitAt)}.` : ''}
+          <br>Change or cancel it on the campaign's <strong>Booking</strong> tab; editing it here would be undone
+          by the booking itself on the next save.
+          <br><button class="btn xs" id="pdToBooking" type="button" style="margin-top:6px">Open the Booking tab</button>
+        </div>`
+      : `<div class="grid g2" style="gap:10px">
       <div class="field"><label>Confirmed visit — date</label>
         <input type="date" id="pdVisitDate" value="${esc(splitSlot(p.confirmedVisitAt).date)}"/></div>
       <div class="field"><label>Confirmed visit — time</label>
@@ -731,7 +745,8 @@ export function showParticipant(pid) {
         ? `They asked for <strong>${esc(p.visitAt)}</strong>. Setting a confirmed time here overrides it everywhere — calendar, partner page, messages — and a Notion sync will not undo it.`
         : `Nothing came from the form for this row, so whatever you set here is the booking.`}
       ${p.confirmedVisitAt ? `<br><button class="btn xs" id="pdVisitClear" type="button" style="margin-top:6px">Clear the confirmed time</button>` : ''}
-    </div>
+      <br><button class="btn xs" id="pdInvite" type="button" style="margin-top:6px">Invite to book</button>
+    </div>`}
     <div class="field"><label>Campaign</label>
       <select id="pdCampaign">${DB.campaigns.map((c) =>
         `<option value="${esc(c.id)}" ${c.id === p.campaignId ? 'selected' : ''}>${esc(c.brand)} — ${esc(c.name)}</option>`).join('')}</select>
@@ -825,6 +840,17 @@ export function showParticipant(pid) {
     toast('Unpinned — the next Notion sync decides where this row lives');
   });
 
+  const toBooking = $('#pdToBooking');
+  if (toBooking) toBooking.addEventListener('click', () => {
+    closeDrawer();
+    location.hash = '#/campaigns/' + p.campaignId + '/booking';
+  });
+  const inviteBtn = $('#pdInvite');
+  if (inviteBtn) inviteBtn.addEventListener('click', () => {
+    const cp = byCampaign[p.campaignId];
+    if (cp) inviteParticipantToBook(cp, p);
+  });
+
   $('#pdSave').addEventListener('click', () => {
     p.note = $('#pdNote').value;
     p.remark = $('#pdRemark').value.trim();
@@ -834,9 +860,14 @@ export function showParticipant(pid) {
     /* The confirmed slot is only ever set here, and the sync never writes
        it, so it survives every later import. Storing '' rather than
        deleting keeps the row's shape stable for the Sheet export. */
-    const slot = joinSlot($('#pdVisitDate').value, $('#pdVisitTime').value);
-    if (slot !== (p.confirmedVisitAt || '')) {
-      if (slot) p.confirmedVisitAt = slot; else delete p.confirmedVisitAt;
+    /* A booked row has no date inputs — its time belongs to the booking,
+       and applyBookingSlots() on the server would put back anything set
+       here anyway. Leaving it alone is the honest version of that. */
+    if (!p.bookingId) {
+      const slot = joinSlot($('#pdVisitDate').value, $('#pdVisitTime').value);
+      if (slot !== (p.confirmedVisitAt || '')) {
+        if (slot) p.confirmedVisitAt = slot; else delete p.confirmedVisitAt;
+      }
     }
 
     /* Moving pins the row. Without the pin the next sync of the campaign

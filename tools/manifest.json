@@ -36,8 +36,8 @@
   "file": "lib/csv.js",
   "ranges": [
    [
-    7090,
-    7108
+    7120,
+    7138
    ]
   ],
   "imports": [],
@@ -199,8 +199,8 @@
   "file": "lib/xlsx.js",
   "ranges": [
    [
-    5176,
-    5447
+    5206,
+    5477
    ]
   ],
   "imports": [
@@ -212,8 +212,8 @@
   "file": "import/excel.js",
   "ranges": [
    [
-    5448,
-    5669
+    5478,
+    5699
    ]
   ],
   "imports": [],
@@ -223,8 +223,8 @@
   "file": "import/notion.js",
   "ranges": [
    [
-    5670,
-    6401
+    5700,
+    6431
    ]
   ],
   "imports": [
@@ -242,8 +242,8 @@
   "file": "import/metrics.js",
   "ranges": [
    [
-    6402,
-    6598
+    6432,
+    6628
    ]
   ],
   "imports": [
@@ -265,8 +265,8 @@
   "file": "sync/sheets.js",
   "ranges": [
    [
-    7332,
-    7577
+    7362,
+    7607
    ]
   ],
   "imports": [
@@ -281,8 +281,8 @@
   "file": "docs/docx.js",
   "ranges": [
    [
-    7668,
-    7798
+    7698,
+    7828
    ]
   ],
   "imports": [
@@ -296,8 +296,8 @@
   "file": "docs/contracts.js",
   "ranges": [
    [
-    7799,
-    8270
+    7829,
+    8300
    ]
   ],
   "imports": [
@@ -356,7 +356,7 @@
    ],
    [
     2782,
-    3817
+    3847
    ]
   ],
   "imports": [
@@ -377,6 +377,7 @@
    "import { $, $$, esc } from '../ui/dom.js';",
    "import { FLAGS, avatarHtml, copyText, daysAgo, downloadFile, emptyState, flagPill, stagePill, statCard, statusPill, tierPill, toCsv, whoHtml } from '../ui/html.js';",
    "import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';",
+   "import { bookingTab, inviteParticipantToBook } from './booking.js';",
    "import { campaignCalendarTab, renderCampaignCalendar, upcomingVisitsStrip } from './calendarView.js';",
    "import { openImportWizard } from './excelImport.js';",
    "import { briefTab, messagesTab } from './messages.js';",
@@ -385,14 +386,14 @@
    "import { state } from './overview.js';",
    "import { reportTab } from './report.js';"
   ],
-  "sha256": "02d64e138c4094c71fea17526710b75ad9e3f3b5338450906e32fd2ea75faf72"
+  "sha256": "968d1f96da92d1e510e216dc9d85520975d491251eef2dc64dbe8ad0cb9220e8"
  },
  {
   "file": "views/social.js",
   "ranges": [
    [
-    3834,
-    4097
+    3864,
+    4127
    ]
   ],
   "imports": [
@@ -410,12 +411,12 @@
   "file": "views/analytics.js",
   "ranges": [
    [
-    3818,
-    3832
+    3848,
+    3862
    ],
    [
-    4098,
-    4299
+    4128,
+    4329
    ]
   ],
   "imports": [
@@ -435,8 +436,8 @@
   "file": "views/messages.js",
   "ranges": [
    [
-    4300,
-    4721
+    4330,
+    4751
    ]
   ],
   "imports": [
@@ -458,8 +459,8 @@
   "file": "views/report.js",
   "ranges": [
    [
-    4722,
-    4865
+    4752,
+    4895
    ]
   ],
   "imports": [
@@ -477,8 +478,8 @@
   "file": "views/creators.js",
   "ranges": [
    [
-    4866,
-    5175
+    4896,
+    5205
    ]
   ],
   "imports": [
@@ -500,8 +501,8 @@
   "file": "views/notionDiag.js",
   "ranges": [
    [
-    6599,
-    6730
+    6629,
+    6760
    ]
   ],
   "imports": [
@@ -518,8 +519,8 @@
   "file": "views/notionImport.js",
   "ranges": [
    [
-    6731,
-    7030
+    6761,
+    7060
    ]
   ],
   "imports": [
@@ -540,12 +541,12 @@
   "file": "views/excelImport.js",
   "ranges": [
    [
-    7031,
-    7089
+    7061,
+    7119
    ],
    [
-    7109,
-    7331
+    7139,
+    7361
    ]
   ],
   "imports": [
@@ -567,8 +568,8 @@
   "file": "views/sheetsSettings.js",
   "ranges": [
    [
-    7578,
-    7667
+    7608,
+    7697
    ]
   ],
   "imports": [
@@ -583,8 +584,8 @@
   "file": "views/contracts.js",
   "ranges": [
    [
-    8271,
-    8602
+    8301,
+    8632
    ]
   ],
   "imports": [
@@ -601,8 +602,8 @@
   "file": "views/settings.js",
   "ranges": [
    [
-    8603,
-    8893
+    8633,
+    8923
    ]
   ],
   "imports": [
@@ -638,8 +639,8 @@
   "file": "sync/gcal.js",
   "ranges": [
    [
-    9391,
-    9742
+    9421,
+    9772
    ]
   ],
   "imports": [
@@ -655,8 +656,8 @@
   "file": "views/calendar.js",
   "ranges": [
    [
-    9745,
-    9995
+    9775,
+    10025
    ]
   ],
   "imports": [
@@ -674,8 +675,8 @@
   "file": "sync/partner.js",
   "ranges": [
    [
-    9109,
-    9214
+    9139,
+    9244
    ]
   ],
   "imports": [
@@ -688,8 +689,8 @@
   "file": "views/partners.js",
   "ranges": [
    [
-    9215,
-    9390
+    9245,
+    9420
    ]
   ],
   "imports": [
@@ -709,8 +710,8 @@
   "file": "sync/notionWriteback.js",
   "ranges": [
    [
-    8993,
-    9108
+    9023,
+    9138
    ]
   ],
   "imports": [
@@ -725,8 +726,8 @@
   "file": "model/duplicates.js",
   "ranges": [
    [
-    8894,
-    8991
+    8924,
+    9021
    ]
   ],
   "imports": [
@@ -742,8 +743,8 @@
   "file": "model/socialStats.js",
   "ranges": [
    [
-    9997,
-    10296
+    10027,
+    10326
    ]
   ],
   "imports": [
@@ -755,8 +756,8 @@
   "file": "charts/socialViz.js",
   "ranges": [
    [
-    10297,
-    10394
+    10327,
+    10424
    ]
   ],
   "imports": [
@@ -770,8 +771,8 @@
   "file": "views/socialOverview.js",
   "ranges": [
    [
-    10395,
-    10861
+    10425,
+    10891
    ]
   ],
   "imports": [
@@ -790,8 +791,8 @@
   "file": "model/homeStats.js",
   "ranges": [
    [
-    10863,
-    11282
+    10893,
+    11312
    ]
   ],
   "imports": [
@@ -806,8 +807,8 @@
   "file": "views/home.js",
   "ranges": [
    [
-    11284,
-    11658
+    11314,
+    11688
    ]
   ],
   "imports": [
@@ -822,5 +823,23 @@
    "import { ensureOverviewStyles, platformTag } from './socialOverview.js';"
   ],
   "sha256": "c8a32cfa457cde078665b496842820fdb593134d681d0f75bc653b73bf99d331"
+ },
+ {
+  "file": "views/booking.js",
+  "ranges": [
+   [
+    11691,
+    12147
+   ]
+  ],
+  "imports": [
+   "import { DB, byCreator, notify } from '../model/db.js';",
+   "import { isBlocked } from '../model/settings.js';",
+   "import { partsOf } from '../model/stats.js';",
+   "import { $, $$, esc } from '../ui/dom.js';",
+   "import { copyText, statCard } from '../ui/html.js';",
+   "import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';"
+  ],
+  "sha256": "7be6789c70badb4278575e4ca4dc357755f5aa5266cefdecb965ee1540fda988"
  }
 ]
