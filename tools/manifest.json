@@ -603,7 +603,7 @@
   "ranges": [
    [
     8637,
-    9160
+    9207
    ]
   ],
   "imports": [
@@ -614,7 +614,7 @@
    "import { DB, byCampaign, byCreator, clearPersisted, linkSocialContent, notify, persist, persistState, serverSave, toastAfterSave } from '../model/db.js';",
    "import { SETTINGS } from '../model/settings.js';",
    "import { SOURCES, newId, tierOf } from '../model/vocab.js';",
-   "import { SM, SM_CONTENT_ALIASES, SM_CREATOR_ALIASES, commitSheetMetrics, dryRunSheetMetrics, fetchSheetTab, guessSheetColumns, saveSheetMetricsConfig } from '../sync/sheetMetrics.js';",
+   "import { SM, SM_CONTENT_DEFAULT_MAP, SM_CONTENT_FIELDS, commitSheetMetrics, dryRunSheetMetrics, fetchSheetTab, saveSheetMetricsConfig, smHeaderIndex, smInfluencerKind, smSuggestCampaign } from '../sync/sheetMetrics.js';",
    "import { $, $$, esc } from '../ui/dom.js';",
    "import { downloadFile, flagPill, stagePill, statCard, whoHtml } from '../ui/html.js';",
    "import { toast } from '../ui/overlay.js';",
@@ -622,7 +622,7 @@
    "import { settingsPartners, wireWritebackCard, writebackCardHtml } from './partners.js';",
    "import { settingsSheets } from './sheetsSettings.js';"
   ],
-  "sha256": "b7d0be025b8b2b23a859fd005803f403eb5ffd5c8b3086ac6545cf436b4f008b"
+  "sha256": "9b3032817db5fa1b73436176dcdea58939284c747d8b337875cdff8a5deb81d0"
  },
  {
   "file": "styles.css",
@@ -640,8 +640,8 @@
   "file": "sync/gcal.js",
   "ranges": [
    [
-    9658,
-    10009
+    9705,
+    10056
    ]
   ],
   "imports": [
@@ -657,8 +657,8 @@
   "file": "views/calendar.js",
   "ranges": [
    [
-    10012,
-    10262
+    10059,
+    10309
    ]
   ],
   "imports": [
@@ -676,8 +676,8 @@
   "file": "sync/partner.js",
   "ranges": [
    [
-    9376,
-    9481
+    9423,
+    9528
    ]
   ],
   "imports": [
@@ -690,8 +690,8 @@
   "file": "views/partners.js",
   "ranges": [
    [
-    9482,
-    9657
+    9529,
+    9704
    ]
   ],
   "imports": [
@@ -711,8 +711,8 @@
   "file": "sync/notionWriteback.js",
   "ranges": [
    [
-    9260,
-    9375
+    9307,
+    9422
    ]
   ],
   "imports": [
@@ -727,8 +727,8 @@
   "file": "model/duplicates.js",
   "ranges": [
    [
-    9161,
-    9258
+    9208,
+    9305
    ]
   ],
   "imports": [
@@ -744,8 +744,8 @@
   "file": "model/socialStats.js",
   "ranges": [
    [
-    10264,
-    10563
+    10311,
+    10610
    ]
   ],
   "imports": [
@@ -757,8 +757,8 @@
   "file": "charts/socialViz.js",
   "ranges": [
    [
-    10564,
-    10661
+    10611,
+    10708
    ]
   ],
   "imports": [
@@ -772,8 +772,8 @@
   "file": "views/socialOverview.js",
   "ranges": [
    [
-    10662,
-    11128
+    10709,
+    11175
    ]
   ],
   "imports": [
@@ -792,8 +792,8 @@
   "file": "model/homeStats.js",
   "ranges": [
    [
-    11130,
-    11549
+    11177,
+    11596
    ]
   ],
   "imports": [
@@ -808,8 +808,8 @@
   "file": "views/home.js",
   "ranges": [
    [
-    11551,
-    11925
+    11598,
+    11972
    ]
   ],
   "imports": [
@@ -829,8 +829,8 @@
   "file": "views/booking.js",
   "ranges": [
    [
-    11928,
-    12384
+    11975,
+    12431
    ]
   ],
   "imports": [
@@ -847,14 +847,15 @@
   "file": "sync/sheetMetrics.js",
   "ranges": [
    [
-    12387,
-    12871
+    12434,
+    13105
    ]
   ],
   "imports": [
-   "import { findCreatorByHandle } from '../model/creators.js';",
-   "import { DB, platformPostIdOf } from '../model/db.js';"
+   "import { findCreatorByHandle, recomputeCreatorStats } from '../model/creators.js';",
+   "import { DB, attachContent, byCampaign, platformOfUrl, platformPostIdOf, socialContentDefaults } from '../model/db.js';",
+   "import { avColor, newId } from '../model/vocab.js';"
   ],
-  "sha256": "2bb6eab51eb54e59562ee9e1695e13aa3aef525cf3c68bff1fb3bb216d052f20"
+  "sha256": "33009e15d170ed0f3f3be31988225062b420921752ce01ed0f4935a0a8db5657"
  }
 ]

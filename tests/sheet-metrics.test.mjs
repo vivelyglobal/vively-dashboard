@@ -10,9 +10,9 @@ import assert from 'node:assert/strict';
 import {
   parseCsvLoose, sheetCsvUrl, guessSheetColumns, smMetric, smEngagement, smDate,
   planSheetContent, planSheetCreators, applySheetContent, applySheetCreators,
-  SM_CONTENT_ALIASES, SM_CREATOR_ALIASES
+  SM_CREATOR_ALIASES, SM_CONTENT_DEFAULT_MAP, smInfluencerKind, smPostId, smSuggestCampaign
 } from '../src/sync/sheetMetrics.js';
-import { DB } from '../src/model/db.js';
+import { DB, byCampaign } from '../src/model/db.js';
 
 /* ---- reading ---------------------------------------------------------- */
 
@@ -94,154 +94,272 @@ test('columns are guessed without one field stealing another\'s column', () => {
 });
 
 test('a column matched exactly wins over one matched loosely', () => {
-  const m = guessSheetColumns(['Post URL', 'URL'], SM_CONTENT_ALIASES);
-  assert.equal(m.postUrl, 'Post URL');
+  const m = guessSheetColumns(['Avg Views', 'Views'], { views: ['views'], avgViews: ['avg views'] });
+  assert.equal(m.views, 'Views');
+  assert.equal(m.avgViews, 'Avg Views');
 });
 
-/* ---- planning and applying, against a real DB -------------------------- */
+
+/* ---- the master Sheet: one tab per campaign ----------------------------
+
+   Rows below are headed exactly as the campaign tabs are, and read with
+   the default map, so a renamed column in the importer fails here. */
+
+const TAB_HEADER = ['deliverable_id', 'ci_id', 'influencer_id', 'type', 'post_url', 'posted_date',
+  'likes', 'comments', 'views', 'last_scraped_at', 'notes', 'cpe_expected', 'cpe_actual',
+  'cpv_expected', 'cpv_actual', 'shares', 'saves', 'reposts', 'post_er'];
+
+/* one row, from an object keyed by column name; anything not given is blank */
+const row = (o) => TAB_HEADER.map((h) => (o[h] == null ? '' : String(o[h])));
+const tab = (...objs) => [TAB_HEADER, ...objs.map(row)];
 
 function seed() {
   DB.creators.length = 0; DB.campaigns.length = 0; DB.participants.length = 0; DB.socialContent.length = 0;
+  Object.keys(byCampaign).forEach((k) => delete byCampaign[k]);
   DB.creators.push(
-    { id: 'cr1', handle: '@minji', name: 'Minji', platform: 'Instagram',
-      followers: 12000, er: 3.1, avgViews: 8000, categories: [], country: '', campaignIds: ['cp1'] },
-    { id: 'cr2', handle: '@jiwoo', name: 'Jiwoo', platform: 'Instagram',
-      followers: 0, er: 0, avgViews: 0, categories: ['Beauty'], country: 'Korea', campaignIds: [] }
+    { id: 'cr1', handle: '@minji', name: 'Minji', platform: 'Instagram', followers: 12000, er: 3.1, avgViews: 8000 },
+    { id: 'cr2', handle: '@jiwoo', name: 'Jiwoo', platform: 'Instagram', followers: 5000, er: 2.0, avgViews: 3000 },
+    { id: 'cr3', handle: '@seoyeon', name: 'Seoyeon', platform: 'Instagram', followers: 900, er: 4.0, avgViews: 700 }
   );
-  DB.campaigns.push({ id: 'cp1', brand: 'JAIMDANG' });
-  DB.participants.push({ id: 'pt1', campaignId: 'cp1', creatorId: 'cr1', stage: 'live' });
-  DB.socialContent.push({
-    id: 'sc1', platform: 'Instagram', platformPostId: 'ig_ABC123',
-    postUrl: 'https://www.instagram.com/reel/ABC123/', url: 'https://www.instagram.com/reel/ABC123/',
-    views: 5000, likes: 400, comments: 20, shares: 0, saves: 0, reach: 0,
-    publishedAt: '', dataSource: 'manual', lastScrapedAt: null
-  });
+  DB.campaigns.push({ id: 'cpK', brand: 'KOWORK', name: '' }, { id: 'cpJ', brand: 'JAIMDANG', name: 'Autumn' });
+  DB.campaigns.forEach((c) => (byCampaign[c.id] = c));
+  DB.participants.push(
+    { id: 'ptK1', campaignId: 'cpK', creatorId: 'cr1', stage: 'live' },   /* has a post already */
+    { id: 'ptK2', campaignId: 'cpK', creatorId: 'cr2', stage: 'live' }    /* no post yet */
+    /* cr3 is on no roster */
+  );
+  const sc1 = {
+    id: 'sc1', participantId: 'ptK1', campaignId: 'cpK', creatorId: 'cr1', platform: 'Instagram',
+    platformPostId: 'ig_ABC123', postUrl: 'https://www.instagram.com/reel/ABC123/', url: 'https://www.instagram.com/reel/ABC123/',
+    views: 5000, likes: 400, comments: 20, shares: 0, saves: 0, publishedAt: '2026-09-01',
+    dataSource: 'manual', lastScrapedAt: '2026-09-10'
+  };
+  DB.socialContent.push(sc1);
+  DB.participants[0].content = sc1;
 }
 
-const rows = (header, ...body) => [header, ...body];
+const OPTS = { tab: 'KOWORK', campaignId: 'cpK', skipZero: true, erUnit: 'percent', allowCreate: true };
+const plan = (rows, o) => planSheetContent(rows, SM_CONTENT_DEFAULT_MAP, Object.assign({}, OPTS, o || {}));
+const why = (p) => p.unmatched.map((u) => u.why);
 
-test('a post is matched on its id however the URL is spelled', () => {
+test('an existing post is found by the shortcode in post_url, however the link is spelled', () => {
   seed();
-  const plan = planSheetContent(
-    rows(['Post URL', 'Views'], ['https://instagram.com/reel/ABC123?igsh=xyz', '9000']),
-    { postUrl: 'Post URL', views: 'Views' }, {});
-  assert.equal(plan.updates.length, 1);
-  assert.equal(plan.updates[0].by, 'post id from URL');
-  assert.deepEqual(plan.updates[0].changes, [{ field: 'views', from: 5000, to: 9000 }]);
+  const p = plan(tab({ post_url: 'https://instagram.com/p/ABC123?igsh=xyz', views: 9000, influencer_id: 'minji' }));
+  assert.equal(p.updates.length, 1);
+  assert.equal(p.updates[0].by, 'post id');
+  assert.deepEqual(p.updates[0].changes.find((c) => c.field === 'views'), { field: 'views', from: 5000, to: 9000 });
 });
 
-test('a blank metric column leaves the stored figure alone', () => {
+test('ci_id is never taken for a post id', () => {
   seed();
-  const plan = planSheetContent(
-    rows(['Post URL', 'Views', 'Likes'], ['https://www.instagram.com/reel/ABC123/', '', '0']),
-    { postUrl: 'Post URL', views: 'Views', likes: 'Likes' }, {});
-  /* views blank and likes zero: neither may overwrite 5000 and 400 */
-  assert.equal(plan.updates.length, 0);
-  assert.equal(plan.skipped.length, 1);
+  /* ci_id holds the very shortcode of sc1; post_url points elsewhere */
+  const p = plan(tab({ ci_id: 'ABC123', post_url: 'https://www.instagram.com/reel/ZZZ999/', views: 10, influencer_id: 'jiwoo' }));
+  assert.equal(p.updates.length, 0, 'ci_id matched an existing post');
+  assert.equal(p.creates.length, 1);
+  assert.equal(p.creates[0].postId, 'ig_ZZZ999');
+});
+
+test('the campaign comes from the tab mapping; a post filed elsewhere is flagged and never moved', () => {
+  seed();
+  const p = plan(tab({ post_url: 'https://www.instagram.com/reel/ABC123/', views: 9000 }), { tab: 'JAIMDANG', campaignId: 'cpJ' });
+  assert.equal(p.campaignName, 'JAIMDANG — Autumn');
+  assert.equal(p.conflicts.length, 1);
+  assert.equal(p.updates.length, 1, 'its own numbers still update');
+  applySheetContent(p);
+  const sc = DB.socialContent[0];
+  assert.equal(sc.views, 9000);
+  assert.equal(sc.campaignId, 'cpK', 'the post was moved');
+  assert.equal(sc.participantId, 'ptK1');
+});
+
+test('posted_date, last_scraped_at and the five metrics land where they belong', () => {
+  seed();
+  const p = plan(tab({ post_url: 'https://www.instagram.com/reel/ABC123/', posted_date: '2026-09-02',
+    last_scraped_at: '2026-09-19', views: 9000, likes: 500, comments: 30, shares: 7, saves: 12, type: 'reel' }));
+  applySheetContent(p);
+  const sc = DB.socialContent[0];
+  assert.deepEqual([sc.views, sc.likes, sc.comments, sc.shares, sc.saves], [9000, 500, 30, 7, 12]);
+  assert.equal(sc.publishedAt, '2026-09-02');
+  assert.equal(sc.lastScrapedAt, '2026-09-19');
+  assert.equal(sc.format, 'Reel');
+  assert.equal(sc.dataSource, 'google_sheet');
+});
+
+test('post_er stays on the post and never reaches the creator profile', () => {
+  seed();
+  const before = JSON.stringify(DB.creators);
+  const p = plan(tab({ post_url: 'https://www.instagram.com/reel/ABC123/', post_er: '7.5' }));
+  applySheetContent(p);
+  assert.equal(DB.socialContent[0].postEr, 7.5);
+  assert.equal(JSON.stringify(DB.creators), before, 'a creator profile changed');
+});
+
+test('reposts, CPE/CPV, notes and deliverable_id are kept as secondary fields', () => {
+  seed();
+  const p = plan(tab({ post_url: 'https://www.instagram.com/reel/ABC123/', reposts: 3, cpe_expected: '0.37',
+    cpe_actual: '0.41', cpv_expected: '12', cpv_actual: '9.5', notes: 'boosted', deliverable_id: 'D-7' }));
+  assert.ok(p.updates[0].changes.filter((c) => c.secondary).length >= 7);
+  applySheetContent(p);
+  const sc = DB.socialContent[0];
+  assert.deepEqual([sc.reposts, sc.cpeExpected, sc.cpeActual, sc.cpvExpected, sc.cpvActual, sc.sheetNotes, sc.deliverableId],
+    [3, 0.37, 0.41, 12, 9.5, 'boosted', 'D-7']);
+});
+
+test('blank and zero never overwrite a stored metric', () => {
+  seed();
+  const p = plan(tab({ post_url: 'https://www.instagram.com/reel/ABC123/', views: '', likes: '0', comments: '-' }));
+  assert.equal(p.updates.length, 0);
+  assert.equal(p.skipped[0].why, 'nothing new');
+  applySheetContent(p);
   assert.equal(DB.socialContent[0].views, 5000);
   assert.equal(DB.socialContent[0].likes, 400);
+  assert.equal(DB.socialContent[0].comments, 20);
 });
 
-test('a post not in the library is reported, never created', () => {
+test('an unreadable last_scraped_at leaves the stamp as it was', () => {
   seed();
-  const before = DB.socialContent.length;
-  const plan = planSheetContent(
-    rows(['Post URL', 'Views'], ['https://www.instagram.com/reel/NOTHERE/', '900']),
-    { postUrl: 'Post URL', views: 'Views' }, {});
-  assert.equal(plan.unmatched.length, 1);
-  assert.equal(plan.updates.length, 0);
-  applySheetContent(plan);
-  assert.equal(DB.socialContent.length, before, 'a content row was created');
+  const p = plan(tab({ post_url: 'https://www.instagram.com/reel/ABC123/', views: 9000, last_scraped_at: 'yesterday-ish' }));
+  applySheetContent(p);
+  assert.equal(DB.socialContent[0].views, 9000);
+  assert.equal(DB.socialContent[0].lastScrapedAt, '2026-09-10');
 });
 
-test('applying a content plan stamps provenance and nothing else moves', () => {
+test('a new post for a rostered creator with no post is created and linked to the roster row', () => {
   seed();
-  const campaigns = JSON.stringify(DB.campaigns), parts = JSON.stringify(DB.participants);
-  const plan = planSheetContent(
-    rows(['Post URL', 'Views', 'Scraped'], ['https://www.instagram.com/reel/ABC123/', '9000', '2026-09-18']),
-    { postUrl: 'Post URL', views: 'Views', scrapedAt: 'Scraped' }, {});
-  assert.equal(applySheetContent(plan), 1);
-  const c = DB.socialContent[0];
-  assert.equal(c.views, 9000);
-  assert.equal(c.dataSource, 'google_sheet');
-  assert.equal(c.lastScrapedAt, '2026-09-18');
-  assert.equal(c.organicViews, 9000, 'views with no split should read as organic');
+  const p = plan(tab({ post_url: 'https://www.instagram.com/reel/NEW1/', influencer_id: '@Jiwoo', views: 1200, last_scraped_at: '2026-09-19' }));
+  assert.equal(p.creates.length, 1);
+  assert.equal(p.creates[0].linked, true);
+  assert.deepEqual(applySheetContent(p), { updated: 0, created: 1 });
+  const pt = DB.participants.find((x) => x.id === 'ptK2');
+  assert.ok(pt.content, 'not linked');
+  assert.equal(pt.content.platformPostId, 'ig_NEW1');
+  assert.equal(pt.content.campaignId, 'cpK');
+  assert.equal(pt.content.views, 1200);
+  assert.equal(pt.content.lastScrapedAt, '2026-09-19');
+  assert.equal(pt.content.dataSource, 'google_sheet');
+});
+
+test('a second post for a creator who already has one goes to the library, attributed but unlinked', () => {
+  seed();
+  const p = plan(tab({ post_url: 'https://www.instagram.com/reel/NEW2/', influencer_id: 'minji', views: 300 }));
+  assert.equal(p.creates[0].linked, false);
+  applySheetContent(p);
+  const rec = DB.socialContent.find((c) => c.platformPostId === 'ig_NEW2');
+  assert.equal(rec.participantId, '');
+  assert.equal(rec.campaignId, 'cpK');
+  assert.equal(rec.creatorId, 'cr1');
+  assert.equal(DB.participants[0].content.id, 'sc1', 'the roster card was swapped');
+});
+
+test('two new posts for one creator make one linked post and one library post, never one merged', () => {
+  seed();
+  const p = plan(tab(
+    { post_url: 'https://www.instagram.com/reel/NA/', influencer_id: 'jiwoo', views: 100 },
+    { post_url: 'https://www.instagram.com/reel/NB/', influencer_id: 'jiwoo', views: 200 },
+    { post_url: 'https://www.instagram.com/reel/NB/', influencer_id: 'jiwoo', views: 200 }));
+  assert.deepEqual(p.creates.map((c) => c.linked), [true, false]);
+  assert.equal(p.skipped[0].why, 'same post earlier on this tab');
+  applySheetContent(p);
+  const a = DB.socialContent.find((c) => c.platformPostId === 'ig_NA');
+  const b = DB.socialContent.find((c) => c.platformPostId === 'ig_NB');
+  assert.equal(a.views, 100);
+  assert.equal(b.views, 200);
+  assert.equal(DB.participants.find((x) => x.id === 'ptK2').content, a);
+});
+
+test('the linked-in-plan guard carries across tabs', () => {
+  seed();
+  const first = plan(tab({ post_url: 'https://www.instagram.com/reel/NA/', influencer_id: 'jiwoo' , views: 1 }));
+  const second = plan(tab({ post_url: 'https://www.instagram.com/reel/NB/', influencer_id: 'jiwoo', views: 1 }),
+    { linkedInPlan: first.linkedInPlan });
+  assert.equal(second.creates[0].linked, false);
+});
+
+test('every condition for adding a post is enforced, and each refusal says which', () => {
+  seed();
+  const url = (s) => 'https://www.instagram.com/reel/' + s + '/';
+  assert.deepEqual(why(plan(tab({ post_url: url('X1'), influencer_id: 'jiwoo' }), { allowCreate: false })),
+    ['new post — adding posts is switched off']);
+  assert.deepEqual(why(plan(tab({ post_url: 'https://www.instagram.com/jiwoo/', influencer_id: 'jiwoo' }))),
+    ['post_url is not an Instagram or TikTok post link']);
+  assert.deepEqual(why(plan(tab({ post_url: url('X2'), influencer_id: 'jiwoo' }), { campaignId: '' })),
+    ['this tab is not mapped to a campaign']);
+  assert.deepEqual(why(plan(tab({ post_url: url('X3'), influencer_id: 'jiwoo' }, { post_url: url('X4') }))),
+    ['no influencer_id on the row']);
+  assert.deepEqual(why(plan(tab({ post_url: url('X5'), influencer_id: 'jiwoo' }, { post_url: url('X6'), influencer_id: 'nobody' }))),
+    ['creator not in the database']);
+  assert.deepEqual(why(plan(tab({ post_url: url('X7'), influencer_id: 'seoyeon' }))),
+    ['@seoyeon is not on the KOWORK roster']);
+});
+
+test('an influencer_id column of ids is not used to find creators', () => {
+  seed();
+  const p = plan(tab({ post_url: 'https://www.instagram.com/reel/Q1/', influencer_id: '17841400000000001' },
+                     { post_url: 'https://www.instagram.com/reel/Q2/', influencer_id: '17841400000000002' }));
+  assert.equal(p.influencer.kind, 'opaque');
+  assert.equal(p.creates.length, 0);
+  assert.ok(why(p).every((w) => w === 'influencer_id does not hold Instagram handles'));
+});
+
+test('influencer_id is judged from what it holds', () => {
+  seed();
+  assert.equal(smInfluencerKind(['@minji', 'https://instagram.com/jiwoo', 'someone']).kind, 'handle');
+  assert.equal(smInfluencerKind(['INF-01', 'INF-02', 'minji']).kind, 'opaque');
+  assert.equal(smInfluencerKind(['1001', '1002', 'minji']).kind, 'opaque');
+  assert.equal(smInfluencerKind(['', ' ']).kind, 'empty');
+});
+
+test('smPostId accepts post links only', () => {
+  assert.equal(smPostId('https://www.instagram.com/reel/ABC123/?igsh=1'), 'ig_ABC123');
+  assert.equal(smPostId('https://www.tiktok.com/@minji/video/7412345678901234567'), 'tt_7412345678901234567');
+  assert.equal(smPostId('https://www.instagram.com/minji/'), '');
+  assert.equal(smPostId('not a link'), '');
+  assert.equal(smPostId(''), '');
+});
+
+test('a tab name suggests the campaign of the same brand', () => {
+  seed();
+  assert.equal(smSuggestCampaign('KOWORK'), 'cpK');
+  assert.equal(smSuggestCampaign('kowork '), 'cpK');
+  assert.equal(smSuggestCampaign('Autumn'), 'cpJ');
+  assert.equal(smSuggestCampaign('NOPE'), '');
+});
+
+test('an import never creates a creator or a campaign membership', () => {
+  seed();
+  const creators = JSON.stringify(DB.creators), campaigns = JSON.stringify(DB.campaigns);
+  const roster = DB.participants.map((x) => x.id + x.campaignId + x.creatorId).join();
+  const p = plan(tab(
+    { post_url: 'https://www.instagram.com/reel/ABC123/', views: 9000 },
+    { post_url: 'https://www.instagram.com/reel/N1/', influencer_id: 'jiwoo', views: 1 },
+    { post_url: 'https://www.instagram.com/reel/N2/', influencer_id: 'seoyeon', views: 1 },
+    { post_url: 'https://www.instagram.com/reel/N3/', influencer_id: 'ghost', views: 1 }));
+  applySheetContent(p);
+  assert.equal(JSON.stringify(DB.creators), creators);
   assert.equal(JSON.stringify(DB.campaigns), campaigns);
-  assert.equal(JSON.stringify(DB.participants), parts, 'campaign membership moved');
+  assert.equal(DB.participants.map((x) => x.id + x.campaignId + x.creatorId).join(), roster);
+  assert.equal(DB.socialContent.length, 2);
 });
 
-test('a campaign column on a row changes no membership', () => {
+test('a plan re-checked at apply time does not duplicate a post that appeared meanwhile', () => {
   seed();
-  const plan = planSheetContent(
-    rows(['Post URL', 'Views', 'Campaign'], ['https://www.instagram.com/reel/ABC123/', '9000', 'SOME OTHER BRAND']),
-    { postUrl: 'Post URL', views: 'Views', campaign: 'Campaign' }, {});
-  applySheetContent(plan);
-  assert.equal(DB.participants[0].campaignId, 'cp1');
-  assert.equal(DB.creators[0].campaignIds[0], 'cp1');
+  const p = plan(tab({ post_url: 'https://www.instagram.com/reel/LATE/', influencer_id: 'minji', views: 1 }));
+  DB.socialContent.push({ id: 'scX', platformPostId: 'ig_LATE', postUrl: 'https://www.instagram.com/reel/LATE/' });
+  assert.deepEqual(applySheetContent(p), { updated: 0, created: 0 });
 });
 
-test('creators are matched on a normalised handle, including a profile URL', () => {
-  seed();
-  const plan = planSheetCreators(
-    rows(['Profile', 'Followers'], ['https://www.instagram.com/MINJI/', '15000']),
-    { handle: 'Profile', followers: 'Followers' }, {});
-  assert.equal(plan.updates.length, 1);
-  assert.equal(plan.updates[0].cr.id, 'cr1');
-});
+/* ---- the optional creator-profile tab -------------------------------- */
 
-test('an unknown handle never becomes a creator', () => {
+test('the creator tab updates profile metrics by handle and never creates a creator', () => {
   seed();
-  const before = DB.creators.length;
-  const plan = planSheetCreators(
-    rows(['Profile', 'Followers'], ['@someone_new', '15000']),
-    { handle: 'Profile', followers: 'Followers' }, {});
-  assert.equal(plan.unmatched.length, 1);
-  applySheetCreators(plan);
-  assert.equal(DB.creators.length, before, 'a creator was created from the Sheet');
-});
-
-test('country and category fill a blank and never overwrite a choice', () => {
-  seed();
-  const plan = planSheetCreators(
-    rows(['Profile', 'Country', 'Category'],
-         ['@minji', 'Japan', 'Food'],          /* cr1: both blank -> filled */
-         ['@jiwoo', 'Thailand', 'Fitness']),   /* cr2: both set   -> untouched */
-    { handle: 'Profile', country: 'Country', category: 'Category' }, {});
-  applySheetCreators(plan);
-  assert.equal(DB.creators[0].country, 'Japan');
-  assert.deepEqual(DB.creators[0].categories, ['Food']);
-  assert.equal(DB.creators[1].country, 'Korea', 'overwrote a country already set');
-  assert.deepEqual(DB.creators[1].categories, ['Beauty'], 'overwrote a category already set');
-});
-
-test('profile metrics land with provenance, and the Vively side is untouched', () => {
-  seed();
-  const plan = planSheetCreators(
-    rows(['Profile', 'Followers', 'ER', 'Avg Views', 'Avg Likes', 'Avg Comments', 'Scraped'],
-         ['@minji', '15000', '0.052', '11000', '900', '40', '2026-09-18']),
-    { handle: 'Profile', followers: 'Followers', er: 'ER', avgViews: 'Avg Views',
-      avgLikes: 'Avg Likes', avgComments: 'Avg Comments', scrapedAt: 'Scraped' },
-    { erUnit: 'decimal' });
-  applySheetCreators(plan);
-  const c = DB.creators[0];
-  assert.equal(c.followers, 15000);
-  assert.equal(c.er, 5.2);
-  assert.equal(c.avgLikes, 900);
-  assert.equal(c.avgComments, 40);
-  assert.equal(c.metricsSource, 'google_sheet');
-  assert.equal(c.metricsSyncedAt, '2026-09-18');
-  /* the Vively side is derived from participants and content and must not
-     be written from a scraper Sheet */
-  assert.deepEqual(c.campaignIds, ['cp1']);
-  assert.equal(c.flag, undefined, 'the Sheet touched creator status');
-});
-
-test('a row with no post reference and a row with no handle are skipped, not guessed', () => {
-  seed();
-  const c = planSheetContent(rows(['Post URL', 'Views'], ['', '900']), { postUrl: 'Post URL', views: 'Views' }, {});
-  assert.equal(c.skipped.length, 1);
-  assert.equal(c.updates.length, 0);
-  const k = planSheetCreators(rows(['Profile', 'Followers'], ['', '900']), { handle: 'Profile', followers: 'Followers' }, {});
-  assert.equal(k.skipped.length, 1);
-  assert.equal(k.updates.length, 0);
+  const n = DB.creators.length;
+  const p = planSheetCreators(
+    [['Profile', 'Followers', 'ER'], ['https://instagram.com/Minji', '15000', '4.2'], ['@ghost', '99', '1']],
+    { handle: 'Profile', followers: 'Followers', er: 'ER' }, { skipZero: true, erUnit: 'percent' });
+  assert.equal(p.updates.length, 1);
+  assert.equal(p.unmatched.length, 1);
+  applySheetCreators(p);
+  assert.equal(DB.creators.length, n);
+  assert.equal(DB.creators[0].followers, 15000);
+  assert.equal(DB.creators[0].er, 4.2);
 });

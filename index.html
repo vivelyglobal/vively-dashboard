@@ -8803,45 +8803,67 @@ function renderSettings(view, item) {
    Setup → Sheet metrics.
 
    Deliberately a different panel from Setup → Google Sheet. That one is
-   the workspace mirror and its Pull replaces everything; this one only
-   ever reads numbers onto records that already exist. Keeping them apart
-   on screen is as much a part of the safety as keeping the code apart.
+   the workspace mirror and its Pull replaces everything; this one reads
+   a master Sheet onto records that already exist. Keeping them apart on
+   screen is as much a part of the safety as keeping the code apart.
    ------------------------------------------------------------------ */
 let SM_DRY = null;
 
-function smTabRows() {
-  return (SM.contentTabs || []).map((t, i) => `
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
-      <input type="checkbox" data-smton="${i}" ${t.on ? 'checked' : ''}/>
-      <input type="text" data-smtname="${i}" value="${esc(t.name || '')}" placeholder="tab name (yours, for reading)" style="flex:1"/>
-      <input type="text" data-smtgid="${i}" value="${esc(t.gid || '')}" placeholder="gid" style="width:120px"/>
-      <button class="btn xs" data-smtdel="${i}">Remove</button>
-    </div>`).join('');
+function smCampaignOptions(selected) {
+  return `<option value="">— not mapped —</option>` + DB.campaigns.slice()
+    .sort((a, b) => String(a.brand).localeCompare(String(b.brand)))
+    .map((c) => `<option value="${esc(c.id)}" ${c.id === selected ? 'selected' : ''}>${esc(c.brand)}${c.name ? ' — ' + esc(c.name) : ''}</option>`)
+    .join('');
 }
 
-function smMapRows(which, fields, map) {
+/* One row per campaign tab, and the mapping reads the way it works:
+   Tab KOWORK → Campaign KOWORK. */
+function smTabRows() {
+  return (SM.contentTabs || []).map((t, i) => {
+    const cp = t.campaignId ? byCampaign[t.campaignId] : null;
+    return `<div class="card tight" style="margin-bottom:8px;padding:10px 12px">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input type="checkbox" data-smton="${i}" ${t.on ? 'checked' : ''} title="read this tab"/>
+        <span style="font-size:12px;color:var(--text-3)">Tab</span>
+        <input type="text" data-smtname="${i}" value="${esc(t.name || '')}" placeholder="KOWORK" style="width:150px"/>
+        <span style="color:var(--text-3)">→</span>
+        <span style="font-size:12px;color:var(--text-3)">Campaign</span>
+        <select data-smtcp="${i}" style="min-width:220px">${smCampaignOptions(t.campaignId)}</select>
+        <input type="text" data-smtgid="${i}" value="${esc(t.gid || '')}" placeholder="gid" style="width:110px" title="the number after gid= in the tab's URL"/>
+        <button class="btn xs" data-smtdel="${i}">Remove</button>
+      </div>
+      <div style="font-size:12px;margin-top:6px;color:${cp ? 'var(--text-2)' : 'var(--amber)'}">
+        ${cp ? `Tab <strong>${esc(t.name || '?')}</strong> → Campaign <strong>${esc(cp.brand)}</strong>`
+             : `Not mapped yet — existing posts on this tab still update, but no new post can be added from it.`}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function smMapRows(which, fields, map, defaults) {
   return fields.map((f) => `
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:5px">
       <code style="width:120px;font-size:11.5px;color:var(--text-3)">${f}</code>
       <input type="text" data-smmap="${which}" data-field="${f}" value="${esc((map || {})[f] || '')}"
-        placeholder="the column header in your Sheet" style="flex:1"/>
+        placeholder="${esc((defaults || {})[f] || 'the column header in your Sheet')}" style="flex:1"/>
     </div>`).join('');
 }
 
 function settingsSheetMetrics(view) {
   view.innerHTML = `
-    <div class="card" style="max-width:860px;margin-bottom:14px">
-      <div class="card-head"><h3>Performance from your scraper Sheet</h3><div class="sp"></div>
+    <div class="card" style="max-width:900px;margin-bottom:14px">
+      <div class="card-head"><h3>Performance from your master Sheet</h3><div class="sp"></div>
         <span class="pill ${SM.at ? 'green' : 'grey'}">${SM.at ? 'read ' + SM.at.toLocaleString() : 'never read'}</span></div>
-      <p class="card-sub">Reads views, likes and comments onto content and creators that are already here.
-        It never writes to the Sheet, never creates a creator, and never changes which campaign anyone is on.
-        This is not the workspace mirror in <strong>Setup → Google Sheet</strong> — that one is a two-way copy
-        of everything and its Pull replaces the workspace. These two share no settings.</p>
+      <p class="card-sub">One Sheet, one tab per campaign. Reads views, likes and comments onto posts already here
+        and, within strict limits, adds posts the library has not seen. It never writes to the Sheet, never creates
+        a creator, and never puts anyone on a roster or takes them off one.
+        This is not the workspace mirror in <strong>Setup → Google Sheet</strong> — that one's Pull replaces the
+        workspace. These two share no settings.</p>
 
-      <div class="field" style="margin-top:14px"><label>Sheet link — published to the web, or the normal /spreadsheets/d/… link</label>
+      <div class="field" style="margin-top:14px"><label>Master Sheet link</label>
         <input type="text" id="smBase" value="${esc(SM.base)}" placeholder="https://docs.google.com/spreadsheets/d/…"/></div>
-      <div class="grid g2" style="gap:10px">
-        <div class="field"><label>Engagement rate in the Sheet</label>
+      <div class="grid g3" style="gap:10px">
+        <div class="field"><label>post_er in the Sheet</label>
           <select id="smEr">
             <option value="percent" ${SM.erUnit === 'percent' ? 'selected' : ''}>Percent — 4.2 means 4.2%</option>
             <option value="decimal" ${SM.erUnit === 'decimal' ? 'selected' : ''}>Decimal — 0.042 means 4.2%</option>
@@ -8849,50 +8871,49 @@ function settingsSheetMetrics(view) {
         <div class="field"><label>A zero in the Sheet</label>
           <select id="smZero">
             <option value="skip" ${SM.skipZero ? 'selected' : ''}>Treat as blank — keep what we have</option>
-            <option value="take" ${SM.skipZero ? '' : 'selected'}>Take it literally — write the zero</option>
+            <option value="take" ${SM.skipZero ? '' : 'selected'}>Take it literally</option>
+          </select></div>
+        <div class="field"><label>Posts the library hasn't seen</label>
+          <select id="smCreate">
+            <option value="yes" ${SM.allowCreate ? 'selected' : ''}>Add them, within the rules</option>
+            <option value="no" ${SM.allowCreate ? '' : 'selected'}>Only update existing posts</option>
           </select></div>
       </div>
-      <p class="card-sub" style="margin-top:-4px">A scraper that failed writes 0 far more often than a post
-        genuinely has none, which is why blank is the default reading.</p>
     </div>
 
-    <div class="card" style="max-width:860px;margin-bottom:14px">
-      <div class="card-head"><h3>Content tabs</h3><div class="sp"></div>
+    <div class="card" style="max-width:900px;margin-bottom:14px">
+      <div class="card-head"><h3>Campaign tabs</h3><div class="sp"></div>
         <button class="btn xs" id="smAddTab">+ Add tab</button></div>
-      <p class="card-sub">One consolidated tab or one per campaign — tick the ones to read. They all feed the
-        same importer. A campaign name on a row or a tab is shown in the preview and used for nothing else.</p>
-      <div style="margin-top:12px" id="smTabs">${smTabRows() || '<p class="card-sub">No tabs yet.</p>'}</div>
+      <p class="card-sub">Map each tab to its campaign once. That mapping is the only place a campaign comes from —
+        there is no campaign column. Find a tab's <strong>gid</strong> in the Sheet's address bar when the tab is open.</p>
+      <div style="margin-top:12px" id="smTabs">${smTabRows() || '<p class="card-sub">No tabs yet — add one per campaign.</p>'}</div>
       <div class="divider"></div>
-      <div class="lbl">Content columns</div>
-      <p class="card-sub">Leave a row empty to ignore that field. <strong>postUrl</strong> or <strong>postId</strong>
-        is the one that must be filled — it is how a row finds its post.</p>
-      <div style="margin-top:10px">${smMapRows('content',
-        ['postUrl','postId','handle','views','likes','comments','shares','saves','reach','publishedAt','scrapedAt','campaign'],
-        SM.contentMap)}</div>
+      <div class="lbl">Columns on every campaign tab</div>
+      <p class="card-sub">Already set to your master Sheet's headers. Change one only if a tab is laid out differently.
+        <strong>post_url</strong> is how a row finds its post. <strong>ci_id</strong> is not used — it isn't a post id.</p>
+      <div style="margin-top:10px">${smMapRows('content', SM_CONTENT_FIELDS, SM.contentMap, SM_CONTENT_DEFAULT_MAP)}</div>
     </div>
 
-    <div class="card" style="max-width:860px;margin-bottom:14px">
-      <div class="card-head"><h3>Creator profile tab</h3></div>
-      <p class="card-sub">Profile figures scraped from the public account. Country and category fill a blank
-        and never overwrite something chosen here. Creator status stays on the Vively flag —
-        Preferred, Flagged, Blacklist — and nothing in the Sheet changes it.</p>
+    <div class="card" style="max-width:900px;margin-bottom:14px">
+      <div class="card-head"><h3>Creator profile tab</h3><div class="sp"></div><span class="pill grey">optional</span></div>
+      <p class="card-sub">Only for a tab of <em>profile</em> figures — followers and account-wide averages. Leave it off
+        until you have one. Per-post numbers, <strong>post_er</strong> included, never stand in for a creator's profile.
+        Creator status stays on the Vively flag; nothing in a Sheet changes it.</p>
       <div style="display:flex;gap:8px;align-items:center;margin:12px 0">
         <input type="checkbox" id="smCrOn" ${SM.creatorTab.on ? 'checked' : ''}/>
         <input type="text" id="smCrName" value="${esc(SM.creatorTab.name || '')}" placeholder="tab name" style="flex:1"/>
-        <input type="text" id="smCrGid" value="${esc(SM.creatorTab.gid || '')}" placeholder="gid" style="width:120px"/>
+        <input type="text" id="smCrGid" value="${esc(SM.creatorTab.gid || '')}" placeholder="gid" style="width:110px"/>
       </div>
-      <div class="lbl">Creator columns</div>
-      <div style="margin-top:10px">${smMapRows('creator',
-        ['handle','followers','er','avgViews','avgLikes','avgComments','country','category','scrapedAt'],
-        SM.creatorMap)}</div>
+      ${SM.creatorTab.on ? `<div style="margin-top:4px">${smMapRows('creator',
+        ['handle','followers','er','avgViews','avgLikes','avgComments','country','category','scrapedAt'], SM.creatorMap)}</div>` : ''}
     </div>
 
-    <div class="card" style="max-width:860px">
+    <div class="card" style="max-width:900px">
       <div class="card-head"><h3>Read and preview</h3></div>
       <p class="card-sub">Nothing is written until you have seen what would change.</p>
       <div style="display:flex;gap:8px;margin-top:12px">
         <button class="btn primary" id="smDry" ${SM.base ? '' : 'disabled'}>Read the Sheet</button>
-        <button class="btn" id="smGuess" ${SM.base ? '' : 'disabled'}>Guess the columns for me</button>
+        <button class="btn" id="smCheck" ${SM.base ? '' : 'disabled'}>Check the columns</button>
       </div>
       <div id="smOut" style="margin-top:14px"></div>
     </div>`;
@@ -8907,9 +8928,10 @@ function wireSheetMetrics(view) {
   $('#smBase').addEventListener('change', (e) => { SM.base = e.target.value.trim(); save(); redraw(); });
   $('#smEr').addEventListener('change', (e) => { SM.erUnit = e.target.value; save(); });
   $('#smZero').addEventListener('change', (e) => { SM.skipZero = e.target.value === 'skip'; save(); });
+  $('#smCreate').addEventListener('change', (e) => { SM.allowCreate = e.target.value === 'yes'; save(); });
 
   $('#smAddTab').addEventListener('click', () => {
-    SM.contentTabs = (SM.contentTabs || []).concat([{ name: '', gid: '', on: true }]);
+    SM.contentTabs = (SM.contentTabs || []).concat([{ name: '', gid: '', campaignId: '', on: true }]);
     save(); redraw();
   });
   $$('[data-smtdel]').forEach((b) => b.addEventListener('click', () => {
@@ -8918,14 +8940,22 @@ function wireSheetMetrics(view) {
   $$('[data-smton]').forEach((c) => c.addEventListener('change', () => {
     SM.contentTabs[+c.dataset.smton].on = c.checked; save();
   }));
+  /* naming a tab offers the campaign of the same name — a suggestion the
+     operator can change, never a mapping made behind their back */
   $$('[data-smtname]').forEach((i) => i.addEventListener('change', () => {
-    SM.contentTabs[+i.dataset.smtname].name = i.value.trim(); save();
+    const t = SM.contentTabs[+i.dataset.smtname];
+    t.name = i.value.trim();
+    if (!t.campaignId) t.campaignId = smSuggestCampaign(t.name);
+    save(); redraw();
+  }));
+  $$('[data-smtcp]').forEach((s) => s.addEventListener('change', () => {
+    SM.contentTabs[+s.dataset.smtcp].campaignId = s.value; save(); redraw();
   }));
   $$('[data-smtgid]').forEach((i) => i.addEventListener('change', () => {
     SM.contentTabs[+i.dataset.smtgid].gid = i.value.trim(); save();
   }));
 
-  $('#smCrOn').addEventListener('change', (e) => { SM.creatorTab.on = e.target.checked; save(); });
+  $('#smCrOn').addEventListener('change', (e) => { SM.creatorTab.on = e.target.checked; save(); redraw(); });
   $('#smCrName').addEventListener('change', (e) => { SM.creatorTab.name = e.target.value.trim(); save(); });
   $('#smCrGid').addEventListener('change', (e) => { SM.creatorTab.gid = e.target.value.trim(); save(); });
 
@@ -8936,85 +8966,101 @@ function wireSheetMetrics(view) {
     save();
   }));
 
-  /* Reads the first selected tab of each kind and fills the mapping from
-     its header row, so the usual case is one click rather than twenty
-     fields typed by hand. */
-  $('#smGuess').addEventListener('click', async () => {
-    try {
-      const t = (SM.contentTabs || []).find((x) => x.on);
-      if (t) {
+  /* Reads each enabled tab's header row and says which of the expected
+     columns it found. The master Sheet's layout is known, so this checks
+     rather than guesses. */
+  $('#smCheck').addEventListener('click', async () => {
+    const map = Object.assign({}, SM_CONTENT_DEFAULT_MAP, SM.contentMap || {});
+    const lines = [];
+    for (const t of (SM.contentTabs || []).filter((x) => x.on)) {
+      try {
         const rows = await fetchSheetTab(t.gid);
-        SM.contentMap = guessSheetColumns(rows[0] || [], SM_CONTENT_ALIASES);
-      }
-      if (SM.creatorTab.on) {
-        const rows = await fetchSheetTab(SM.creatorTab.gid);
-        SM.creatorMap = guessSheetColumns(rows[0] || [], SM_CREATOR_ALIASES);
-      }
-      save(); toast('Columns guessed — check them before reading'); render();
-    } catch (err) { toast(err.message); }
+        const idx = smHeaderIndex(rows[0] || [], map);
+        const missing = SM_CONTENT_FIELDS.filter((f) => idx[f] == null);
+        const kind = idx.influencer != null
+          ? smInfluencerKind(rows.slice(1).map((r) => r[idx.influencer])) : { kind: 'empty' };
+        lines.push(`<div style="margin-bottom:8px"><strong>${esc(t.name || 'tab')}</strong> — ` +
+          (idx.postUrl == null ? '<span style="color:var(--red)">no post_url column; this tab cannot match anything</span>'
+            : `${SM_CONTENT_FIELDS.length - missing.length}/${SM_CONTENT_FIELDS.length} columns found` +
+              (missing.length ? ` · missing: ${esc(missing.join(', '))}` : '')) +
+          `<br><span style="font-size:12px;color:var(--text-3)">influencer_id: ${esc(smInfluencerLabel(kind))}</span></div>`);
+      } catch (err) { lines.push(`<div class="note bad" style="margin-bottom:8px">${esc(t.name || 'tab')}: ${esc(err.message)}</div>`); }
+    }
+    $('#smOut').innerHTML = lines.join('') || '<p class="card-sub">No enabled tabs to check.</p>';
   });
 
   $('#smDry').addEventListener('click', async () => {
     $('#smOut').innerHTML = '<p class="card-sub">Reading…</p>';
-    try {
-      SM_DRY = await dryRunSheetMetrics();
-      renderSheetMetricsPreview();
-    } catch (err) {
-      $('#smOut').innerHTML = `<div class="note bad">${esc(err.message)}</div>`;
-    }
+    try { SM_DRY = await dryRunSheetMetrics(); renderSheetMetricsPreview(); }
+    catch (err) { $('#smOut').innerHTML = `<div class="note bad">${esc(err.message)}</div>`; }
   });
 }
 
+function smInfluencerLabel(k) {
+  if (k.kind === 'handle') return `Instagram handles — ${k.resolved} of ${k.total} match a creator here, so it is used to attribute new posts`;
+  if (k.kind === 'opaque') return `not handles${k.sample && k.sample.length ? ' (e.g. ' + k.sample.join(', ') + ')' : ''} — ` +
+    `${k.resolved || 0} of ${k.total || 0} match a creator, so it is NOT used; new posts on this tab cannot be attributed`;
+  return 'empty — new posts on this tab cannot be attributed';
+}
+
 function smChangeLine(c) {
-  if (c.fillOnly) return c.field + ' ← ' + esc(String(c.to)) + ' (was blank)';
-  return c.field + ' ' + num(c.from) + ' → ' + num(c.to);
+  if (c.fillOnly) return c.field + ' ← ' + String(c.to) + ' (was blank)';
+  const f = (x) => (typeof x === 'number' ? num(x) : String(x || '—'));
+  return (c.secondary ? '· ' : '') + c.field + ' ' + f(c.from) + ' → ' + f(c.to);
 }
 
 function renderSheetMetricsPreview() {
   const d = SM_DRY;
-  const c = d.content || { updates: [], unmatched: [], skipped: [], rowsRead: 0 };
+  const sum = (k) => d.tabs.reduce((a, t) => a + t[k].length, 0);
+  const rowsRead = d.tabs.reduce((a, t) => a + t.rowsRead, 0);
+  const updates = sum('updates'), creates = sum('creates'), unmatched = sum('unmatched');
   const cr = d.creators || { updates: [], unmatched: [], skipped: [], rowsRead: 0 };
+
+  const tabBlock = (t) => {
+    const linked = t.creates.filter((c) => c.linked).length;
+    return `<div class="card tight" style="margin-bottom:12px;padding:12px 14px">
+      <div class="card-head"><h3 style="font-size:13.5px">Tab ${esc(t.tab || '?')} → ${t.campaignName
+        ? 'Campaign ' + esc(t.campaignName) : '<span style="color:var(--amber)">not mapped</span>'}</h3>
+        <div class="sp"></div><span style="font-size:12px;color:var(--text-3)">${t.rowsRead} rows</span></div>
+      <div style="font-size:12px;color:var(--text-3);margin:4px 0 8px">influencer_id: ${esc(smInfluencerLabel(t.influencer))}</div>
+      <div style="font-size:12.5px">${t.updates.length} to update · ${t.creates.length} to add
+        ${t.creates.length ? `(${linked} onto an empty roster card, ${t.creates.length - linked} into the library only)` : ''}
+        · ${t.skipped.length} skipped · ${t.unmatched.length} not added</div>
+      ${t.conflicts.length ? `<div class="note warn" style="margin-top:8px;font-size:12px">
+        ${t.conflicts.length} post${t.conflicts.length === 1 ? ' is' : 's are'} filed under a different campaign than this tab.
+        Their numbers still update; they are not moved.</div>` : ''}
+      ${t.unmatched.length ? `<details style="margin-top:8px"><summary style="font-size:12px;cursor:pointer">
+        Why ${t.unmatched.length} row${t.unmatched.length === 1 ? ' was' : 's were'} not added</summary>
+        <div class="tbl-wrap" style="max-height:200px;overflow-y:auto;margin-top:6px"><table class="tbl">
+        <thead><tr><th>Row</th><th>Post</th><th>Reason</th></tr></thead><tbody>
+        ${t.unmatched.slice(0, 100).map((u) => `<tr><td>${u.rowNo}</td>
+          <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis">${esc(u.url)}</td>
+          <td style="font-size:12px">${esc(u.why)}</td></tr>`).join('')}
+        </tbody></table></div></details>` : ''}
+      ${t.updates.length ? `<details style="margin-top:6px"><summary style="font-size:12px;cursor:pointer">
+        What changes on ${t.updates.length} post${t.updates.length === 1 ? '' : 's'}</summary>
+        <div class="tbl-wrap" style="max-height:220px;overflow-y:auto;margin-top:6px"><table class="tbl">
+        <tbody>${t.updates.slice(0, 150).map((u) => `<tr>
+          <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis">${esc(u.rec.postUrl || u.rec.url)}</td>
+          <td style="font-size:12px">${u.changes.map(smChangeLine).map(esc).join('<br>') || '<span style="color:var(--text-3)">timestamp only</span>'}</td>
+        </tr>`).join('')}</tbody></table></div></details>` : ''}
+    </div>`;
+  };
 
   $('#smOut').innerHTML = `
     ${d.errors.length ? `<div class="note bad" style="margin-bottom:12px">${d.errors.map(esc).join('<br>')}</div>` : ''}
     <div class="grid g4" style="gap:10px;margin-bottom:14px">
-      ${statCard('Rows read', c.rowsRead + cr.rowsRead, { foot: (d.tabs || []).length + ' content tab(s)' })}
-      ${statCard('Posts to update', c.updates.length, { foot: c.unmatched.length + ' not in the library' })}
-      ${statCard('Creators to update', cr.updates.length, { foot: cr.unmatched.length + ' not in the database' })}
-      ${statCard('Rows skipped', c.skipped.length + cr.skipped.length, { foot: 'blank, zero or nothing new' })}
+      ${statCard('Rows read', rowsRead, { foot: d.tabs.length + ' campaign tab' + (d.tabs.length === 1 ? '' : 's') })}
+      ${statCard('Posts to update', updates, { foot: 'already in the library' })}
+      ${statCard('Posts to add', creates, { foot: 'creator on the roster already' })}
+      ${statCard('Not added', unmatched, { foot: 'each with its reason below' })}
     </div>
-
-    ${c.unmatched.length ? `<div class="note warn" style="margin-bottom:12px">
-      <strong>${c.unmatched.length} post${c.unmatched.length === 1 ? '' : 's'} in the Sheet are not in the content library.</strong>
-      Nothing is created from here — add the link on the roster first and read again.
-      <div style="margin-top:6px;font-size:12px">${esc(c.unmatched.slice(0, 6).map((u) => u.url).join(' · '))}${c.unmatched.length > 6 ? ' …' : ''}</div>
-    </div>` : ''}
-    ${cr.unmatched.length ? `<div class="note warn" style="margin-bottom:12px">
-      <strong>${cr.unmatched.length} handle${cr.unmatched.length === 1 ? '' : 's'} are not in the creator database.</strong>
-      No creator is ever created from the Sheet.
-      <div style="margin-top:6px;font-size:12px">${esc(cr.unmatched.slice(0, 10).map((u) => u.handle).join(' · '))}${cr.unmatched.length > 10 ? ' …' : ''}</div>
-    </div>` : ''}
-
-    ${c.updates.length ? `<div class="lbl">Content</div>
-    <div class="tbl-wrap" style="max-height:260px;overflow-y:auto;margin-bottom:14px"><table class="tbl">
-      <thead><tr><th>Post</th><th>Matched by</th><th>Changes</th></tr></thead><tbody>
-      ${c.updates.slice(0, 200).map((u) => `<tr>
-        <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis">${esc(u.rec.postUrl || u.rec.url || u.rec.platformPostId)}</td>
-        <td><span class="pill grey">${esc(u.by)}</span></td>
-        <td style="font-size:12px">${u.changes.map(smChangeLine).map(esc).join('<br>') || '<span style="color:var(--text-3)">timestamp only</span>'}</td>
-      </tr>`).join('')}</tbody></table></div>` : ''}
-
-    ${cr.updates.length ? `<div class="lbl">Creator profiles</div>
-    <div class="tbl-wrap" style="max-height:260px;overflow-y:auto;margin-bottom:14px"><table class="tbl">
-      <thead><tr><th>Creator</th><th>Changes</th></tr></thead><tbody>
-      ${cr.updates.slice(0, 200).map((u) => `<tr>
-        <td class="strong">${esc(u.cr.handle)}</td>
-        <td style="font-size:12px">${u.changes.map(smChangeLine).map(esc).join('<br>') || '<span style="color:var(--text-3)">timestamp only</span>'}</td>
-      </tr>`).join('')}</tbody></table></div>` : ''}
-
-    <div style="display:flex;gap:8px">
-      <button class="btn primary" id="smApply" ${(c.updates.length + cr.updates.length) ? '' : 'disabled'}>
-        Apply ${c.updates.length} post${c.updates.length === 1 ? '' : 's'} and ${cr.updates.length} creator${cr.updates.length === 1 ? '' : 's'}</button>
+    ${d.tabs.map(tabBlock).join('')}
+    ${d.creators ? `<div class="lbl">Creator profiles</div>
+      <p class="card-sub">${cr.updates.length} to update · ${cr.unmatched.length} not in the database — never created</p>` : ''}
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn primary" id="smApply" ${(updates + creates + cr.updates.length) ? '' : 'disabled'}>
+        Apply: update ${updates}, add ${creates}${d.creators ? ', ' + cr.updates.length + ' profiles' : ''}</button>
       <button class="btn" id="smDiscard">Discard</button>
     </div>`;
 
@@ -9022,7 +9068,8 @@ function renderSheetMetricsPreview() {
   if (apply) apply.addEventListener('click', () => {
     const r = commitSheetMetrics(SM_DRY);
     SM_DRY = null;
-    const msg = `Updated ${r.content} post${r.content === 1 ? '' : 's'} and ${r.creators} creator${r.creators === 1 ? '' : 's'} from the Sheet`;
+    const msg = `Updated ${r.updated} and added ${r.created} post${r.created === 1 ? '' : 's'} from the Sheet` +
+      (r.creators ? `, and ${r.creators} creator profile${r.creators === 1 ? '' : 's'}` : '');
     toast(msg);
     render();
     serverSave({ force: true, silent: true }).then((res) => toastAfterSave(msg, res));
@@ -12391,38 +12438,50 @@ async function inviteParticipantToBook(cp, p) {
 
    sync/sheets.js mirrors the whole workspace: it pushes every
    campaign, creator and roster row out, and pulling REPLACES all
-   three collections with whatever the Sheet holds. That is the right
-   shape for a shared copy of the workspace and entirely the wrong
-   shape for this.
+   three collections with whatever the Sheet holds. This is the
+   opposite: it reads a master Sheet somebody else maintains and
+   updates numbers on records that already exist. The two share no
+   state, no storage key and no code.
 
-   This reads a Sheet somebody else fills in — content links arriving
-   campaign-wise from Notion, performance numbers written by a paid
-   scraper — and updates metrics on records that already exist. It
-   never writes to a Sheet, never creates a creator, never touches
-   campaign membership, and never replaces a collection. The two must
-   not be confused, so they share no state, no storage key and no code.
+   The master Sheet has one tab per campaign, named after it — KOWORK
+   and so on — and every row on a tab belongs to that campaign. So the
+   campaign is decided ONCE, in Setup, by mapping each tab to a Vively
+   campaign. It is never read from a cell, and nothing here ever moves
+   a creator onto or off a roster.
+
+   Identity is the post URL. The shortcode in it becomes platformPostId
+   exactly as everywhere else in the app. ci_id and deliverable_id are
+   the Sheet's own bookkeeping and are never treated as a post id.
 
    What it may change:
-     socialContent  views, likes, comments, shares, saves, reach,
-                    publishedAt, dataSource, lastScrapedAt
-     creators       followers, er, avgViews, avgLikes, avgComments,
-                    country and category ONLY when blank,
-                    metricsSource, metricsSyncedAt
+     socialContent  views, likes, comments, shares, saves, publishedAt,
+                    format, the secondary analytics (reposts, post ER,
+                    CPE/CPV, notes), dataSource, lastScrapedAt
+     creators       profile figures, ONLY from a creator-profile tab —
+                    never from post_er or any per-post number
 
-   Everything else is read.
+   What it may create: one socialContent record, and only when the post
+   URL is a real post, the creator is already in the database, the tab
+   is mapped to a campaign, and that creator is already on that
+   campaign's roster. Never a creator, never a roster row.
    ============================================================ */
 
 const SHEET_METRICS_KEY = 'vively-sheet-metrics-v1';
 
-/* Deliberately its own object and its own storage key — nothing here
-   reads or writes SYNC in sync/sheets.js. */
+/* Its own object and its own storage key — nothing here reads or
+   writes SYNC in sync/sheets.js. */
 const SM = {
-  base: '',                 /* the Sheet's published-to-web URL, or its id */
-  erUnit: 'percent',        /* 'percent': 4.2 -> 4.2%   'decimal': 0.042 -> 4.2% */
+  base: '',                 /* the master Sheet's link */
+  erUnit: 'percent',        /* how post_er (and a profile ER) is written */
   skipZero: true,           /* a zero from a scraper is usually "did not read" */
-  contentTabs: [],          /* [{ name, gid, on }] — one or many, all feed one importer */
-  creatorTab: { name: '', gid: '', on: true },
-  contentMap: {},           /* field -> the Sheet's own column header */
+  allowCreate: true,        /* may a post new to the library be added? see planSheetContent */
+  /* one entry per campaign tab: { name, gid, campaignId, on } — the
+     campaignId is the whole of the campaign logic */
+  contentTabs: [],
+  /* a creator-profile tab is optional and off until one exists; per-post
+     numbers never stand in for it */
+  creatorTab: { name: '', gid: '', on: false },
+  contentMap: {},
   creatorMap: {},
   at: null, status: 'off', error: null, busy: false
 };
@@ -12439,13 +12498,15 @@ function loadSheetMetricsConfig() {
 function saveSheetMetricsConfig() {
   try {
     localStorage.setItem(SHEET_METRICS_KEY, JSON.stringify({
-      base: SM.base, erUnit: SM.erUnit, skipZero: SM.skipZero,
+      base: SM.base, erUnit: SM.erUnit, skipZero: SM.skipZero, allowCreate: SM.allowCreate,
       contentTabs: SM.contentTabs, creatorTab: SM.creatorTab,
       contentMap: SM.contentMap, creatorMap: SM.creatorMap,
       at: SM.at ? SM.at.toISOString() : null
     }));
   } catch (e) { /* storage blocked */ }
 }
+
+/* ---- reading a sheet (unchanged) ---- */
 
 /* ---- reading a sheet ------------------------------------------------
 
@@ -12492,25 +12553,101 @@ function sheetCsvUrl(base, gid) {
   return stem + q + (gid ? '&gid=' + encodeURIComponent(gid) : '');
 }
 
-/* ---- column mapping -------------------------------------------------
+/* ---- the campaign tab's columns --------------------------------------
 
-   The mapping is stored as field -> the Sheet's own header text, so the
-   Sheet can be renamed or reordered without this breaking. These aliases
-   only seed the first guess; every one is editable in Setup. */
-const SM_CONTENT_ALIASES = {
-  postUrl:   ['post url', 'url', 'link', 'post link', 'content link', 'permalink', 'reel', 'reel link'],
-  postId:    ['post id', 'shortcode', 'media id', 'id'],
-  handle:    ['handle', 'username', 'profile', 'creator', 'account', 'instagram'],
-  views:     ['views', 'plays', 'view count', 'play count', 'video views', '조회수'],
-  likes:     ['likes', 'like count', '좋아요'],
-  comments:  ['comments', 'comment count', '댓글'],
-  shares:    ['shares', 'reposts', 'share count', '공유'],
-  saves:     ['saves', 'saved', 'bookmarks', '저장'],
-  reach:     ['reach', 'accounts reached', 'unique views'],
-  publishedAt: ['posted', 'posted date', 'post date', 'published', 'date posted', 'upload date'],
-  scrapedAt: ['scraped', 'scraped at', 'last updated', 'updated', 'collected on', 'last synced'],
-  campaign:  ['campaign', 'brand', 'project']
+   The master Sheet's own headers, so a tab reads with no mapping at all.
+   Every entry stays editable in Setup in case a tab is laid out
+   differently. ci_id is absent on purpose: it is not a post id, and
+   listing it here would invite exactly that mistake. */
+const SM_CONTENT_DEFAULT_MAP = {
+  postUrl: 'post_url',
+  influencer: 'influencer_id',
+  type: 'type',
+  publishedAt: 'posted_date',
+  scrapedAt: 'last_scraped_at',
+  views: 'views', likes: 'likes', comments: 'comments', shares: 'shares', saves: 'saves',
+  reposts: 'reposts', postEr: 'post_er',
+  cpeExpected: 'cpe_expected', cpeActual: 'cpe_actual',
+  cpvExpected: 'cpv_expected', cpvActual: 'cpv_actual',
+  notes: 'notes', deliverableId: 'deliverable_id'
 };
+const SM_CONTENT_FIELDS = Object.keys(SM_CONTENT_DEFAULT_MAP);
+
+/* reads a mapping against a tab's header row, tolerating case and stray
+   spaces in the Sheet's headers */
+function smHeaderIndex(header, map) {
+  const norm = (h) => String(h || '').trim().toLowerCase();
+  const idx = {};
+  Object.entries(map || {}).forEach(([field, col]) => {
+    const i = (header || []).findIndex((h) => norm(h) === norm(col));
+    if (i >= 0) idx[field] = i;
+  });
+  return idx;
+}
+
+/* Money values keep their decimals — smMetric rounds, which is right for
+   a view count and wrong for a cost per engagement of 0.37. */
+function smNumber(v) {
+  if (v === '' || v == null) return null;
+  const s = String(v).trim().replace(/[,\s₩$]/g, '');
+  if (!s || s === '-' || /^n\/?a$/i.test(s)) return null;
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+
+/* A post URL is valid when it yields a real post id. platformPostIdOf
+   falls back to returning the URL itself for anything it does not
+   recognise, which is a fine identity for matching and no proof at all
+   that the link is a post — so creation insists on the prefixed form. */
+function smPostId(url) {
+  const pid = platformPostIdOf(String(url || '').trim());
+  return /^(ig_|tt_)/.test(pid) ? pid : '';
+}
+
+/* ---- is influencer_id a handle? --------------------------------------
+
+   Only the data can say. A column of @names and profile links is a
+   perfectly good way to find a creator; a column of INF-0042 or 18-digit
+   numbers is not, and treating it as one would attach posts to whoever
+   happened to have a matching string. So the column is inspected on
+   every read, and used only when most of what it holds resolves to a
+   creator already in the database. */
+function smInfluencerKind(values) {
+  const vals = values.map((v) => String(v || '').trim()).filter(Boolean);
+  if (!vals.length) return { kind: 'empty', resolved: 0, total: 0, sample: [] };
+  const numeric = vals.filter((v) => /^\d+$/.test(v)).length;
+  const resolved = vals.filter((v) => findCreatorByHandle(v)).length;
+  const share = resolved / vals.length;
+  const kind = numeric > vals.length / 2 ? 'opaque'
+    : share >= 0.5 ? 'handle'
+    : 'opaque';
+  return { kind, resolved, total: vals.length, sample: vals.slice(0, 3) };
+}
+
+/* ---- matching an existing post ---------------------------------------- */
+function smContentIndex() {
+  const byPostId = new Map(), byUrl = new Map();
+  DB.socialContent.forEach((c) => {
+    const pid = c.platformPostId || platformPostIdOf(c.postUrl || c.url);
+    if (pid && !byPostId.has(pid)) byPostId.set(pid, c);
+    const u = String(c.postUrl || c.url || '').trim().replace(/[?#].*$/, '').replace(/\/+$/, '').toLowerCase();
+    if (u && !byUrl.has(u)) byUrl.set(u, c);
+  });
+  return { byPostId, byUrl };
+}
+
+function smFindContent(idx, url) {
+  const u = String(url || '').trim();
+  if (!u) return { rec: null, by: null };
+  const pid = platformPostIdOf(u);
+  if (pid && idx.byPostId.has(pid)) return { rec: idx.byPostId.get(pid), by: 'post id' };
+  const k = u.replace(/[?#].*$/, '').replace(/\/+$/, '').toLowerCase();
+  if (idx.byUrl.has(k)) return { rec: idx.byUrl.get(k), by: 'URL' };
+  return { rec: null, by: null };
+}
+
+
+/* ---- profile columns and value readers (unchanged) ---- */
 
 const SM_CREATOR_ALIASES = {
   handle:      ['handle', 'username', 'profile', 'instagram', 'account', 'creator'],
@@ -12606,88 +12743,132 @@ function smDate(v) {
   return isNaN(d) ? null : d.toISOString().slice(0, 10);
 }
 
-/* ---- matching -------------------------------------------------------
+/* ---- planning a campaign tab ------------------------------------------
 
-   Post id first, URL second. platformPostIdOf turns any Reel, /p/ or
-   TikTok link into the same key, so the Sheet's spelling of a URL does
-   not have to match the one already recorded. */
-function smContentIndex() {
-  const byPostId = new Map(), byUrl = new Map();
-  DB.socialContent.forEach((c) => {
-    const pid = c.platformPostId || platformPostIdOf(c.postUrl || c.url);
-    if (pid && !byPostId.has(pid)) byPostId.set(pid, c);
-    const u = String(c.postUrl || c.url || '').trim().replace(/[?#].*$/, '').replace(/\/+$/, '').toLowerCase();
-    if (u && !byUrl.has(u)) byUrl.set(u, c);
+   Nothing is written here. The plan names every record a row would
+   touch, every field that would move, and every post it would add, so
+   the preview can show all of it and the operator can refuse it.
+
+   opts.campaignId is the tab's mapping. It is the ONLY source of the
+   campaign: there is no campaign column to read, and a campaign name on
+   a record is never changed by this. */
+const SM_POST_METRICS = ['views', 'likes', 'comments', 'shares', 'saves'];
+
+function smRowValues(r, idx, opts) {
+  const cell = (f) => (idx[f] == null ? '' : r[idx[f]]);
+  const v = { metrics: {}, extra: {} };
+  SM_POST_METRICS.forEach((k) => { const n = smMetric(cell(k), opts.skipZero); if (n != null) v.metrics[k] = n; });
+  const pub = smDate(cell('publishedAt'));      if (pub) v.publishedAt = pub;
+  v.scrapedAt = smDate(cell('scrapedAt'));      /* null leaves the stamp alone */
+  const type = String(cell('type') || '').trim();
+  if (type) v.format = type.charAt(0).toUpperCase() + type.slice(1).toLowerCase();
+  /* the secondary analytics: kept, never shown as headline numbers */
+  const reposts = smMetric(cell('reposts'), opts.skipZero); if (reposts != null) v.extra.reposts = reposts;
+  /* post_er is a property of this post. It is stored on the post and is
+     never read into a creator's profile engagement rate. */
+  const per = smEngagement(cell('postEr'), opts.erUnit);    if (per != null) v.extra.postEr = per;
+  [['cpeExpected'], ['cpeActual'], ['cpvExpected'], ['cpvActual']].forEach(([k]) => {
+    const n = smNumber(cell(k)); if (n != null) v.extra[k] = n;
   });
-  return { byPostId, byUrl };
+  const notes = String(cell('notes') || '').trim();          if (notes) v.extra.sheetNotes = notes;
+  const did = String(cell('deliverableId') || '').trim();    if (did) v.extra.deliverableId = did;
+  v.postUrl = String(cell('postUrl') || '').trim();
+  v.influencer = String(cell('influencer') || '').trim();
+  return v;
 }
-
-function smFindContent(idx, row) {
-  const explicit = String(row.postId || '').trim();
-  if (explicit) {
-    const key = /^(ig_|tt_)/.test(explicit) ? explicit : 'ig_' + explicit;
-    if (idx.byPostId.has(key)) return { rec: idx.byPostId.get(key), by: 'post id' };
-  }
-  const url = String(row.postUrl || '').trim();
-  if (url) {
-    const pid = platformPostIdOf(url);
-    if (pid && idx.byPostId.has(pid)) return { rec: idx.byPostId.get(pid), by: 'post id from URL' };
-    const u = url.replace(/[?#].*$/, '').replace(/\/+$/, '').toLowerCase();
-    if (idx.byUrl.has(u)) return { rec: idx.byUrl.get(u), by: 'URL' };
-  }
-  return { rec: null, by: null };
-}
-
-/* ---- planning -------------------------------------------------------
-
-   Nothing is written here. A plan says exactly which record each row
-   would touch and which fields would move, so the preview can show it
-   and the operator can refuse it. Applying a plan is a separate step. */
-const SM_CONTENT_METRICS = ['views', 'likes', 'comments', 'shares', 'saves', 'reach'];
 
 function planSheetContent(rows, map, opts) {
   const o = opts || {};
-  const idx = smContentIndex();
-  const out = { updates: [], unmatched: [], skipped: [], rowsRead: 0, tab: o.tab || '' };
-  const headerIdx = {};
+  const out = {
+    tab: o.tab || '', campaignId: o.campaignId || '', campaignName: '',
+    updates: [], creates: [], unmatched: [], skipped: [], conflicts: [], rowsRead: 0,
+    influencer: { kind: 'empty', resolved: 0, total: 0, sample: [] }
+  };
   const header = rows[0] || [];
-  Object.entries(map || {}).forEach(([field, col]) => {
-    const i = header.findIndex((h) => String(h).trim() === String(col).trim());
-    if (i >= 0) headerIdx[field] = i;
-  });
-  const cell = (r, f) => (headerIdx[f] == null ? '' : r[headerIdx[f]]);
+  const idx = smHeaderIndex(header, map);
+  const cp = o.campaignId ? byCampaign[o.campaignId] : null;
+  out.campaignName = cp ? (cp.brand + (cp.name ? ' — ' + cp.name : '')) : '';
 
-  rows.slice(1).forEach((r, n) => {
+  const body = rows.slice(1);
+  if (idx.influencer != null) out.influencer = smInfluencerKind(body.map((r) => r[idx.influencer]));
+  const influencerUsable = out.influencer.kind === 'handle';
+
+  const lib = smContentIndex();
+  const seenNew = new Set();       /* the same new post twice on one tab */
+  /* a roster row that has been handed its one linked post in THIS plan.
+     Without it, two new posts for one creator would both plan as linked,
+     and attachContent — which returns the existing record when there is
+     one — would pour the second post's numbers onto the first. */
+  const linkedInPlan = new Set(o.linkedInPlan || []);
+
+  body.forEach((r, n) => {
     out.rowsRead++;
-    const row = {
-      postUrl: cell(r, 'postUrl'), postId: cell(r, 'postId'), handle: cell(r, 'handle'),
-      campaign: cell(r, 'campaign')
-    };
-    if (!String(row.postUrl).trim() && !String(row.postId).trim()) {
-      out.skipped.push({ rowNo: n + 2, why: 'no post URL or id' });
-      return;
-    }
-    const { rec, by } = smFindContent(idx, row);
-    if (!rec) {
-      out.unmatched.push({ rowNo: n + 2, url: row.postUrl || row.postId, handle: row.handle });
-      return;
-    }
-    const changes = [];
-    SM_CONTENT_METRICS.forEach((k) => {
-      const v = smMetric(cell(r, k), o.skipZero);
-      if (v == null) return;                       /* blank or zero: keep what we have */
-      if (rec[k] !== v) changes.push({ field: k, from: rec[k] || 0, to: v });
-    });
-    const pub = smDate(cell(r, 'publishedAt'));
-    if (pub && rec.publishedAt !== pub) changes.push({ field: 'publishedAt', from: rec.publishedAt || '', to: pub });
-    const scraped = smDate(cell(r, 'scrapedAt'));
+    const rowNo = n + 2;
+    const v = smRowValues(r, idx, o);
+    if (!v.postUrl) { out.skipped.push({ rowNo, why: 'no post_url' }); return; }
 
-    if (!changes.length && !scraped) { out.skipped.push({ rowNo: n + 2, why: 'nothing new' }); return; }
-    out.updates.push({ rowNo: n + 2, rec, by, changes, scrapedAt: scraped,
-                       campaign: String(row.campaign || '').trim() });
+    const { rec, by } = smFindContent(lib, v.postUrl);
+
+    /* ---- a post already in the library: update its numbers ---- */
+    if (rec) {
+      if (cp && rec.campaignId && rec.campaignId !== cp.id) {
+        /* The post is filed under a different campaign than this tab.
+           Its numbers are its own either way, so they still update — but
+           it is never moved, and the preview says so. */
+        out.conflicts.push({ rowNo, url: v.postUrl, filed: rec.campaignId, tab: cp.id });
+      }
+      const changes = [];
+      Object.entries(v.metrics).forEach(([k, val]) => {
+        if (rec[k] !== val) changes.push({ field: k, from: rec[k] || 0, to: val });
+      });
+      if (v.publishedAt && rec.publishedAt !== v.publishedAt) changes.push({ field: 'publishedAt', from: rec.publishedAt || '', to: v.publishedAt });
+      if (v.format && rec.format !== v.format) changes.push({ field: 'format', from: rec.format || '', to: v.format });
+      Object.entries(v.extra).forEach(([k, val]) => {
+        if (rec[k] !== val) changes.push({ field: k, from: rec[k] == null ? '' : rec[k], to: val, secondary: true });
+      });
+      if (!changes.length && !v.scrapedAt) { out.skipped.push({ rowNo, why: 'nothing new' }); return; }
+      out.updates.push({ rowNo, rec, by, changes, scrapedAt: v.scrapedAt });
+      return;
+    }
+
+    /* ---- a post the library has never seen ----
+
+       Every one of these conditions has to hold, and the first that does
+       not is reported by name so the fix is obvious. */
+    const refuse = (why) => out.unmatched.push({ rowNo, url: v.postUrl, handle: v.influencer, why });
+    if (!o.allowCreate) return refuse('new post — adding posts is switched off');
+    const postId = smPostId(v.postUrl);
+    if (!postId) return refuse('post_url is not an Instagram or TikTok post link');
+    if (seenNew.has(postId)) { out.skipped.push({ rowNo, why: 'same post earlier on this tab' }); return; }
+    if (!cp) return refuse('this tab is not mapped to a campaign');
+    if (!v.influencer) return refuse('no influencer_id on the row');
+    if (!influencerUsable) return refuse('influencer_id does not hold Instagram handles');
+    const cr = findCreatorByHandle(v.influencer);
+    if (!cr) return refuse('creator not in the database');
+    const p = DB.participants.find((x) => x.campaignId === cp.id && x.creatorId === cr.id);
+    if (!p) return refuse(cr.handle + ' is not on the ' + cp.brand + ' roster');
+
+    seenNew.add(postId);
+    const linked = !p.content && !linkedInPlan.has(p.id);
+    if (linked) linkedInPlan.add(p.id);
+    out.creates.push({
+      rowNo, postId, url: v.postUrl, cp, cr, p,
+      /* One roster row carries one linked post: linkSocialContent rebuilds
+         p.content from the library on every load and the last row with a
+         given participantId wins. A second linked row would quietly swap
+         which post the roster shows. So a creator who already has a post
+         on this campaign gets the new one in the library, attributed to
+         the campaign, and the roster card is left alone. */
+      linked,
+      values: v
+    });
   });
+  out.linkedInPlan = [...linkedInPlan];
   return out;
 }
+
+
+/* ---- the optional creator-profile tab (unchanged) ---- */
 
 function planSheetCreators(rows, map, opts) {
   const o = opts || {};
@@ -12735,25 +12916,66 @@ function planSheetCreators(rows, map, opts) {
   return out;
 }
 
-/* ---- applying -------------------------------------------------------
+/* ---- applying --------------------------------------------------------- */
 
-   The only writes in this file. Campaign membership, participants and
-   the creator list itself are never touched: an unmatched row is
-   reported, never created. */
+function smWriteValues(rec, v) {
+  Object.entries(v.metrics || {}).forEach(([k, val]) => { rec[k] = val; });
+  if (v.publishedAt) { rec.publishedAt = v.publishedAt; rec.postedAt = v.publishedAt; }
+  if (v.format) rec.format = v.format;
+  Object.entries(v.extra || {}).forEach(([k, val]) => { rec[k] = val; });
+}
+
 function applySheetContent(plan) {
   const now = new Date().toISOString();
-  let recs = 0;
+  let updated = 0, created = 0;
+
   (plan.updates || []).forEach((u) => {
-    u.changes.forEach((c) => { u.rec[c.field] = c.to; });
+    u.changes.forEach((c) => {
+      u.rec[c.field] = c.to;
+      if (c.field === 'publishedAt') u.rec.postedAt = c.to;
+    });
     u.rec.dataSource = 'google_sheet';
-    u.rec.lastScrapedAt = u.scrapedAt || now.slice(0, 10);
+    if (u.scrapedAt) u.rec.lastScrapedAt = u.scrapedAt;   /* unreadable date: stamp left alone */
     u.rec.updatedAt = now;
-    /* views recorded with no split keeps the paid/organic maths honest,
-       the same rule the Notion path applies */
     if (u.rec.views && !u.rec.paidViews && !u.rec.organicViews) u.rec.organicViews = u.rec.views;
-    recs++;
+    updated++;
   });
-  return recs;
+
+  (plan.creates || []).forEach((c) => {
+    /* The guard is re-checked here and not only at planning: the plan may
+       have sat in a preview while something else changed. A post that has
+       appeared in the library since is skipped rather than duplicated. */
+    if (smFindContent(smContentIndex(), c.url).rec) return;
+    if (!DB.participants.includes(c.p) || c.p.campaignId !== c.cp.id) return;
+
+    const seed = {
+      url: c.url, platform: platformOfUrl(c.url, c.cr.platform),
+      dataSource: 'google_sheet', matchMethod: 'sheet_tab',
+      matchConfidence: 100, matchStatus: 'confirmed'
+    };
+    let rec;
+    if (c.linked && !c.p.content) {
+      rec = attachContent(c.p, c.cr, seed);
+    } else {
+      /* in the library, attributed to the campaign and the creator, and
+         deliberately not linked to the roster row — see planSheetContent */
+      rec = Object.assign(socialContentDefaults(), {
+        id: newId('sc'), participantId: '', campaignId: c.cp.id, creatorId: c.cr.id,
+        username: c.cr.handle || '', thumbTint: avColor(c.cr.handle || ''),
+        createdAt: now
+      }, seed);
+      rec.postUrl = c.url; rec.url = c.url;
+      rec.platformPostId = c.postId;
+      DB.socialContent.push(rec);
+    }
+    smWriteValues(rec, c.values);
+    rec.lastScrapedAt = c.values.scrapedAt || now.slice(0, 10);
+    rec.updatedAt = now;
+    if (rec.views && !rec.paidViews && !rec.organicViews) rec.organicViews = rec.views;
+    created++;
+  });
+
+  return { updated, created };
 }
 
 function applySheetCreators(plan) {
@@ -12803,54 +13025,49 @@ async function fetchSheetTab(gid) {
   return rows;
 }
 
-/* Every selected content tab feeds one importer. The campaign column or
-   tab name is carried into the preview so an operator can see where a
-   row came from, and is used for nothing else — membership is decided on
-   the roster and nowhere near here. */
+/* ---- a read of the whole Sheet ----------------------------------------
+
+   Every enabled campaign tab, each under its own mapping, into one
+   preview. A tab with no campaign mapped is still read — its existing
+   posts update normally — but it cannot add a post, because a new post
+   needs a campaign and this is the only place one comes from. */
 async function dryRunSheetMetrics() {
-  const result = { content: null, creators: null, tabs: [], errors: [] };
+  const result = { tabs: [], creators: null, errors: [] };
   const tabs = (SM.contentTabs || []).filter((t) => t.on);
+  const map = Object.assign({}, SM_CONTENT_DEFAULT_MAP, SM.contentMap || {});
+  let linkedInPlan = [];
+  const claimed = new Set();        /* one post named on two tabs */
 
   for (const t of tabs) {
     try {
       const rows = await fetchSheetTab(t.gid);
-      const map = Object.keys(SM.contentMap || {}).length
-        ? SM.contentMap
-        : guessSheetColumns(rows[0] || [], SM_CONTENT_ALIASES);
-      const plan = planSheetContent(rows, map, { skipZero: SM.skipZero, tab: t.name });
-      result.tabs.push({ tab: t.name, plan });
+      const plan = planSheetContent(rows, map, {
+        tab: t.name, campaignId: t.campaignId, skipZero: SM.skipZero,
+        erUnit: SM.erUnit, allowCreate: SM.allowCreate, linkedInPlan
+      });
+      linkedInPlan = plan.linkedInPlan;
+      /* the same post on an earlier tab wins; this one is reported */
+      plan.updates = plan.updates.filter((u) => {
+        const key = u.rec.platformPostId || u.rec.postUrl;
+        if (claimed.has(key)) { plan.skipped.push({ rowNo: u.rowNo, why: 'same post on an earlier tab' }); return false; }
+        claimed.add(key); return true;
+      });
+      plan.creates = plan.creates.filter((c) => {
+        if (claimed.has(c.postId)) { plan.skipped.push({ rowNo: c.rowNo, why: 'same post on an earlier tab' }); return false; }
+        claimed.add(c.postId); return true;
+      });
+      result.tabs.push(plan);
     } catch (err) {
-      result.errors.push((t.name || 'content tab') + ': ' + err.message);
+      result.errors.push((t.name || 'a campaign tab') + ': ' + err.message);
     }
-  }
-  if (result.tabs.length) {
-    result.content = result.tabs.reduce((a, x) => ({
-      updates: a.updates.concat(x.plan.updates),
-      unmatched: a.unmatched.concat(x.plan.unmatched),
-      skipped: a.skipped.concat(x.plan.skipped),
-      rowsRead: a.rowsRead + x.plan.rowsRead
-    }), { updates: [], unmatched: [], skipped: [], rowsRead: 0 });
-
-    /* the same post listed on two tabs would otherwise be applied twice;
-       the later row wins and the earlier is reported as a duplicate */
-    const seen = new Map();
-    const deduped = [];
-    result.content.updates.forEach((u) => {
-      const key = u.rec.platformPostId || u.rec.postUrl || u.rec.url;
-      if (seen.has(key)) { result.content.skipped.push({ rowNo: u.rowNo, why: 'same post on an earlier tab' }); }
-      seen.set(key, u);
-    });
-    seen.forEach((u) => deduped.push(u));
-    result.content.updates = deduped;
   }
 
   if (SM.creatorTab && SM.creatorTab.on && (SM.creatorTab.gid || SM.creatorTab.name)) {
     try {
       const rows = await fetchSheetTab(SM.creatorTab.gid);
-      const map = Object.keys(SM.creatorMap || {}).length
-        ? SM.creatorMap
-        : guessSheetColumns(rows[0] || [], SM_CREATOR_ALIASES);
-      result.creators = planSheetCreators(rows, map, { skipZero: SM.skipZero, erUnit: SM.erUnit });
+      const cmap = Object.keys(SM.creatorMap || {}).length
+        ? SM.creatorMap : guessSheetColumns(rows[0] || [], SM_CREATOR_ALIASES);
+      result.creators = planSheetCreators(rows, cmap, { skipZero: SM.skipZero, erUnit: SM.erUnit });
     } catch (err) {
       result.errors.push('creator tab: ' + err.message);
     }
@@ -12858,16 +13075,33 @@ async function dryRunSheetMetrics() {
   return result;
 }
 
-/* Applies a plan that has already been shown. Returns what it did so the
-   caller can say so; recomputeCreatorStats is deliberately NOT called
-   here — it derives the Vively side from participants and content, and
-   nothing in this file changes either. */
 function commitSheetMetrics(dry) {
-  const content = dry.content ? applySheetContent(dry.content) : 0;
+  let updated = 0, created = 0;
+  (dry.tabs || []).forEach((plan) => {
+    const r = applySheetContent(plan);
+    updated += r.updated; created += r.created;
+  });
   const creators = dry.creators ? applySheetCreators(dry.creators) : 0;
+  /* A linked post is new content on a roster row, and the Vively side of
+     every creator is derived from exactly that — so the derivation runs
+     again. It is pure and reads only participants and content; nothing
+     here writes to it directly. */
+  if (created) recomputeCreatorStats();
   SM.at = new Date(); SM.error = null; SM.status = 'idle';
   saveSheetMetricsConfig();
-  return { content, creators };
+  return { updated, created, creators };
+}
+
+/* The Setup screen's first guess at which campaign a tab is: a tab named
+   KOWORK finds the campaign whose brand or name is KOWORK. Only a guess —
+   the operator confirms it once and it is stored. */
+function smSuggestCampaign(tabName) {
+  const n = String(tabName || '').trim().toLowerCase();
+  if (!n) return '';
+  const hit = DB.campaigns.find((c) => String(c.brand || '').trim().toLowerCase() === n)
+    || DB.campaigns.find((c) => String(c.name || '').trim().toLowerCase() === n)
+    || DB.campaigns.find((c) => String(c.brand || '').toLowerCase().includes(n));
+  return hit ? hit.id : '';
 }
 
 /* ============================================================

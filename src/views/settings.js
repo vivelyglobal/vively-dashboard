@@ -5,7 +5,7 @@ import { duplicateCreatorGroups, mergeDuplicateCreators } from '../model/creator
 import { DB, byCampaign, byCreator, clearPersisted, linkSocialContent, notify, persist, persistState, serverSave, toastAfterSave } from '../model/db.js';
 import { SETTINGS } from '../model/settings.js';
 import { SOURCES, newId, tierOf } from '../model/vocab.js';
-import { SM, SM_CONTENT_ALIASES, SM_CREATOR_ALIASES, commitSheetMetrics, dryRunSheetMetrics, fetchSheetTab, guessSheetColumns, saveSheetMetricsConfig } from '../sync/sheetMetrics.js';
+import { SM, SM_CONTENT_DEFAULT_MAP, SM_CONTENT_FIELDS, commitSheetMetrics, dryRunSheetMetrics, fetchSheetTab, saveSheetMetricsConfig, smHeaderIndex, smInfluencerKind, smSuggestCampaign } from '../sync/sheetMetrics.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { downloadFile, flagPill, stagePill, statCard, whoHtml } from '../ui/html.js';
 import { toast } from '../ui/overlay.js';
@@ -182,45 +182,67 @@ export function renderSettings(view, item) {
    Setup → Sheet metrics.
 
    Deliberately a different panel from Setup → Google Sheet. That one is
-   the workspace mirror and its Pull replaces everything; this one only
-   ever reads numbers onto records that already exist. Keeping them apart
-   on screen is as much a part of the safety as keeping the code apart.
+   the workspace mirror and its Pull replaces everything; this one reads
+   a master Sheet onto records that already exist. Keeping them apart on
+   screen is as much a part of the safety as keeping the code apart.
    ------------------------------------------------------------------ */
 export let SM_DRY = null;
 
-export function smTabRows() {
-  return (SM.contentTabs || []).map((t, i) => `
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
-      <input type="checkbox" data-smton="${i}" ${t.on ? 'checked' : ''}/>
-      <input type="text" data-smtname="${i}" value="${esc(t.name || '')}" placeholder="tab name (yours, for reading)" style="flex:1"/>
-      <input type="text" data-smtgid="${i}" value="${esc(t.gid || '')}" placeholder="gid" style="width:120px"/>
-      <button class="btn xs" data-smtdel="${i}">Remove</button>
-    </div>`).join('');
+export function smCampaignOptions(selected) {
+  return `<option value="">— not mapped —</option>` + DB.campaigns.slice()
+    .sort((a, b) => String(a.brand).localeCompare(String(b.brand)))
+    .map((c) => `<option value="${esc(c.id)}" ${c.id === selected ? 'selected' : ''}>${esc(c.brand)}${c.name ? ' — ' + esc(c.name) : ''}</option>`)
+    .join('');
 }
 
-export function smMapRows(which, fields, map) {
+/* One row per campaign tab, and the mapping reads the way it works:
+   Tab KOWORK → Campaign KOWORK. */
+export function smTabRows() {
+  return (SM.contentTabs || []).map((t, i) => {
+    const cp = t.campaignId ? byCampaign[t.campaignId] : null;
+    return `<div class="card tight" style="margin-bottom:8px;padding:10px 12px">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input type="checkbox" data-smton="${i}" ${t.on ? 'checked' : ''} title="read this tab"/>
+        <span style="font-size:12px;color:var(--text-3)">Tab</span>
+        <input type="text" data-smtname="${i}" value="${esc(t.name || '')}" placeholder="KOWORK" style="width:150px"/>
+        <span style="color:var(--text-3)">→</span>
+        <span style="font-size:12px;color:var(--text-3)">Campaign</span>
+        <select data-smtcp="${i}" style="min-width:220px">${smCampaignOptions(t.campaignId)}</select>
+        <input type="text" data-smtgid="${i}" value="${esc(t.gid || '')}" placeholder="gid" style="width:110px" title="the number after gid= in the tab's URL"/>
+        <button class="btn xs" data-smtdel="${i}">Remove</button>
+      </div>
+      <div style="font-size:12px;margin-top:6px;color:${cp ? 'var(--text-2)' : 'var(--amber)'}">
+        ${cp ? `Tab <strong>${esc(t.name || '?')}</strong> → Campaign <strong>${esc(cp.brand)}</strong>`
+             : `Not mapped yet — existing posts on this tab still update, but no new post can be added from it.`}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+export function smMapRows(which, fields, map, defaults) {
   return fields.map((f) => `
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:5px">
       <code style="width:120px;font-size:11.5px;color:var(--text-3)">${f}</code>
       <input type="text" data-smmap="${which}" data-field="${f}" value="${esc((map || {})[f] || '')}"
-        placeholder="the column header in your Sheet" style="flex:1"/>
+        placeholder="${esc((defaults || {})[f] || 'the column header in your Sheet')}" style="flex:1"/>
     </div>`).join('');
 }
 
 export function settingsSheetMetrics(view) {
   view.innerHTML = `
-    <div class="card" style="max-width:860px;margin-bottom:14px">
-      <div class="card-head"><h3>Performance from your scraper Sheet</h3><div class="sp"></div>
+    <div class="card" style="max-width:900px;margin-bottom:14px">
+      <div class="card-head"><h3>Performance from your master Sheet</h3><div class="sp"></div>
         <span class="pill ${SM.at ? 'green' : 'grey'}">${SM.at ? 'read ' + SM.at.toLocaleString() : 'never read'}</span></div>
-      <p class="card-sub">Reads views, likes and comments onto content and creators that are already here.
-        It never writes to the Sheet, never creates a creator, and never changes which campaign anyone is on.
-        This is not the workspace mirror in <strong>Setup → Google Sheet</strong> — that one is a two-way copy
-        of everything and its Pull replaces the workspace. These two share no settings.</p>
+      <p class="card-sub">One Sheet, one tab per campaign. Reads views, likes and comments onto posts already here
+        and, within strict limits, adds posts the library has not seen. It never writes to the Sheet, never creates
+        a creator, and never puts anyone on a roster or takes them off one.
+        This is not the workspace mirror in <strong>Setup → Google Sheet</strong> — that one's Pull replaces the
+        workspace. These two share no settings.</p>
 
-      <div class="field" style="margin-top:14px"><label>Sheet link — published to the web, or the normal /spreadsheets/d/… link</label>
+      <div class="field" style="margin-top:14px"><label>Master Sheet link</label>
         <input type="text" id="smBase" value="${esc(SM.base)}" placeholder="https://docs.google.com/spreadsheets/d/…"/></div>
-      <div class="grid g2" style="gap:10px">
-        <div class="field"><label>Engagement rate in the Sheet</label>
+      <div class="grid g3" style="gap:10px">
+        <div class="field"><label>post_er in the Sheet</label>
           <select id="smEr">
             <option value="percent" ${SM.erUnit === 'percent' ? 'selected' : ''}>Percent — 4.2 means 4.2%</option>
             <option value="decimal" ${SM.erUnit === 'decimal' ? 'selected' : ''}>Decimal — 0.042 means 4.2%</option>
@@ -228,50 +250,49 @@ export function settingsSheetMetrics(view) {
         <div class="field"><label>A zero in the Sheet</label>
           <select id="smZero">
             <option value="skip" ${SM.skipZero ? 'selected' : ''}>Treat as blank — keep what we have</option>
-            <option value="take" ${SM.skipZero ? '' : 'selected'}>Take it literally — write the zero</option>
+            <option value="take" ${SM.skipZero ? '' : 'selected'}>Take it literally</option>
+          </select></div>
+        <div class="field"><label>Posts the library hasn't seen</label>
+          <select id="smCreate">
+            <option value="yes" ${SM.allowCreate ? 'selected' : ''}>Add them, within the rules</option>
+            <option value="no" ${SM.allowCreate ? '' : 'selected'}>Only update existing posts</option>
           </select></div>
       </div>
-      <p class="card-sub" style="margin-top:-4px">A scraper that failed writes 0 far more often than a post
-        genuinely has none, which is why blank is the default reading.</p>
     </div>
 
-    <div class="card" style="max-width:860px;margin-bottom:14px">
-      <div class="card-head"><h3>Content tabs</h3><div class="sp"></div>
+    <div class="card" style="max-width:900px;margin-bottom:14px">
+      <div class="card-head"><h3>Campaign tabs</h3><div class="sp"></div>
         <button class="btn xs" id="smAddTab">+ Add tab</button></div>
-      <p class="card-sub">One consolidated tab or one per campaign — tick the ones to read. They all feed the
-        same importer. A campaign name on a row or a tab is shown in the preview and used for nothing else.</p>
-      <div style="margin-top:12px" id="smTabs">${smTabRows() || '<p class="card-sub">No tabs yet.</p>'}</div>
+      <p class="card-sub">Map each tab to its campaign once. That mapping is the only place a campaign comes from —
+        there is no campaign column. Find a tab's <strong>gid</strong> in the Sheet's address bar when the tab is open.</p>
+      <div style="margin-top:12px" id="smTabs">${smTabRows() || '<p class="card-sub">No tabs yet — add one per campaign.</p>'}</div>
       <div class="divider"></div>
-      <div class="lbl">Content columns</div>
-      <p class="card-sub">Leave a row empty to ignore that field. <strong>postUrl</strong> or <strong>postId</strong>
-        is the one that must be filled — it is how a row finds its post.</p>
-      <div style="margin-top:10px">${smMapRows('content',
-        ['postUrl','postId','handle','views','likes','comments','shares','saves','reach','publishedAt','scrapedAt','campaign'],
-        SM.contentMap)}</div>
+      <div class="lbl">Columns on every campaign tab</div>
+      <p class="card-sub">Already set to your master Sheet's headers. Change one only if a tab is laid out differently.
+        <strong>post_url</strong> is how a row finds its post. <strong>ci_id</strong> is not used — it isn't a post id.</p>
+      <div style="margin-top:10px">${smMapRows('content', SM_CONTENT_FIELDS, SM.contentMap, SM_CONTENT_DEFAULT_MAP)}</div>
     </div>
 
-    <div class="card" style="max-width:860px;margin-bottom:14px">
-      <div class="card-head"><h3>Creator profile tab</h3></div>
-      <p class="card-sub">Profile figures scraped from the public account. Country and category fill a blank
-        and never overwrite something chosen here. Creator status stays on the Vively flag —
-        Preferred, Flagged, Blacklist — and nothing in the Sheet changes it.</p>
+    <div class="card" style="max-width:900px;margin-bottom:14px">
+      <div class="card-head"><h3>Creator profile tab</h3><div class="sp"></div><span class="pill grey">optional</span></div>
+      <p class="card-sub">Only for a tab of <em>profile</em> figures — followers and account-wide averages. Leave it off
+        until you have one. Per-post numbers, <strong>post_er</strong> included, never stand in for a creator's profile.
+        Creator status stays on the Vively flag; nothing in a Sheet changes it.</p>
       <div style="display:flex;gap:8px;align-items:center;margin:12px 0">
         <input type="checkbox" id="smCrOn" ${SM.creatorTab.on ? 'checked' : ''}/>
         <input type="text" id="smCrName" value="${esc(SM.creatorTab.name || '')}" placeholder="tab name" style="flex:1"/>
-        <input type="text" id="smCrGid" value="${esc(SM.creatorTab.gid || '')}" placeholder="gid" style="width:120px"/>
+        <input type="text" id="smCrGid" value="${esc(SM.creatorTab.gid || '')}" placeholder="gid" style="width:110px"/>
       </div>
-      <div class="lbl">Creator columns</div>
-      <div style="margin-top:10px">${smMapRows('creator',
-        ['handle','followers','er','avgViews','avgLikes','avgComments','country','category','scrapedAt'],
-        SM.creatorMap)}</div>
+      ${SM.creatorTab.on ? `<div style="margin-top:4px">${smMapRows('creator',
+        ['handle','followers','er','avgViews','avgLikes','avgComments','country','category','scrapedAt'], SM.creatorMap)}</div>` : ''}
     </div>
 
-    <div class="card" style="max-width:860px">
+    <div class="card" style="max-width:900px">
       <div class="card-head"><h3>Read and preview</h3></div>
       <p class="card-sub">Nothing is written until you have seen what would change.</p>
       <div style="display:flex;gap:8px;margin-top:12px">
         <button class="btn primary" id="smDry" ${SM.base ? '' : 'disabled'}>Read the Sheet</button>
-        <button class="btn" id="smGuess" ${SM.base ? '' : 'disabled'}>Guess the columns for me</button>
+        <button class="btn" id="smCheck" ${SM.base ? '' : 'disabled'}>Check the columns</button>
       </div>
       <div id="smOut" style="margin-top:14px"></div>
     </div>`;
@@ -286,9 +307,10 @@ export function wireSheetMetrics(view) {
   $('#smBase').addEventListener('change', (e) => { SM.base = e.target.value.trim(); save(); redraw(); });
   $('#smEr').addEventListener('change', (e) => { SM.erUnit = e.target.value; save(); });
   $('#smZero').addEventListener('change', (e) => { SM.skipZero = e.target.value === 'skip'; save(); });
+  $('#smCreate').addEventListener('change', (e) => { SM.allowCreate = e.target.value === 'yes'; save(); });
 
   $('#smAddTab').addEventListener('click', () => {
-    SM.contentTabs = (SM.contentTabs || []).concat([{ name: '', gid: '', on: true }]);
+    SM.contentTabs = (SM.contentTabs || []).concat([{ name: '', gid: '', campaignId: '', on: true }]);
     save(); redraw();
   });
   $$('[data-smtdel]').forEach((b) => b.addEventListener('click', () => {
@@ -297,14 +319,22 @@ export function wireSheetMetrics(view) {
   $$('[data-smton]').forEach((c) => c.addEventListener('change', () => {
     SM.contentTabs[+c.dataset.smton].on = c.checked; save();
   }));
+  /* naming a tab offers the campaign of the same name — a suggestion the
+     operator can change, never a mapping made behind their back */
   $$('[data-smtname]').forEach((i) => i.addEventListener('change', () => {
-    SM.contentTabs[+i.dataset.smtname].name = i.value.trim(); save();
+    const t = SM.contentTabs[+i.dataset.smtname];
+    t.name = i.value.trim();
+    if (!t.campaignId) t.campaignId = smSuggestCampaign(t.name);
+    save(); redraw();
+  }));
+  $$('[data-smtcp]').forEach((s) => s.addEventListener('change', () => {
+    SM.contentTabs[+s.dataset.smtcp].campaignId = s.value; save(); redraw();
   }));
   $$('[data-smtgid]').forEach((i) => i.addEventListener('change', () => {
     SM.contentTabs[+i.dataset.smtgid].gid = i.value.trim(); save();
   }));
 
-  $('#smCrOn').addEventListener('change', (e) => { SM.creatorTab.on = e.target.checked; save(); });
+  $('#smCrOn').addEventListener('change', (e) => { SM.creatorTab.on = e.target.checked; save(); redraw(); });
   $('#smCrName').addEventListener('change', (e) => { SM.creatorTab.name = e.target.value.trim(); save(); });
   $('#smCrGid').addEventListener('change', (e) => { SM.creatorTab.gid = e.target.value.trim(); save(); });
 
@@ -315,85 +345,101 @@ export function wireSheetMetrics(view) {
     save();
   }));
 
-  /* Reads the first selected tab of each kind and fills the mapping from
-     its header row, so the usual case is one click rather than twenty
-     fields typed by hand. */
-  $('#smGuess').addEventListener('click', async () => {
-    try {
-      const t = (SM.contentTabs || []).find((x) => x.on);
-      if (t) {
+  /* Reads each enabled tab's header row and says which of the expected
+     columns it found. The master Sheet's layout is known, so this checks
+     rather than guesses. */
+  $('#smCheck').addEventListener('click', async () => {
+    const map = Object.assign({}, SM_CONTENT_DEFAULT_MAP, SM.contentMap || {});
+    const lines = [];
+    for (const t of (SM.contentTabs || []).filter((x) => x.on)) {
+      try {
         const rows = await fetchSheetTab(t.gid);
-        SM.contentMap = guessSheetColumns(rows[0] || [], SM_CONTENT_ALIASES);
-      }
-      if (SM.creatorTab.on) {
-        const rows = await fetchSheetTab(SM.creatorTab.gid);
-        SM.creatorMap = guessSheetColumns(rows[0] || [], SM_CREATOR_ALIASES);
-      }
-      save(); toast('Columns guessed — check them before reading'); notify();
-    } catch (err) { toast(err.message); }
+        const idx = smHeaderIndex(rows[0] || [], map);
+        const missing = SM_CONTENT_FIELDS.filter((f) => idx[f] == null);
+        const kind = idx.influencer != null
+          ? smInfluencerKind(rows.slice(1).map((r) => r[idx.influencer])) : { kind: 'empty' };
+        lines.push(`<div style="margin-bottom:8px"><strong>${esc(t.name || 'tab')}</strong> — ` +
+          (idx.postUrl == null ? '<span style="color:var(--red)">no post_url column; this tab cannot match anything</span>'
+            : `${SM_CONTENT_FIELDS.length - missing.length}/${SM_CONTENT_FIELDS.length} columns found` +
+              (missing.length ? ` · missing: ${esc(missing.join(', '))}` : '')) +
+          `<br><span style="font-size:12px;color:var(--text-3)">influencer_id: ${esc(smInfluencerLabel(kind))}</span></div>`);
+      } catch (err) { lines.push(`<div class="note bad" style="margin-bottom:8px">${esc(t.name || 'tab')}: ${esc(err.message)}</div>`); }
+    }
+    $('#smOut').innerHTML = lines.join('') || '<p class="card-sub">No enabled tabs to check.</p>';
   });
 
   $('#smDry').addEventListener('click', async () => {
     $('#smOut').innerHTML = '<p class="card-sub">Reading…</p>';
-    try {
-      SM_DRY = await dryRunSheetMetrics();
-      renderSheetMetricsPreview();
-    } catch (err) {
-      $('#smOut').innerHTML = `<div class="note bad">${esc(err.message)}</div>`;
-    }
+    try { SM_DRY = await dryRunSheetMetrics(); renderSheetMetricsPreview(); }
+    catch (err) { $('#smOut').innerHTML = `<div class="note bad">${esc(err.message)}</div>`; }
   });
 }
 
+export function smInfluencerLabel(k) {
+  if (k.kind === 'handle') return `Instagram handles — ${k.resolved} of ${k.total} match a creator here, so it is used to attribute new posts`;
+  if (k.kind === 'opaque') return `not handles${k.sample && k.sample.length ? ' (e.g. ' + k.sample.join(', ') + ')' : ''} — ` +
+    `${k.resolved || 0} of ${k.total || 0} match a creator, so it is NOT used; new posts on this tab cannot be attributed`;
+  return 'empty — new posts on this tab cannot be attributed';
+}
+
 export function smChangeLine(c) {
-  if (c.fillOnly) return c.field + ' ← ' + esc(String(c.to)) + ' (was blank)';
-  return c.field + ' ' + num(c.from) + ' → ' + num(c.to);
+  if (c.fillOnly) return c.field + ' ← ' + String(c.to) + ' (was blank)';
+  const f = (x) => (typeof x === 'number' ? num(x) : String(x || '—'));
+  return (c.secondary ? '· ' : '') + c.field + ' ' + f(c.from) + ' → ' + f(c.to);
 }
 
 export function renderSheetMetricsPreview() {
   const d = SM_DRY;
-  const c = d.content || { updates: [], unmatched: [], skipped: [], rowsRead: 0 };
+  const sum = (k) => d.tabs.reduce((a, t) => a + t[k].length, 0);
+  const rowsRead = d.tabs.reduce((a, t) => a + t.rowsRead, 0);
+  const updates = sum('updates'), creates = sum('creates'), unmatched = sum('unmatched');
   const cr = d.creators || { updates: [], unmatched: [], skipped: [], rowsRead: 0 };
+
+  const tabBlock = (t) => {
+    const linked = t.creates.filter((c) => c.linked).length;
+    return `<div class="card tight" style="margin-bottom:12px;padding:12px 14px">
+      <div class="card-head"><h3 style="font-size:13.5px">Tab ${esc(t.tab || '?')} → ${t.campaignName
+        ? 'Campaign ' + esc(t.campaignName) : '<span style="color:var(--amber)">not mapped</span>'}</h3>
+        <div class="sp"></div><span style="font-size:12px;color:var(--text-3)">${t.rowsRead} rows</span></div>
+      <div style="font-size:12px;color:var(--text-3);margin:4px 0 8px">influencer_id: ${esc(smInfluencerLabel(t.influencer))}</div>
+      <div style="font-size:12.5px">${t.updates.length} to update · ${t.creates.length} to add
+        ${t.creates.length ? `(${linked} onto an empty roster card, ${t.creates.length - linked} into the library only)` : ''}
+        · ${t.skipped.length} skipped · ${t.unmatched.length} not added</div>
+      ${t.conflicts.length ? `<div class="note warn" style="margin-top:8px;font-size:12px">
+        ${t.conflicts.length} post${t.conflicts.length === 1 ? ' is' : 's are'} filed under a different campaign than this tab.
+        Their numbers still update; they are not moved.</div>` : ''}
+      ${t.unmatched.length ? `<details style="margin-top:8px"><summary style="font-size:12px;cursor:pointer">
+        Why ${t.unmatched.length} row${t.unmatched.length === 1 ? ' was' : 's were'} not added</summary>
+        <div class="tbl-wrap" style="max-height:200px;overflow-y:auto;margin-top:6px"><table class="tbl">
+        <thead><tr><th>Row</th><th>Post</th><th>Reason</th></tr></thead><tbody>
+        ${t.unmatched.slice(0, 100).map((u) => `<tr><td>${u.rowNo}</td>
+          <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis">${esc(u.url)}</td>
+          <td style="font-size:12px">${esc(u.why)}</td></tr>`).join('')}
+        </tbody></table></div></details>` : ''}
+      ${t.updates.length ? `<details style="margin-top:6px"><summary style="font-size:12px;cursor:pointer">
+        What changes on ${t.updates.length} post${t.updates.length === 1 ? '' : 's'}</summary>
+        <div class="tbl-wrap" style="max-height:220px;overflow-y:auto;margin-top:6px"><table class="tbl">
+        <tbody>${t.updates.slice(0, 150).map((u) => `<tr>
+          <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis">${esc(u.rec.postUrl || u.rec.url)}</td>
+          <td style="font-size:12px">${u.changes.map(smChangeLine).map(esc).join('<br>') || '<span style="color:var(--text-3)">timestamp only</span>'}</td>
+        </tr>`).join('')}</tbody></table></div></details>` : ''}
+    </div>`;
+  };
 
   $('#smOut').innerHTML = `
     ${d.errors.length ? `<div class="note bad" style="margin-bottom:12px">${d.errors.map(esc).join('<br>')}</div>` : ''}
     <div class="grid g4" style="gap:10px;margin-bottom:14px">
-      ${statCard('Rows read', c.rowsRead + cr.rowsRead, { foot: (d.tabs || []).length + ' content tab(s)' })}
-      ${statCard('Posts to update', c.updates.length, { foot: c.unmatched.length + ' not in the library' })}
-      ${statCard('Creators to update', cr.updates.length, { foot: cr.unmatched.length + ' not in the database' })}
-      ${statCard('Rows skipped', c.skipped.length + cr.skipped.length, { foot: 'blank, zero or nothing new' })}
+      ${statCard('Rows read', rowsRead, { foot: d.tabs.length + ' campaign tab' + (d.tabs.length === 1 ? '' : 's') })}
+      ${statCard('Posts to update', updates, { foot: 'already in the library' })}
+      ${statCard('Posts to add', creates, { foot: 'creator on the roster already' })}
+      ${statCard('Not added', unmatched, { foot: 'each with its reason below' })}
     </div>
-
-    ${c.unmatched.length ? `<div class="note warn" style="margin-bottom:12px">
-      <strong>${c.unmatched.length} post${c.unmatched.length === 1 ? '' : 's'} in the Sheet are not in the content library.</strong>
-      Nothing is created from here — add the link on the roster first and read again.
-      <div style="margin-top:6px;font-size:12px">${esc(c.unmatched.slice(0, 6).map((u) => u.url).join(' · '))}${c.unmatched.length > 6 ? ' …' : ''}</div>
-    </div>` : ''}
-    ${cr.unmatched.length ? `<div class="note warn" style="margin-bottom:12px">
-      <strong>${cr.unmatched.length} handle${cr.unmatched.length === 1 ? '' : 's'} are not in the creator database.</strong>
-      No creator is ever created from the Sheet.
-      <div style="margin-top:6px;font-size:12px">${esc(cr.unmatched.slice(0, 10).map((u) => u.handle).join(' · '))}${cr.unmatched.length > 10 ? ' …' : ''}</div>
-    </div>` : ''}
-
-    ${c.updates.length ? `<div class="lbl">Content</div>
-    <div class="tbl-wrap" style="max-height:260px;overflow-y:auto;margin-bottom:14px"><table class="tbl">
-      <thead><tr><th>Post</th><th>Matched by</th><th>Changes</th></tr></thead><tbody>
-      ${c.updates.slice(0, 200).map((u) => `<tr>
-        <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis">${esc(u.rec.postUrl || u.rec.url || u.rec.platformPostId)}</td>
-        <td><span class="pill grey">${esc(u.by)}</span></td>
-        <td style="font-size:12px">${u.changes.map(smChangeLine).map(esc).join('<br>') || '<span style="color:var(--text-3)">timestamp only</span>'}</td>
-      </tr>`).join('')}</tbody></table></div>` : ''}
-
-    ${cr.updates.length ? `<div class="lbl">Creator profiles</div>
-    <div class="tbl-wrap" style="max-height:260px;overflow-y:auto;margin-bottom:14px"><table class="tbl">
-      <thead><tr><th>Creator</th><th>Changes</th></tr></thead><tbody>
-      ${cr.updates.slice(0, 200).map((u) => `<tr>
-        <td class="strong">${esc(u.cr.handle)}</td>
-        <td style="font-size:12px">${u.changes.map(smChangeLine).map(esc).join('<br>') || '<span style="color:var(--text-3)">timestamp only</span>'}</td>
-      </tr>`).join('')}</tbody></table></div>` : ''}
-
-    <div style="display:flex;gap:8px">
-      <button class="btn primary" id="smApply" ${(c.updates.length + cr.updates.length) ? '' : 'disabled'}>
-        Apply ${c.updates.length} post${c.updates.length === 1 ? '' : 's'} and ${cr.updates.length} creator${cr.updates.length === 1 ? '' : 's'}</button>
+    ${d.tabs.map(tabBlock).join('')}
+    ${d.creators ? `<div class="lbl">Creator profiles</div>
+      <p class="card-sub">${cr.updates.length} to update · ${cr.unmatched.length} not in the database — never created</p>` : ''}
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn primary" id="smApply" ${(updates + creates + cr.updates.length) ? '' : 'disabled'}>
+        Apply: update ${updates}, add ${creates}${d.creators ? ', ' + cr.updates.length + ' profiles' : ''}</button>
       <button class="btn" id="smDiscard">Discard</button>
     </div>`;
 
@@ -401,7 +447,8 @@ export function renderSheetMetricsPreview() {
   if (apply) apply.addEventListener('click', () => {
     const r = commitSheetMetrics(SM_DRY);
     SM_DRY = null;
-    const msg = `Updated ${r.content} post${r.content === 1 ? '' : 's'} and ${r.creators} creator${r.creators === 1 ? '' : 's'} from the Sheet`;
+    const msg = `Updated ${r.updated} and added ${r.created} post${r.created === 1 ? '' : 's'} from the Sheet` +
+      (r.creators ? `, and ${r.creators} creator profile${r.creators === 1 ? '' : 's'}` : '');
     toast(msg);
     notify();
     serverSave({ force: true, silent: true }).then((res) => toastAfterSave(msg, res));
