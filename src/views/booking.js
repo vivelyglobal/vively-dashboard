@@ -194,7 +194,8 @@ export function bookingBoard(mount, cp) {
                 ${blocked ? '<span class="pill grey" style="margin-left:6px">Blocked</span>' : ''}</td>
               <td>${rows.length}</td><td>${cap}</td>
               <td>${bk}${bk >= cap && cap ? ' <span class="pill amber">Full</span>' : ''}</td>
-              <td style="text-align:right"><button class="btn xs" data-block="${esc(d)}">${blocked ? 'Unblock' : 'Block day'}</button></td>
+              <td style="text-align:right"><button class="btn xs" data-block="${esc(d)}">${blocked ? 'Unblock' : 'Block day'}</button>
+                <button class="btn xs" data-delday="${esc(d)}">Delete day</button></td>
             </tr>` + (isOpen ? rows.map((s) => `<tr data-slot-row="1">
               <td style="padding-left:26px;color:var(--text-2)">${esc(s.time)}</td>
               <td colspan="2"><input type="number" min="1" value="${s.capacity}" data-cap="${esc(s._id)}"
@@ -202,7 +203,8 @@ export function bookingBoard(mount, cp) {
               <td>${s.booked} booked</td>
               <td style="text-align:right">
                 <button class="btn xs" data-slotstatus="${esc(s._id)}" data-to="${s.status === 'open' ? 'closed' : 'open'}">${s.status === 'open' ? 'Close' : 'Open'}</button>
-                <button class="btn xs" data-delslot="${esc(s._id)}"${s.booked ? ' disabled title="Someone has booked this"' : ''}>Delete</button>
+                <button class="btn xs" data-editslot="${esc(s._id)}">Edit</button>
+                <button class="btn xs" data-delslot="${esc(s._id)}">Delete</button>
               </td></tr>`).join('') + `<tr><td colspan="5" style="padding-left:26px">
                 <input type="time" data-newtime="${esc(d)}" style="width:110px;padding:3px 6px;font-size:12px"/>
                 <input type="number" min="1" value="1" data-newcap="${esc(d)}" style="width:60px;padding:3px 6px;font-size:12px"/> seats
@@ -237,10 +239,12 @@ export function bookingBoard(mount, cp) {
           const cr = p ? byCreator[p.creatorId] : null;
           return `<tr>
             <td style="white-space:nowrap">${esc(b.date)} ${esc(b.time)}</td>
-            <td>${cr ? esc(cr.handle) : `<span style="color:var(--amber)">${esc((b.guest || {}).handle || '—')} · unmatched</span>`}</td>
+            <td>${cr ? esc(cr.handle) : `<span style="color:var(--amber)">${esc((b.guest || {}).handle || '—')} · unmatched</span>`}
+              ${b.staffNote ? `<div style="font-size:11.5px;color:var(--text-3)">${esc(b.staffNote)}</div>` : ''}</td>
             <td>${b.partySize || 1}</td>
             <td><span class="pill grey">${esc(b.source || 'creator')}</span></td>
             <td style="text-align:right">
+              <button class="btn xs" data-editbk="${esc(b._id)}">Edit</button>
               <button class="btn xs" data-move="${esc(b._id)}">Move</button>
               <button class="btn xs" data-cancel="${esc(b._id)}">Cancel</button></td></tr>`;
         }).join('')}
@@ -304,8 +308,30 @@ export function wireBookingBoard(cp) {
     guard(() => bookingCall('/api/booking/slot', { scheduleId: sc._id, date: d, time, capacity }));
   }));
 
-  $$('[data-delslot]').forEach((b) => b.addEventListener('click', () => guard(
-    () => bookingCall('/api/booking/slot/' + b.dataset.delslot, null, 'DELETE'))));
+  /* A slot with bookings can be deleted, but only as a decision: the
+     count is spelled out and the bookings are cancelled, not orphaned. */
+  $$('[data-delslot]').forEach((b) => b.addEventListener('click', () => {
+    const slot = BOOKING.slots.find((x) => x._id === b.dataset.delslot);
+    if (!slot) return;
+    const n = BOOKING.bookings.filter((x) => x.slotId === slot._id).length;
+    if (n && !window.confirm(`${n} booking${n === 1 ? '' : 's'} on ${slot.date} ${slot.time} will be cancelled and the slot deleted. ` +
+      'The creators are not told automatically — tell them yourself. Go ahead?')) return;
+    guard(() => bookingCall('/api/booking/slot/' + slot._id + (n ? '?cancelBookings=1' : ''), null, 'DELETE'),
+      n ? `Slot deleted, ${n} booking${n === 1 ? '' : 's'} cancelled` : 'Slot deleted');
+  }));
+  $$('[data-editslot]').forEach((b) => b.addEventListener('click', () => openEditSlot(cp, b.dataset.editslot)));
+  $$('[data-delday]').forEach((b) => b.addEventListener('click', (e) => {
+    e.stopPropagation();          /* the row itself toggles open */
+    const d = b.dataset.delday;
+    const ids = new Set(BOOKING.slots.filter((x) => x.date === d).map((x) => x._id));
+    const n = BOOKING.bookings.filter((x) => ids.has(x.slotId)).length;
+    if (!window.confirm(n
+      ? `Delete all ${ids.size} slot${ids.size === 1 ? '' : 's'} on ${d}? ${n} booking${n === 1 ? '' : 's'} will be cancelled — the creators are not told automatically.`
+      : `Delete all ${ids.size} slot${ids.size === 1 ? '' : 's'} on ${d}?`)) return;
+    guard(() => bookingCall('/api/booking/date/delete', { scheduleId: sc._id, date: d, cancelBookings: !!n }),
+      n ? `${d} deleted, ${n} booking${n === 1 ? '' : 's'} cancelled` : `${d} deleted`);
+  }));
+  $$('[data-editbk]').forEach((b) => b.addEventListener('click', () => openEditBooking(cp, b.dataset.editbk)));
 
   $$('[data-slotstatus]').forEach((b) => b.addEventListener('click', () => guard(
     () => bookingCall('/api/booking/slot/' + b.dataset.slotstatus, { status: b.dataset.to }, 'PATCH'))));
@@ -327,7 +353,7 @@ export function wireBookingBoard(cp) {
     const bk = BOOKING.bookings.find((x) => x._id === b.dataset.cancel);
     if (!bk) return;
     if (!window.confirm('Cancel this booking? The creator is not told — there are no notifications yet, so tell them yourself.')) return;
-    guard(() => bookingCall('/api/book/manage/' + bk.manageToken + '/cancel', { reason: 'cancelled by staff' }), 'Booking cancelled');
+    guard(() => bookingCall('/api/booking/booking/' + bk._id + '/cancel', { reason: 'cancelled by staff' }), 'Booking cancelled');
   }));
   $$('[data-match]').forEach((b) => b.addEventListener('click', () => openMatchBooking(cp, b.dataset.match)));
 }
@@ -377,6 +403,88 @@ export function openAddBookingDate(cp) {
    a full slot can still be chosen. A human deciding to squeeze somebody
    in is a real decision, and refusing it outright would only send them
    to the database. It is recorded rather than prevented. */
+/* ---- editing a slot: its date, time and seats ----
+
+   Bookings on the slot move with it. Nobody is told automatically, so
+   the drawer says how many people that is. */
+export function openEditSlot(cp, slotId) {
+  const slot = BOOKING.slots.find((x) => x._id === slotId);
+  if (!slot) return;
+  const n = BOOKING.bookings.filter((x) => x.slotId === slot._id).length;
+  openDrawer(`Edit slot — ${esc(slot.date)} ${esc(slot.time)}`, `
+    <div class="grid g3" style="gap:10px">
+      <div class="field"><label>Date</label><input type="date" id="esDate" value="${esc(slot.date)}"/></div>
+      <div class="field"><label>Time</label><input type="time" id="esTime" value="${esc(slot.time)}"/></div>
+      <div class="field"><label>Seats</label><input type="number" min="1" id="esCap" value="${slot.capacity}"/></div>
+    </div>
+    <div class="field"><label>Note (staff only)</label><input type="text" id="esNote" value="${esc(slot.note || '')}" maxlength="200"/></div>
+    ${n ? `<div class="note" style="margin:8px 0">${n} booking${n === 1 ? '' : 's'} on this slot will move with it. The creator${n === 1 ? ' is' : 's are'} not told automatically.</div>` : ''}
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn primary" id="esSave">Save</button>
+      <button class="btn" id="esCancel">Cancel</button>
+    </div>`);
+  $('#esCancel').addEventListener('click', closeDrawer);
+  $('#esSave').addEventListener('click', async () => {
+    const body = { note: $('#esNote').value.trim() };
+    const date = $('#esDate').value, time = $('#esTime').value, cap = +$('#esCap').value;
+    if (date !== slot.date) body.date = date;
+    if (time !== slot.time) body.time = time;
+    if (cap !== slot.capacity) body.capacity = cap;
+    try {
+      const r = await bookingCall('/api/booking/slot/' + slot._id, body, 'PATCH');
+      closeDrawer();
+      await loadBooking(cp.id, true);
+      toast(r.bookingsMoved ? `Slot changed — ${r.bookingsMoved} booking${r.bookingsMoved === 1 ? '' : 's'} moved with it` : 'Slot saved');
+      notify();
+    } catch (err) { toast(err.message); }
+  });
+}
+
+/* ---- editing one booking: people and a staff note ----
+
+   The time is changed with Move (a different slot), so the seat claim
+   stays the one atomic path it has always been. */
+export function openEditBooking(cp, bookingId) {
+  const bk = BOOKING.bookings.find((x) => x._id === bookingId);
+  if (!bk) return;
+  const p = bk.participantId ? DB.participants.find((x) => x.id === bk.participantId) : null;
+  const cr = p ? byCreator[p.creatorId] : null;
+  const who = cr ? cr.handle : ((bk.guest || {}).handle || 'unmatched booking');
+  openDrawer(`Edit booking — ${esc(who)}`, `
+    <p class="card-sub"><strong>${esc(bk.date)} ${esc(bk.time)}</strong> · booked by ${esc(bk.source || 'creator')}</p>
+    <div class="grid g2" style="gap:10px;margin-top:10px">
+      <div class="field"><label>People</label><input type="number" min="1" max="50" id="ebParty" value="${bk.partySize || 1}"/></div>
+    </div>
+    <div class="field"><label>Staff note</label><textarea id="ebNote" style="min-height:60px" maxlength="500">${esc(bk.staffNote || '')}</textarea></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      <button class="btn primary" id="ebSave">Save</button>
+      <button class="btn" id="ebMove">Change time…</button>
+      <div class="sp"></div>
+      <button class="btn" id="ebCancel" style="color:var(--red)">Cancel booking</button>
+    </div>`);
+  const done = async (msg) => { closeDrawer(); await loadBooking(cp.id, true); toast(msg); notify(); };
+  $('#ebMove').addEventListener('click', () => { closeDrawer(); openStaffMove(cp, bk._id); });
+  $('#ebCancel').addEventListener('click', async () => {
+    if (!window.confirm('Cancel this booking? The creator is not told — there are no notifications yet, so tell them yourself.')) return;
+    try { await bookingCall('/api/booking/booking/' + bk._id + '/cancel', { reason: 'cancelled by staff' }); await done('Booking cancelled'); }
+    catch (err) { toast(err.message); }
+  });
+  $('#ebSave').addEventListener('click', async () => {
+    const body = { staffNote: $('#ebNote').value.trim() };
+    const party = +$('#ebParty').value;
+    if (party !== (bk.partySize || 1)) body.partySize = party;
+    try {
+      await bookingCall('/api/booking/booking/' + bk._id, body, 'PATCH');
+      await done('Booking saved');
+    } catch (err) {
+      if (/Not enough seats/.test(err.message) && window.confirm(err.message + ' Save it over capacity anyway?')) {
+        try { await bookingCall('/api/booking/booking/' + bk._id, Object.assign(body, { overCapacity: true }), 'PATCH'); await done('Saved — over capacity, recorded as a staff decision'); }
+        catch (e2) { toast(e2.message); }
+      } else toast(err.message);
+    }
+  });
+}
+
 export function openStaffMove(cp, bookingId) {
   const bk = BOOKING.bookings.find((x) => x._id === bookingId);
   if (!bk) return;

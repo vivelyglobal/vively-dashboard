@@ -342,6 +342,82 @@ ok('a paused schedule refuses new bookings', await (async () => {
   return r.status === 409 && view.body.paused === true;
 })());
 
+/* ---- staff edits: a slot's time, a booking, deleting with bookings ----
+
+   On a fresh date so nothing above is disturbed. */
+
+const day2 = new Date(Date.now() + 31 * 86400000).toISOString().slice(0, 10);
+const day3 = new Date(Date.now() + 32 * 86400000).toISOString().slice(0, 10);
+const mk2 = (date, time, capacity) => call('/api/booking/slot', { body: { scheduleId, date, time, capacity } });
+const book = (slotId, handle, partySize) => call('/api/book/' + publicToken + '/confirm',
+  { body: { slotId, name: handle, handle: '@' + handle, partySize: partySize || 1 } });
+const slotRow = (id) => col('booking_slots').findOne({ _id: id });
+const bkRow = (handle) => col('campaign_bookings').findOne({ 'guest.handleNorm': handle });
+
+const e1 = (await mk2(day2, '10:00', 3)).body.slot;
+const e2 = (await mk2(day2, '11:00', 2)).body.slot;
+await book(e1._id, 'edita');
+await book(e1._id, 'editb');
+
+const retime = await call('/api/booking/slot/' + e1._id, { method: 'PATCH', body: { time: '10:30' } });
+ok('a booked slot can be moved to another time', retime.status === 200 && retime.body.bookingsMoved === 2,
+  JSON.stringify(retime.body).slice(0, 80));
+ok('its bookings move with it, and say so in their history', await (async () => {
+  const a = await bkRow('edita');
+  return a.time === '10:30' && a.date === day2 && a.history.some((h) => h.action === 'retimed' && h.from.endsWith('10:00'));
+})());
+ok('startsAt follows the new time, in the venue zone',
+  new Date((await slotRow(e1._id)).startsAt).toISOString().endsWith('T01:30:00.000Z'));
+ok('a slot cannot be moved onto another slot\'s time',
+  (await call('/api/booking/slot/' + e1._id, { method: 'PATCH', body: { time: '11:00' } })).status === 409);
+ok('a slot can move to another date',
+  (await call('/api/booking/slot/' + e2._id, { method: 'PATCH', body: { date: day3 } })).status === 200
+  && (await slotRow(e2._id)).date === day3);
+
+/* one booking: people and a note */
+const ea = await bkRow('edita');
+const grow = await call('/api/booking/booking/' + ea._id, { method: 'PATCH', body: { partySize: 2, staffNote: 'bringing a friend' } });
+ok('a booking can take more people when seats are free', grow.status === 200 && (await slotRow(e1._id)).booked === 3);
+ok('and keeps the staff note', (await bkRow('edita')).staffNote === 'bringing a friend');
+const tooMany = await call('/api/booking/booking/' + ea._id, { method: 'PATCH', body: { partySize: 3 } });
+ok('more people than seats is refused, not squeezed in', tooMany.status === 409 && (await slotRow(e1._id)).booked === 3);
+ok('unless a person says so', (await call('/api/booking/booking/' + ea._id,
+  { method: 'PATCH', body: { partySize: 3, overCapacity: true } })).status === 200 && (await slotRow(e1._id)).booked === 4);
+ok('fewer people give seats back', (await call('/api/booking/booking/' + ea._id,
+  { method: 'PATCH', body: { partySize: 1 } })).status === 200 && (await slotRow(e1._id)).booked === 2);
+ok('a nonsense party size is refused',
+  (await call('/api/booking/booking/' + ea._id, { method: 'PATCH', body: { partySize: 0 } })).status === 400);
+
+/* staff cancel */
+const cx = await call('/api/booking/booking/' + ea._id + '/cancel', { body: { reason: 'no-show' } });
+ok('staff can cancel a booking by its id', cx.status === 200 && (await slotRow(e1._id)).booked === 1);
+ok('recorded as staff, kept on file', await (async () => {
+  const r = await bkRow('edita');
+  return r.status === 'cancelled' && r.history.some((h) => h.action === 'cancelled' && h.by === 'staff');
+})());
+ok('cancelling twice returns the seat once', (await call('/api/booking/booking/' + ea._id + '/cancel', { body: {} })).body.alreadyCancelled === true
+  && (await slotRow(e1._id)).booked === 1);
+ok('an edit to a cancelled booking is refused',
+  (await call('/api/booking/booking/' + ea._id, { method: 'PATCH', body: { partySize: 2 } })).status === 404);
+
+/* deleting a slot that has bookings */
+const refused = await call('/api/booking/slot/' + e1._id, { method: 'DELETE' });
+ok('deleting a booked slot is refused without saying so', refused.status === 409 && refused.body.bookings === 1);
+const gone = await call('/api/booking/slot/' + e1._id + '?cancelBookings=1', { method: 'DELETE' });
+ok('with cancelBookings it cancels them and deletes the slot', gone.status === 200 && gone.body.cancelled === 1 && !(await slotRow(e1._id)));
+ok('the cancelled booking is still on file', (await bkRow('editb')).status === 'cancelled');
+
+/* deleting a whole day */
+const d1 = (await mk2(day3, '14:00', 2)).body.slot;
+await book(d1._id, 'dayone');
+const dayNo = await call('/api/booking/date/delete', { body: { scheduleId, date: day3 } });
+ok('deleting a day with bookings is refused unless asked', dayNo.status === 409 && dayNo.body.bookings === 1);
+const dayYes = await call('/api/booking/date/delete', { body: { scheduleId, date: day3, cancelBookings: true } });
+ok('asked, it deletes every slot on the day and cancels the bookings',
+  dayYes.status === 200 && dayYes.body.slots === 2 && dayYes.body.cancelled === 1
+  && !(await slotRow(d1._id)) && !(await slotRow(e2._id)) && (await bkRow('dayone')).status === 'cancelled');
+ok('an empty day deletes without asking', (await call('/api/booking/date/delete', { body: { scheduleId, date: day3 } })).status === 200);
+
 srv.close();
 console.log(errs.length ? '\n' + errs.length + ' FAILED' : '\nall booking API checks passed');
 process.exit(errs.length ? 1 : 0);

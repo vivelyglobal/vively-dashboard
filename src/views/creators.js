@@ -1,14 +1,15 @@
 import { SERIES_HEX, barsH, splitBar } from '../charts/index.js';
 import { TODAY, dLabel, iso } from '../lib/dates.js';
 import { engagementsOf, kmb, num, pct, won } from '../lib/format.js';
+import { findCreatorByHandle } from '../model/creators.js';
 import { DB, byCampaign, byCreator, notify } from '../model/db.js';
 import { SETTINGS, isBlocked } from '../model/settings.js';
 import { suggestScore } from '../model/suggest.js';
-import { CATEGORIES, COUNTRIES, PLATFORMS } from '../model/vocab.js';
+import { CATEGORIES, COUNTRIES, PLATFORMS, tierOf } from '../model/vocab.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { FLAGS, avatarHtml, daysAgo, downloadFile, emptyState, flagPill, sortTable, stagePill, statCard, tierPill, toCsv, whoHtml } from '../ui/html.js';
 import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';
-import { activeCampaigns, state } from './overview.js';
+import { state } from './overview.js';
 
 /* ============================================================
    VIEW — CREATOR DATABASE
@@ -289,6 +290,7 @@ export function showCreator(id) {
     <div class="field"><label>Notes</label><textarea id="crNote" style="min-height:60px">${esc(c.notes)}</textarea></div>
     <div style="display:flex;gap:8px">
       <button class="btn primary sm" id="crSaveNote">Save</button>
+      <button class="btn sm" id="crEdit">Edit details</button>
       <button class="btn sm" id="crAddTo">Add to a campaign</button>
     </div>
   `);
@@ -305,18 +307,112 @@ export function showCreator(id) {
     toast(pendingFlag ? FLAGS[pendingFlag].label + ' saved' : 'Saved');
     closeDrawer(); notify();
   });
+  $('#crEdit').addEventListener('click', () => openEditCreator(c.id));
+  /* Every campaign is offered, not only the active ones: a wrapped
+     campaign still takes a late addition, and hiding it made the list
+     look broken. Active ones come first; ones this creator is already on
+     are shown but disabled, so the list never silently shrinks. */
   $('#crAddTo').addEventListener('click', () => {
     if (isBlocked(c)) { toast('This creator is blacklisted — remove the flag first'); return; }
-    const opts = activeCampaigns().filter((cp) => !DB.participants.some((p) => p.campaignId === cp.id && p.creatorId === c.id));
+    const onIt = new Set(DB.participants.filter((p) => p.creatorId === c.id).map((p) => p.campaignId));
+    const byStart = (a, b) => String(b.start || '').localeCompare(String(a.start || '')) || String(a.brand || '').localeCompare(String(b.brand || ''));
+    const active = DB.campaigns.filter((cp) => cp.status !== 'wrapped').sort(byStart);
+    const wrapped = DB.campaigns.filter((cp) => cp.status === 'wrapped').sort(byStart);
+    const label = (cp) => esc(cp.brand || 'Untitled') + (cp.name ? ' — ' + esc(cp.name) : '') +
+      (onIt.has(cp.id) ? ' · already on it' : ` (fit ${suggestScore(c, cp).score})`);
+    const opt = (cp) => `<option value="${esc(cp.id)}"${onIt.has(cp.id) ? ' disabled' : ''}>${label(cp)}</option>`;
+    const available = DB.campaigns.filter((cp) => !onIt.has(cp.id)).length;
     openDrawer('Add ' + esc(c.handle) + ' to a campaign', `
-      <div class="field"><label>Campaign</label><select id="atCp">${opts.map((cp) => `<option value="${cp.id}">${esc(cp.brand)} — ${esc(cp.name)} (fit ${suggestScore(c, cp).score})</option>`).join('')}</select></div>
+      <div class="field"><label>Find a campaign</label><input type="text" id="atFind" placeholder="brand or campaign name"/></div>
+      <div class="field"><label>Campaign · ${DB.campaigns.length} in total, ${available} available</label>
+        <select id="atCp" size="10" style="height:auto">
+          ${active.length ? `<optgroup label="Active (${active.length})">${active.map(opt).join('')}</optgroup>` : ''}
+          ${wrapped.length ? `<optgroup label="Wrapped (${wrapped.length})">${wrapped.map(opt).join('')}</optgroup>` : ''}
+        </select></div>
       <button class="btn primary" id="atGo">Add as Sourced</button>`);
+    const firstFree = $('#atCp').querySelector('option:not([disabled])');
+    if (firstFree) firstFree.selected = true;
+    $('#atFind').addEventListener('input', (e) => {
+      const q = e.target.value.trim().toLowerCase();
+      $$('#atCp option').forEach((o) => { o.hidden = !!q && !o.textContent.toLowerCase().includes(q); });
+      const vis = $('#atCp').querySelector('option:not([disabled]):not([hidden])');
+      if (vis) vis.selected = true;
+    });
     $('#atGo').addEventListener('click', () => {
       const cpId = $('#atCp').value;
+      if (!cpId || !byCampaign[cpId]) { toast('Pick a campaign'); return; }
       if (DB.participants.some((p) => p.campaignId === cpId && p.creatorId === c.id)) { toast('Already on that campaign'); return; }
       DB.participants.push({ id: cpId + '-' + c.id, campaignId: cpId, creatorId: c.id, stage: 'sourced', source: c.source,
         fee: 0, contactedAt: null, repliedAt: null, confirmedAt: null, shippedAt: null, dropReason: null, revisions: 0, content: null, note: '' });
-      closeDrawer(); toast('Added'); notify();
+      closeDrawer(); toast('Added to ' + (byCampaign[cpId].brand || 'the campaign')); notify();
     });
+  });
+}
+
+/* ---- editing a creator's details ----
+
+   The profile figures (followers, ER, average views) are the ones staff
+   most often need to correct by hand while the Meta connection is not
+   live. A manual edit is marked as such (metricsSource: 'manual') so a
+   later Sheet or API figure can be told apart from it. Imports only ever
+   fill blanks, so what is typed here is not overwritten by a Notion sync. */
+export function openEditCreator(id) {
+  const c = byCreator[id];
+  if (!c) return;
+  const numVal = (v) => (v == null || v === '' ? '' : v);
+  openDrawer('Edit ' + esc(c.handle), `
+    <div class="grid g2" style="gap:10px">
+      <div class="field"><label>Handle</label><input type="text" id="ecHandle" value="${esc(c.handle || '')}"/></div>
+      <div class="field"><label>Name</label><input type="text" id="ecName" value="${esc(c.name || '')}"/></div>
+      <div class="field"><label>Platform</label><select id="ecPlatform">${PLATFORMS.concat(PLATFORMS.includes(c.platform) || !c.platform ? [] : [c.platform])
+        .map((p) => `<option${p === c.platform ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select></div>
+      <div class="field"><label>Country</label><input type="text" id="ecCountry" list="ecCountries" value="${esc(c.country || '')}"/>
+        <datalist id="ecCountries">${COUNTRIES.map((x) => `<option value="${esc(x)}">`).join('')}</datalist></div>
+    </div>
+    <div class="field"><label>Categories (comma-separated)</label><input type="text" id="ecCats" value="${esc((c.categories || []).join(', '))}" placeholder="${esc(CATEGORIES.slice(0, 3).join(', '))}"/></div>
+    <div class="lbl" style="margin-top:6px">Profile metrics</div>
+    <div class="grid g3" style="gap:10px">
+      <div class="field"><label>Followers</label><input type="number" min="0" step="1" id="ecFollowers" value="${numVal(c.followers)}"/></div>
+      <div class="field"><label>ER (%)</label><input type="number" min="0" max="100" step="0.01" id="ecEr" value="${numVal(c.er)}"/></div>
+      <div class="field"><label>Avg views</label><input type="number" min="0" step="1" id="ecAvgViews" value="${numVal(c.avgViews)}"/></div>
+    </div>
+    <div class="grid g2" style="gap:10px">
+      <div class="field"><label>Typical rate (₩)</label><input type="number" min="0" step="1" id="ecRate" value="${numVal(c.rate)}"/></div>
+      <div class="field"><label>Email</label><input type="text" id="ecEmail" value="${esc(c.email || '')}"/></div>
+    </div>
+    <div class="field"><label>Contact (phone, Kakao, etc.)</label><input type="text" id="ecContact" value="${esc(c.contact || '')}"/></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn primary" id="ecSave">Save</button>
+      <button class="btn" id="ecBack">Back</button>
+    </div>`);
+  $('#ecBack').addEventListener('click', () => showCreator(c.id));
+  $('#ecSave').addEventListener('click', () => {
+    const handle = $('#ecHandle').value.trim();
+    if (!handle) { toast('A creator needs a handle'); return; }
+    const clash = findCreatorByHandle(handle);
+    if (clash && clash.id !== c.id) { toast(handle + ' is already another creator — merge them instead'); return; }
+    const n = (sel, lo, hi) => {
+      const raw = $(sel).value.trim();
+      if (raw === '') return { ok: true, v: 0 };
+      const v = Number(raw);
+      return Number.isFinite(v) && v >= lo && v <= hi ? { ok: true, v } : { ok: false };
+    };
+    const f = n('#ecFollowers', 0, 1e10), e = n('#ecEr', 0, 100), a = n('#ecAvgViews', 0, 1e11), r = n('#ecRate', 0, 1e12);
+    if (!f.ok || !e.ok || !a.ok || !r.ok) { toast('Check the numbers — followers, ER (0–100), views and rate'); return; }
+    const metricsChanged = Math.round(f.v) !== (c.followers || 0) || e.v !== (c.er || 0) || Math.round(a.v) !== (c.avgViews || 0);
+    c.handle = handle.startsWith('@') ? handle : '@' + handle.replace(/^@+/, '');
+    c.name = $('#ecName').value.trim();
+    c.platform = $('#ecPlatform').value;
+    c.country = $('#ecCountry').value.trim();
+    c.categories = [...new Set($('#ecCats').value.split(',').map((x) => x.trim()).filter(Boolean))];
+    c.followers = Math.round(f.v); c.er = Math.round(e.v * 100) / 100; c.avgViews = Math.round(a.v);
+    c.rate = Math.round(r.v);
+    c.email = $('#ecEmail').value.trim();
+    c.contact = $('#ecContact').value.trim();
+    c.tier = tierOf(c.followers || 0).id;
+    if (metricsChanged) { c.metricsSource = 'manual'; c.metricsSyncedAt = new Date().toISOString(); }
+    toast('Creator saved');
+    showCreator(c.id);
+    notify();
   });
 }

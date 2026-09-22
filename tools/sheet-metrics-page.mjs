@@ -18,6 +18,9 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const { mountSheetProxy } = require('../server/sheet-proxy.js');
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const seed = JSON.parse(fs.readFileSync(path.join(ROOT, 'tmp/seed.json'), 'utf8'));
@@ -65,17 +68,35 @@ app.get('/api/me', (q, r) => r.json({ user: { email: 'k@v.com', name: 'H' }, sta
 let WS = { db, settings: {}, savedAt: new Date().toISOString(), revision: 1 };
 app.get('/api/workspace', (q, r) => r.json({ ok: true, data: WS }));
 app.post('/api/workspace', (q, r) => { saved = q.body; WS.revision++; r.json({ ok: true, savedAt: new Date().toISOString(), revision: WS.revision }); });
+/* The real relay, server/sheet-proxy.js, mounted as server.js mounts it,
+   with Google replaced by a stand-in that answers as docs.google.com does:
+   a viewer page listing the tabs, and each tab's CSV export. SHEET_ID is
+   shared as "anyone with the link"; PRIVATE_ID answers with a sign-in. */
+const SHEET_ID = '1KwMasterSheetForTestsOnly_0123456789ab';
+const PRIVATE_ID = '1KwPrivateSheetForTestsOnly_0123456789a';
+const VIEWER = `<html><body><ul id="sheet-menu">
+  <li id="sheet-button-0"><a href="#">README</a></li>
+  <li id="sheet-button-111"><a href="#">KOWORK</a></li>
+  <li id="sheet-button-222"><a href="#">Raw scrape</a></li></ul></body></html>`;
+const googleHits = [];
+const fakeGoogle = async (url) => {
+  googleHits.push(url);
+  const reply = (status, body, type, finalUrl) => ({ status, ok: status < 400, url: finalUrl || url,
+    headers: { get: (k) => (k.toLowerCase() === 'content-type' ? type : null) }, text: async () => body });
+  if (url.includes(PRIVATE_ID)) return reply(200, '<html><title>Sign in - Google Accounts</title></html>', 'text/html', 'https://accounts.google.com/ServiceLogin');
+  if (url.endsWith(SHEET_ID + '/htmlview')) return reply(200, VIEWER, 'text/html');
+  if (url.endsWith(SHEET_ID + '/export?format=csv&gid=111')) return reply(200, KOWORK_CSV, 'text/csv');
+  return reply(404, 'Not Found', 'text/html');
+};
+mountSheetProxy(app, { requireStaff: (h) => h, fetchImpl: fakeGoogle });
 app.use(express.static(ROOT)); app.get('*', (q, r) => r.sendFile(path.join(ROOT, 'index.html')));
 const srv = app.listen(0); await new Promise((r) => srv.once('listening', r));
 const BASE = 'http://127.0.0.1:' + srv.address().port;
 const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
 const ctx = await b.newContext({ viewport: { width: 1500, height: 1000 } });
-const sheetHits = [];
-await ctx.route('https://docs.google.com/**', (route) => {
-  const u = route.request().url(); sheetHits.push(u);
-  if (/gid=111/.test(u)) return route.fulfill({ status: 200, contentType: 'text/csv', body: KOWORK_CSV });
-  return route.fulfill({ status: 404, body: 'nope' });
-});
+/* the browser must never go to Google itself — that is the whole fix */
+const browserGoogleHits = [];
+await ctx.route('https://docs.google.com/**', (route) => { browserGoogleHits.push(route.request().url()); return route.abort(); });
 const p = await ctx.newPage(); p.on('pageerror', (e) => errs.push('page error: ' + e.message));
 const text = async (s) => (await p.textContent(s)) || '';
 
@@ -96,22 +117,30 @@ ok('post_url is read from post_url by default',
 ok('the creator-profile tab is off by default', !(await p.isChecked('#smCrOn')));
 ok('its column mapping is hidden while off', (await p.$$('[data-smmap="creator"]')).length === 0);
 
-await p.fill('#smBase', 'https://docs.google.com/spreadsheets/d/1AbCtest/edit');
-await p.dispatchEvent('#smBase', 'change'); await p.waitForTimeout(500);
+await p.fill('#smBase', `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit#gid=111`);
+await p.dispatchEvent('#smBase', 'change'); await p.waitForTimeout(1200);
 ok('Read the Sheet becomes available', !(await p.isDisabled('#smDry')));
+ok('entering the link finds the tabs by itself', (await text('#smFindOut')).includes('Found 3 tabs'), await text('#smFindOut'));
+const names = await p.$$eval('[data-smtfound]', (els) => els.map((e) => e.textContent.trim()));
+ok('every tab in the Sheet is listed', JSON.stringify(names) === JSON.stringify(['README', 'KOWORK', 'Raw scrape']), names.join(', '));
+ok('KOWORK is mapped to campaign KOWORK and switched on',
+  (await p.inputValue('[data-smtcp="1"]')) === 'cpKW' && (await p.isChecked('[data-smton="1"]')));
+ok('the panel shows "Tab KOWORK → Campaign KOWORK"', (await text('#view')).replace(/\s+/g, ' ').includes('Tab KOWORK → Campaign KOWORK'));
+ok('tabs that name no campaign are listed but left off',
+  !(await p.isChecked('[data-smton="0"]')) && !(await p.isChecked('[data-smton="2"]')) && (await text('#view')).includes('Not mapped yet'));
+ok('each tab carries its gid', (await text('#smTabs')).includes('gid 111'));
+
+await p.click('#smFind'); await p.waitForTimeout(900);
+ok('finding again adds nothing twice', (await p.$$('[data-smtfound]')).length === 3 && (await text('#smFindOut')).trim() === 'Found 3 tabs in the Sheet.', await text('#smFindOut'));
 
 await p.click('#smAddTab'); await p.waitForTimeout(400);
-ok('a new tab starts unmapped and says so', (await text('#view')).includes('Not mapped yet'));
-await p.fill('[data-smtname="0"]', 'KOWORK'); await p.dispatchEvent('[data-smtname="0"]', 'change'); await p.waitForTimeout(400);
-ok('naming the tab KOWORK suggests campaign KOWORK', (await p.inputValue('[data-smtcp="0"]')) === 'cpKW');
-const mapLine = (await text('#view')).replace(/\s+/g, ' ');
-ok('the panel shows "Tab KOWORK → Campaign KOWORK"', mapLine.includes('Tab KOWORK → Campaign KOWORK'));
-await p.fill('[data-smtgid="0"]', '111'); await p.dispatchEvent('[data-smtgid="0"]', 'change'); await p.waitForTimeout(200);
+ok('a tab can still be added by hand', (await p.$$('[data-smtname]')).length === 1);
+await p.click('[data-smtdel="3"]'); await p.waitForTimeout(400);
 
 ok('the mapping survives leaving and coming back', await (async () => {
   await p.goto(BASE + '/#/settings/templates'); await p.waitForTimeout(400);
   await p.goto(BASE + '/#/settings/sheetmetrics'); await p.waitForTimeout(700);
-  return (await p.inputValue('[data-smtcp="0"]')) === 'cpKW' && (await p.inputValue('[data-smtgid="0"]')) === '111';
+  return (await p.inputValue('[data-smtcp="1"]')) === 'cpKW' && (await p.$$('[data-smtfound]')).length === 3;
 })());
 
 await p.click('#smCheck'); await p.waitForTimeout(1200);
@@ -120,7 +149,10 @@ ok('Check the columns finds every column', chk.includes('18/18 columns found') &
 
 await p.click('#smDry'); await p.waitForTimeout(1500);
 const out = (await text('#smOut')).replace(/\s+/g, ' ');
-ok('only the Sheet export was fetched', sheetHits.length > 0 && sheetHits.every((u) => /format=csv&gid=111/.test(u)));
+ok('the server read only the tab list and the KOWORK tab, from docs.google.com',
+  googleHits.length > 0 && googleHits.every((u) => u === `https://docs.google.com/spreadsheets/d/${SHEET_ID}/htmlview`
+    || u === `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=111`), googleHits.length + ' reads');
+ok('the browser itself never went to Google', browserGoogleHits.length === 0, browserGoogleHits.join(' '));
 ok('the preview names the tab and its campaign', out.includes('KOWORK'));
 ok('influencer_id is recognised as handles', /handle/i.test(out));
 ok('one post to update, one to add', /Posts to update\s*1/.test(out) && /Posts to add\s*1/.test(out), out.slice(0, 160));
@@ -149,11 +181,19 @@ if (saved) {
   ok('post_er did not touch the creator profile ER', alpha && alpha.er === 3);
 }
 
+ok('an unshared Sheet says how to share it', await (async () => {
+  await p.goto(BASE + '/#/settings/sheetmetrics'); await p.waitForTimeout(700);
+  await p.fill('#smBase', `https://docs.google.com/spreadsheets/d/${PRIVATE_ID}/edit`);
+  await p.dispatchEvent('#smBase', 'change'); await p.waitForTimeout(1200);
+  return (await text('#smFindOut')).includes('Anyone with the link');
+})(), await text('#smFindOut'));
+
 ok('the Google Sheet mirror panel still renders', await (async () => {
   await p.goto(BASE + '/#/settings/sheet'); await p.waitForTimeout(800);
   return (await text('#view')).length > 200;
 })());
-ok('no page errors', errs.length === 0, errs.slice(0, 2).join(' | '));
+const pageErrs = errs.filter((e) => e.startsWith('page error'));
+ok('no page errors', pageErrs.length === 0, pageErrs.slice(0, 2).join(' | '));
 await b.close(); srv.close();
 console.log(errs.length ? '\n' + errs.length + ' FAILED' : '\nall sheet metrics panel checks passed');
 process.exit(errs.length ? 1 : 0);

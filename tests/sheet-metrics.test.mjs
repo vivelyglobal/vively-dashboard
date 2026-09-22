@@ -10,7 +10,8 @@ import assert from 'node:assert/strict';
 import {
   parseCsvLoose, sheetCsvUrl, guessSheetColumns, smMetric, smEngagement, smDate,
   planSheetContent, planSheetCreators, applySheetContent, applySheetCreators,
-  SM_CREATOR_ALIASES, SM_CONTENT_DEFAULT_MAP, smInfluencerKind, smPostId, smSuggestCampaign
+  SM_CREATOR_ALIASES, SM_CONTENT_DEFAULT_MAP, smInfluencerKind, smPostId, smSuggestCampaign,
+  SM, discoverSheetTabs, fetchSheetTab, dryRunSheetMetrics
 } from '../src/sync/sheetMetrics.js';
 import { DB, byCampaign } from '../src/model/db.js';
 
@@ -362,4 +363,99 @@ test('the creator tab updates profile metrics by handle and never creates a crea
   assert.equal(DB.creators.length, n);
   assert.equal(DB.creators[0].followers, 15000);
   assert.equal(DB.creators[0].er, 4.2);
+});
+
+/* ---- reading through the server -----------------------------------------
+
+   The browser never talks to Google: it asks /api/sheet-metrics/*. These
+   stand in for that server and check what the page asks it and what it
+   does with the answer. */
+
+function stubServer(routes) {
+  const asked = [];
+  globalThis.fetch = async (url) => {
+    asked.push(String(url));
+    const u = new URL(String(url), 'http://x');
+    const r = routes(u) || { status: 404, body: { ok: false, error: 'no route' } };
+    return { status: r.status || 200, ok: (r.status || 200) < 400, json: async () => r.body };
+  };
+  return asked;
+}
+const EDIT_URL = 'https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789/edit#gid=0';
+
+test('Find tabs lists every tab and maps the ones whose name is a campaign', async () => {
+  seed();
+  SM.base = EDIT_URL;
+  SM.contentTabs = [];
+  const asked = stubServer((u) => u.pathname === '/api/sheet-metrics/tabs'
+    ? { body: { ok: true, tabs: [{ gid: '0', name: 'README' }, { gid: '482910', name: 'KOWORK' }] } } : null);
+  const r = await discoverSheetTabs();
+  assert.deepEqual(r, { count: 2, added: 2 });
+  assert.equal(new URL(asked[0], 'http://x').searchParams.get('sheet'), EDIT_URL);
+  assert.deepEqual(SM.contentTabs.map((t) => [t.name, t.gid, t.campaignId, t.on]),
+    [['README', '0', '', false], ['KOWORK', '482910', 'cpK', true]]);
+});
+
+test('finding tabs again keeps every choice already made', async () => {
+  seed();
+  SM.base = EDIT_URL;
+  SM.contentTabs = [
+    { name: 'KOWORK', gid: '482910', campaignId: 'cpJ', on: false, found: true },  /* deliberately remapped, off */
+    { name: 'jaimdang', gid: '', campaignId: 'cpJ', on: true },                     /* added by hand, no gid */
+    { name: 'OLD', gid: '9', campaignId: '', on: false, found: true }
+  ];
+  stubServer(() => ({ body: { ok: true, tabs: [
+    { gid: '482910', name: 'KOWORK 2026' }, { gid: '1300', name: 'JAIMDANG' }] } }));
+  const r = await discoverSheetTabs();
+  assert.equal(r.added, 0);
+  const [k, j, old] = SM.contentTabs;
+  assert.deepEqual([k.name, k.campaignId, k.on], ['KOWORK 2026', 'cpJ', false], 'a rename lost the mapping');
+  assert.deepEqual([j.gid, j.campaignId, j.on], ['1300', 'cpJ', true]);
+  assert.equal(old.missing, true);
+});
+
+test('a tab is read by gid through the server, and the CSV comes back as rows', async () => {
+  SM.base = EDIT_URL;
+  const asked = stubServer((u) => u.pathname === '/api/sheet-metrics/csv'
+    ? { body: { ok: true, csv: 'post_url,notes\nhttps://x/1,"a\nb"\n' } } : null);
+  const rows = await fetchSheetTab({ gid: '482910', name: 'KOWORK' });
+  const u = new URL(asked[0], 'http://x');
+  assert.equal(u.searchParams.get('gid'), '482910');
+  assert.equal(u.searchParams.get('name'), null, 'name sent although the gid was known');
+  assert.deepEqual(rows, [['post_url', 'notes'], ['https://x/1', 'a\nb']]);
+  await fetchSheetTab({ gid: '', name: 'KOWORK' });
+  assert.equal(new URL(asked[1], 'http://x').searchParams.get('name'), 'KOWORK');
+});
+
+test('the server\'s explanation reaches the operator', async () => {
+  SM.base = EDIT_URL;
+  stubServer(() => ({ status: 403, body: { ok: false, error: 'Share → Anyone with the link → Viewer.' } }));
+  await assert.rejects(fetchSheetTab({ gid: '1' }), /Anyone with the link/);
+  stubServer(() => ({ status: 401, body: { error: 'Sign in' } }));
+  await assert.rejects(fetchSheetTab({ gid: '1' }), /sign in again/);
+});
+
+test('reading with no tab switched on says so instead of showing zeroes', async () => {
+  seed();
+  SM.base = EDIT_URL;
+  SM.contentTabs = [];
+  let d = await dryRunSheetMetrics();
+  assert.match(d.errors[0], /Find tabs/);
+  SM.contentTabs = [{ name: 'KOWORK', gid: '1', campaignId: 'cpK', on: false }];
+  d = await dryRunSheetMetrics();
+  assert.match(d.errors[0], /tick the tabs/);
+});
+
+test('a switched-on tab is read end to end through the server', async () => {
+  seed();
+  SM.base = EDIT_URL;
+  SM.creatorTab = { name: '', gid: '', on: false };
+  SM.contentTabs = [{ name: 'KOWORK', gid: '482910', campaignId: 'cpK', on: true }];
+  const csv = TAB_HEADER.join(',') + '\n' + row({ post_url: 'https://www.instagram.com/reel/ABC123/', views: 9000 }).join(',');
+  stubServer((u) => (u.searchParams.get('gid') === '482910' ? { body: { ok: true, csv } } : null));
+  const d = await dryRunSheetMetrics();
+  assert.deepEqual(d.errors, []);
+  assert.equal(d.tabs.length, 1);
+  assert.equal(d.tabs[0].rowsRead, 1);
+  assert.equal(d.tabs[0].updates.length, 1);
 });

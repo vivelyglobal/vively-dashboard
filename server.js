@@ -100,6 +100,7 @@ const igCollabProbe = require("./server/instagram-collab-probe.js");
 const auth = require("./server/auth.js");
 const bookingStore = require("./server/booking-store.js");
 const bookingRoutes = require("./server/booking-routes.js");
+const sheetProxy = require("./server/sheet-proxy.js");
 
 /* ------------------------------------------------------------------
    Who is allowed into the workspace.
@@ -1889,6 +1890,10 @@ app.get("/api/diagnostics/instagram-collab", async (req, res) => {
 bookingApi = bookingRoutes.mountBookingRoutes(app, {
   getMongoClient, MONGODB_DB, MONGODB_URI, loadWorkspaceDoc, requireStaff
 });
+
+/* Setup → Sheet metrics: the two read-only Google Sheet reads the browser
+   cannot make itself. See server/sheet-proxy.js. */
+sheetProxy.mountSheetProxy(app, { requireStaff });
 
 app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));

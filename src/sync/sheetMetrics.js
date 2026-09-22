@@ -71,7 +71,7 @@ export function saveSheetMetricsConfig() {
     localStorage.setItem(SHEET_METRICS_KEY, JSON.stringify({
       base: SM.base, erUnit: SM.erUnit, skipZero: SM.skipZero, allowCreate: SM.allowCreate,
       contentTabs: SM.contentTabs, creatorTab: SM.creatorTab,
-      contentMap: SM.contentMap, creatorMap: SM.creatorMap,
+      contentMap: SM.contentMap, creatorMap: SM.creatorMap, discovered: SM.discovered || null,
       at: SM.at ? SM.at.toISOString() : null
     }));
   } catch (e) { /* storage blocked */ }
@@ -566,32 +566,68 @@ export function applySheetCreators(plan) {
 
 /* ---- reading the Sheet ----------------------------------------------
 
-   A published-to-web CSV needs no key and no token, which is why it is
-   the transport: nothing secret ends up in this browser, and the Sheet
-   stays readable by the people who already maintain it. If Google
-   refuses the request the message says so plainly rather than leaving a
-   blank panel — the usual cause is a Sheet that has not been published,
-   which is a two-click fix rather than a bug here. */
-export async function fetchSheetTab(gid) {
-  const url = sheetCsvUrl(SM.base, gid);
-  if (!url) throw new Error('No Sheet URL set.');
+   Through the server, always. docs.google.com sends no CORS headers, so
+   a page on this origin cannot read a Sheet directly — the request dies
+   in the browser before a byte arrives, and the old direct fetch failed
+   that way against every real Sheet. server/sheet-proxy.js makes the two
+   reads (tab list, one tab's CSV) server-side, read-only, against
+   docs.google.com and nothing else. The Sheet needs "Anyone with the
+   link can view"; no key or token lives in this browser. */
+export async function smProxyGet(path, params) {
+  const q = new URLSearchParams(Object.assign({ sheet: SM.base }, params || {}));
   let res;
   try {
-    res = await fetch(url, { redirect: 'follow' });
+    res = await fetch('/api/sheet-metrics/' + path + '?' + q.toString(), { credentials: 'same-origin' });
   } catch (err) {
-    throw new Error('Could not reach the Sheet. If it is not published to the web, ' +
-      'open it and use File → Share → Publish to web.');
+    throw new Error('Could not reach the dashboard server to read the Sheet.');
   }
-  if (!res.ok) {
-    throw new Error(res.status === 404
-      ? 'That Sheet or tab was not found — check the link and the tab id.'
-      : 'The Sheet refused the request (' + res.status + '). It may not be published to the web.');
-  }
-  const text = await res.text();
-  if (/^\s*</.test(text)) {
-    throw new Error('Google returned a web page rather than CSV — the Sheet is probably not published.');
-  }
-  const rows = parseCsvLoose(text);
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 401) throw new Error('Your session has ended — sign in again, then read the Sheet.');
+  if (!res.ok || !body.ok) throw new Error(body.error || ('The server answered ' + res.status + '.'));
+  return body;
+}
+
+/* Every tab in the master Sheet, as { gid, name }. */
+export async function fetchSheetTabList() {
+  if (!SM.base) throw new Error('No Sheet link set.');
+  const body = await smProxyGet('tabs');
+  return { tabs: body.tabs || [], gidHint: body.gidHint || '' };
+}
+
+/* Merges the Sheet's tab list into the saved tabs. Keyed on gid, which
+   survives a rename; a tab added by hand before discovery is matched on
+   its name and given its gid. What the operator chose — which tabs are
+   on, which campaign each maps to — is never overwritten. A new tab is
+   switched on only when its name already names a campaign. */
+export async function discoverSheetTabs() {
+  const { tabs } = await fetchSheetTabList();
+  const list = SM.contentTabs = SM.contentTabs || [];
+  const found = new Set();
+  let added = 0;
+  tabs.forEach((g) => {
+    found.add(g.gid);
+    let t = list.find((x) => x.gid && String(x.gid) === String(g.gid));
+    if (!t) t = list.find((x) => !x.gid && String(x.name || '').trim().toLowerCase() === g.name.trim().toLowerCase());
+    if (t) { t.gid = g.gid; t.name = g.name; t.found = true; t.missing = false; return; }
+    const campaignId = smSuggestCampaign(g.name);
+    list.push({ name: g.name, gid: g.gid, campaignId, on: !!campaignId, found: true, missing: false });
+    added++;
+  });
+  list.forEach((t) => { if (t.found && t.gid && !found.has(String(t.gid))) t.missing = true; });
+  SM.discovered = { at: new Date().toISOString(), count: tabs.length };
+  saveSheetMetricsConfig();
+  return { count: tabs.length, added };
+}
+
+/* One tab's rows. Takes a saved tab ({ gid, name }) or a bare gid. */
+export async function fetchSheetTab(tab) {
+  const t = (tab && typeof tab === 'object') ? tab : { gid: tab };
+  const gid = String(t.gid == null ? '' : t.gid).trim();
+  const name = String(t.name || '').trim();
+  if (!SM.base) throw new Error('No Sheet link set.');
+  if (!gid && !name) throw new Error('This tab has neither a gid nor a name — use Find tabs.');
+  const body = await smProxyGet('csv', gid ? { gid } : { name });
+  const rows = parseCsvLoose(body.csv || '');
   if (!rows.length) throw new Error('That tab is empty.');
   return rows;
 }
@@ -608,10 +644,17 @@ export async function dryRunSheetMetrics() {
   const map = Object.assign({}, SM_CONTENT_DEFAULT_MAP, SM.contentMap || {});
   let linkedInPlan = [];
   const claimed = new Set();        /* one post named on two tabs */
+  /* nothing switched on is a setup state, not a result — say so rather
+     than show a preview of zeroes */
+  if (!tabs.length) {
+    result.errors.push((SM.contentTabs || []).length
+      ? 'No campaign tab is switched on — tick the tabs to read under Campaign tabs.'
+      : 'No campaign tabs yet — use Find tabs to list the tabs in your Sheet.');
+  }
 
   for (const t of tabs) {
     try {
-      const rows = await fetchSheetTab(t.gid);
+      const rows = await fetchSheetTab(t);
       const plan = planSheetContent(rows, map, {
         tab: t.name, campaignId: t.campaignId, skipZero: SM.skipZero,
         erUnit: SM.erUnit, allowCreate: SM.allowCreate, linkedInPlan
@@ -635,7 +678,7 @@ export async function dryRunSheetMetrics() {
 
   if (SM.creatorTab && SM.creatorTab.on && (SM.creatorTab.gid || SM.creatorTab.name)) {
     try {
-      const rows = await fetchSheetTab(SM.creatorTab.gid);
+      const rows = await fetchSheetTab(SM.creatorTab);
       const cmap = Object.keys(SM.creatorMap || {}).length
         ? SM.creatorMap : guessSheetColumns(rows[0] || [], SM_CREATOR_ALIASES);
       result.creators = planSheetCreators(rows, cmap, { skipZero: SM.skipZero, erUnit: SM.erUnit });

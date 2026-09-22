@@ -36,8 +36,8 @@
   "file": "lib/csv.js",
   "ranges": [
    [
-    7120,
-    7138
+    7215,
+    7233
    ]
   ],
   "imports": [],
@@ -199,8 +199,8 @@
   "file": "lib/xlsx.js",
   "ranges": [
    [
-    5206,
-    5477
+    5301,
+    5572
    ]
   ],
   "imports": [
@@ -212,8 +212,8 @@
   "file": "import/excel.js",
   "ranges": [
    [
-    5478,
-    5699
+    5573,
+    5794
    ]
   ],
   "imports": [],
@@ -223,8 +223,8 @@
   "file": "import/notion.js",
   "ranges": [
    [
-    5700,
-    6431
+    5795,
+    6526
    ]
   ],
   "imports": [
@@ -242,8 +242,8 @@
   "file": "import/metrics.js",
   "ranges": [
    [
-    6432,
-    6628
+    6527,
+    6723
    ]
   ],
   "imports": [
@@ -265,8 +265,8 @@
   "file": "sync/sheets.js",
   "ranges": [
    [
-    7362,
-    7611
+    7457,
+    7706
    ]
   ],
   "imports": [
@@ -281,8 +281,8 @@
   "file": "docs/docx.js",
   "ranges": [
    [
-    7702,
-    7832
+    7797,
+    7927
    ]
   ],
   "imports": [
@@ -296,8 +296,8 @@
   "file": "docs/contracts.js",
   "ranges": [
    [
-    7833,
-    8304
+    7928,
+    8399
    ]
   ],
   "imports": [
@@ -479,30 +479,31 @@
   "ranges": [
    [
     4896,
-    5205
+    5300
    ]
   ],
   "imports": [
    "import { SERIES_HEX, barsH, splitBar } from '../charts/index.js';",
    "import { TODAY, dLabel, iso } from '../lib/dates.js';",
    "import { engagementsOf, kmb, num, pct, won } from '../lib/format.js';",
+   "import { findCreatorByHandle } from '../model/creators.js';",
    "import { DB, byCampaign, byCreator, notify } from '../model/db.js';",
    "import { SETTINGS, isBlocked } from '../model/settings.js';",
    "import { suggestScore } from '../model/suggest.js';",
-   "import { CATEGORIES, COUNTRIES, PLATFORMS } from '../model/vocab.js';",
+   "import { CATEGORIES, COUNTRIES, PLATFORMS, tierOf } from '../model/vocab.js';",
    "import { $, $$, esc } from '../ui/dom.js';",
    "import { FLAGS, avatarHtml, daysAgo, downloadFile, emptyState, flagPill, sortTable, stagePill, statCard, tierPill, toCsv, whoHtml } from '../ui/html.js';",
    "import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';",
-   "import { activeCampaigns, state } from './overview.js';"
+   "import { state } from './overview.js';"
   ],
-  "sha256": "e1e46f43363c670550b84b4f28e43c042fc1bd55a8358acf26398dc987cc5578"
+  "sha256": "e1f8acc480616d5efdac62979bbec8ae54ac620911aaf81ca598afd45e36ed2c"
  },
  {
   "file": "views/notionDiag.js",
   "ranges": [
    [
-    6629,
-    6760
+    6724,
+    6855
    ]
   ],
   "imports": [
@@ -519,8 +520,8 @@
   "file": "views/notionImport.js",
   "ranges": [
    [
-    6761,
-    7060
+    6856,
+    7155
    ]
   ],
   "imports": [
@@ -541,12 +542,12 @@
   "file": "views/excelImport.js",
   "ranges": [
    [
-    7061,
-    7119
+    7156,
+    7214
    ],
    [
-    7139,
-    7361
+    7234,
+    7456
    ]
   ],
   "imports": [
@@ -568,8 +569,8 @@
   "file": "views/sheetsSettings.js",
   "ranges": [
    [
-    7612,
-    7701
+    7707,
+    7796
    ]
   ],
   "imports": [
@@ -584,8 +585,8 @@
   "file": "views/contracts.js",
   "ranges": [
    [
-    8305,
-    8636
+    8400,
+    8731
    ]
   ],
   "imports": [
@@ -602,8 +603,8 @@
   "file": "views/settings.js",
   "ranges": [
    [
-    8637,
-    9207
+    8732,
+    9335
    ]
   ],
   "imports": [
@@ -614,7 +615,7 @@
    "import { DB, byCampaign, byCreator, clearPersisted, linkSocialContent, notify, persist, persistState, serverSave, toastAfterSave } from '../model/db.js';",
    "import { SETTINGS } from '../model/settings.js';",
    "import { SOURCES, newId, tierOf } from '../model/vocab.js';",
-   "import { SM, SM_CONTENT_DEFAULT_MAP, SM_CONTENT_FIELDS, commitSheetMetrics, dryRunSheetMetrics, fetchSheetTab, saveSheetMetricsConfig, smHeaderIndex, smInfluencerKind, smSuggestCampaign } from '../sync/sheetMetrics.js';",
+   "import { SM, SM_CONTENT_DEFAULT_MAP, SM_CONTENT_FIELDS, commitSheetMetrics, discoverSheetTabs, dryRunSheetMetrics, fetchSheetTab, saveSheetMetricsConfig, smHeaderIndex, smInfluencerKind, smSuggestCampaign } from '../sync/sheetMetrics.js';",
    "import { $, $$, esc } from '../ui/dom.js';",
    "import { downloadFile, flagPill, stagePill, statCard, whoHtml } from '../ui/html.js';",
    "import { toast } from '../ui/overlay.js';",
@@ -622,7 +623,7 @@
    "import { settingsPartners, wireWritebackCard, writebackCardHtml } from './partners.js';",
    "import { settingsSheets } from './sheetsSettings.js';"
   ],
-  "sha256": "9b3032817db5fa1b73436176dcdea58939284c747d8b337875cdff8a5deb81d0"
+  "sha256": "cfc56fad85cddf7973df0965e5c00be098660fcae86c9cfadb0221a3daf0b93b"
  },
  {
   "file": "styles.css",
@@ -640,8 +641,8 @@
   "file": "sync/gcal.js",
   "ranges": [
    [
-    9705,
-    10056
+    9833,
+    10184
    ]
   ],
   "imports": [
@@ -657,8 +658,8 @@
   "file": "views/calendar.js",
   "ranges": [
    [
-    10059,
-    10309
+    10187,
+    10437
    ]
   ],
   "imports": [
@@ -676,8 +677,8 @@
   "file": "sync/partner.js",
   "ranges": [
    [
-    9423,
-    9528
+    9551,
+    9656
    ]
   ],
   "imports": [
@@ -690,8 +691,8 @@
   "file": "views/partners.js",
   "ranges": [
    [
-    9529,
-    9704
+    9657,
+    9832
    ]
   ],
   "imports": [
@@ -711,8 +712,8 @@
   "file": "sync/notionWriteback.js",
   "ranges": [
    [
-    9307,
-    9422
+    9435,
+    9550
    ]
   ],
   "imports": [
@@ -727,8 +728,8 @@
   "file": "model/duplicates.js",
   "ranges": [
    [
-    9208,
-    9305
+    9336,
+    9433
    ]
   ],
   "imports": [
@@ -744,8 +745,8 @@
   "file": "model/socialStats.js",
   "ranges": [
    [
-    10311,
-    10610
+    10439,
+    10738
    ]
   ],
   "imports": [
@@ -757,8 +758,8 @@
   "file": "charts/socialViz.js",
   "ranges": [
    [
-    10611,
-    10708
+    10739,
+    10836
    ]
   ],
   "imports": [
@@ -772,8 +773,8 @@
   "file": "views/socialOverview.js",
   "ranges": [
    [
-    10709,
-    11175
+    10837,
+    11303
    ]
   ],
   "imports": [
@@ -792,8 +793,8 @@
   "file": "model/homeStats.js",
   "ranges": [
    [
-    11177,
-    11596
+    11305,
+    11724
    ]
   ],
   "imports": [
@@ -808,8 +809,8 @@
   "file": "views/home.js",
   "ranges": [
    [
-    11598,
-    11972
+    11726,
+    12100
    ]
   ],
   "imports": [
@@ -829,8 +830,8 @@
   "file": "views/booking.js",
   "ranges": [
    [
-    11975,
-    12431
+    12103,
+    12667
    ]
   ],
   "imports": [
@@ -841,14 +842,14 @@
    "import { copyText, statCard } from '../ui/html.js';",
    "import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';"
   ],
-  "sha256": "7be6789c70badb4278575e4ca4dc357755f5aa5266cefdecb965ee1540fda988"
+  "sha256": "d22a0005293f856e3a4a133d08c873e669cfb42becacf3809a4fb6455c3b15bc"
  },
  {
   "file": "sync/sheetMetrics.js",
   "ranges": [
    [
-    12434,
-    13105
+    12670,
+    13384
    ]
   ],
   "imports": [
@@ -856,6 +857,6 @@
    "import { DB, attachContent, byCampaign, platformOfUrl, platformPostIdOf, socialContentDefaults } from '../model/db.js';",
    "import { avColor, newId } from '../model/vocab.js';"
   ],
-  "sha256": "33009e15d170ed0f3f3be31988225062b420921752ce01ed0f4935a0a8db5657"
+  "sha256": "79f444e1492d771bf42fc0f4ff0d2d889391d2a0a204eaf47fadee25fcbc8796"
  }
 ]

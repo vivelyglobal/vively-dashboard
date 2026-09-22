@@ -5,7 +5,7 @@ import { duplicateCreatorGroups, mergeDuplicateCreators } from '../model/creator
 import { DB, byCampaign, byCreator, clearPersisted, linkSocialContent, notify, persist, persistState, serverSave, toastAfterSave } from '../model/db.js';
 import { SETTINGS } from '../model/settings.js';
 import { SOURCES, newId, tierOf } from '../model/vocab.js';
-import { SM, SM_CONTENT_DEFAULT_MAP, SM_CONTENT_FIELDS, commitSheetMetrics, dryRunSheetMetrics, fetchSheetTab, saveSheetMetricsConfig, smHeaderIndex, smInfluencerKind, smSuggestCampaign } from '../sync/sheetMetrics.js';
+import { SM, SM_CONTENT_DEFAULT_MAP, SM_CONTENT_FIELDS, commitSheetMetrics, discoverSheetTabs, dryRunSheetMetrics, fetchSheetTab, saveSheetMetricsConfig, smHeaderIndex, smInfluencerKind, smSuggestCampaign } from '../sync/sheetMetrics.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { downloadFile, flagPill, stagePill, statCard, whoHtml } from '../ui/html.js';
 import { toast } from '../ui/overlay.js';
@@ -204,13 +204,18 @@ export function smTabRows() {
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <input type="checkbox" data-smton="${i}" ${t.on ? 'checked' : ''} title="read this tab"/>
         <span style="font-size:12px;color:var(--text-3)">Tab</span>
-        <input type="text" data-smtname="${i}" value="${esc(t.name || '')}" placeholder="KOWORK" style="width:150px"/>
+        ${t.found
+          ? `<strong data-smtfound="${i}" style="min-width:150px">${esc(t.name || '')}</strong>`
+          : `<input type="text" data-smtname="${i}" value="${esc(t.name || '')}" placeholder="KOWORK" style="width:150px"/>`}
         <span style="color:var(--text-3)">→</span>
         <span style="font-size:12px;color:var(--text-3)">Campaign</span>
         <select data-smtcp="${i}" style="min-width:220px">${smCampaignOptions(t.campaignId)}</select>
-        <input type="text" data-smtgid="${i}" value="${esc(t.gid || '')}" placeholder="gid" style="width:110px" title="the number after gid= in the tab's URL"/>
+        ${t.found
+          ? `<span style="font-size:11.5px;color:var(--text-3)">gid ${esc(t.gid || '')}</span>`
+          : `<input type="text" data-smtgid="${i}" value="${esc(t.gid || '')}" placeholder="gid" style="width:110px" title="the number after gid= in the tab's URL"/>`}
         <button class="btn xs" data-smtdel="${i}">Remove</button>
       </div>
+      ${t.missing ? `<div style="font-size:12px;margin-top:6px;color:var(--amber)">Not in the Sheet any more — renamed tabs keep their gid, so this one was deleted or its gid changed.</div>` : ''}
       <div style="font-size:12px;margin-top:6px;color:${cp ? 'var(--text-2)' : 'var(--amber)'}">
         ${cp ? `Tab <strong>${esc(t.name || '?')}</strong> → Campaign <strong>${esc(cp.brand)}</strong>`
              : `Not mapped yet — existing posts on this tab still update, but no new post can be added from it.`}
@@ -262,10 +267,14 @@ export function settingsSheetMetrics(view) {
 
     <div class="card" style="max-width:900px;margin-bottom:14px">
       <div class="card-head"><h3>Campaign tabs</h3><div class="sp"></div>
-        <button class="btn xs" id="smAddTab">+ Add tab</button></div>
-      <p class="card-sub">Map each tab to its campaign once. That mapping is the only place a campaign comes from —
-        there is no campaign column. Find a tab's <strong>gid</strong> in the Sheet's address bar when the tab is open.</p>
-      <div style="margin-top:12px" id="smTabs">${smTabRows() || '<p class="card-sub">No tabs yet — add one per campaign.</p>'}</div>
+        <button class="btn xs primary" id="smFind" ${SM.base ? '' : 'disabled'}>Find tabs</button>
+        <button class="btn xs" id="smAddTab">+ Add by hand</button></div>
+      <p class="card-sub">Find tabs lists every tab in the master Sheet. Tick the ones to read and map each to its campaign
+        once — that mapping is the only place a campaign comes from; there is no campaign column. The Sheet must be shared
+        as <strong>Anyone with the link → Viewer</strong>.</p>
+      <div id="smFindOut" style="font-size:12.5px;margin-top:8px;color:var(--text-2)">${SM.discovered
+        ? 'Last found ' + SM.discovered.count + ' tab' + (SM.discovered.count === 1 ? '' : 's') + ' in the Sheet.' : ''}</div>
+      <div style="margin-top:12px" id="smTabs">${smTabRows() || '<p class="card-sub">No tabs yet — press Find tabs.</p>'}</div>
       <div class="divider"></div>
       <div class="lbl">Columns on every campaign tab</div>
       <p class="card-sub">Already set to your master Sheet's headers. Change one only if a tab is laid out differently.
@@ -304,7 +313,31 @@ export function wireSheetMetrics(view) {
   const save = () => { saveSheetMetricsConfig(); };
   const redraw = () => { notify(); };
 
-  $('#smBase').addEventListener('change', (e) => { SM.base = e.target.value.trim(); save(); redraw(); });
+  /* A new link lists its tabs straight away; the list is what the rest of
+     the panel is built on. */
+  const findTabs = async () => {
+    const out = $('#smFindOut'), btn = $('#smFind');
+    if (!SM.base) return;
+    if (btn) btn.disabled = true;
+    if (out) { out.style.color = 'var(--text-2)'; out.textContent = 'Reading the tab list…'; }
+    try {
+      const r = await discoverSheetTabs();
+      notify();
+      const note = $('#smFindOut');
+      if (note) note.textContent = `Found ${r.count} tab${r.count === 1 ? '' : 's'} in the Sheet` +
+        (r.added ? ` — ${r.added} new. Tick the ones to read and check each campaign.` : '.');
+    } catch (err) {
+      const note = $('#smFindOut');
+      if (note) { note.style.color = 'var(--red)'; note.textContent = err.message; }
+      const b = $('#smFind'); if (b) b.disabled = false;
+    }
+  };
+  $('#smBase').addEventListener('change', (e) => {
+    const was = SM.base;
+    SM.base = e.target.value.trim(); save(); redraw();
+    if (SM.base && SM.base !== was) findTabs();
+  });
+  $('#smFind').addEventListener('click', findTabs);
   $('#smEr').addEventListener('change', (e) => { SM.erUnit = e.target.value; save(); });
   $('#smZero').addEventListener('change', (e) => { SM.skipZero = e.target.value === 'skip'; save(); });
   $('#smCreate').addEventListener('change', (e) => { SM.allowCreate = e.target.value === 'yes'; save(); });
@@ -353,7 +386,7 @@ export function wireSheetMetrics(view) {
     const lines = [];
     for (const t of (SM.contentTabs || []).filter((x) => x.on)) {
       try {
-        const rows = await fetchSheetTab(t.gid);
+        const rows = await fetchSheetTab(t);
         const idx = smHeaderIndex(rows[0] || [], map);
         const missing = SM_CONTENT_FIELDS.filter((f) => idx[f] == null);
         const kind = idx.influencer != null

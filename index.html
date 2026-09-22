@@ -5172,6 +5172,7 @@ function showCreator(id) {
     <div class="field"><label>Notes</label><textarea id="crNote" style="min-height:60px">${esc(c.notes)}</textarea></div>
     <div style="display:flex;gap:8px">
       <button class="btn primary sm" id="crSaveNote">Save</button>
+      <button class="btn sm" id="crEdit">Edit details</button>
       <button class="btn sm" id="crAddTo">Add to a campaign</button>
     </div>
   `);
@@ -5188,19 +5189,113 @@ function showCreator(id) {
     toast(pendingFlag ? FLAGS[pendingFlag].label + ' saved' : 'Saved');
     closeDrawer(); render();
   });
+  $('#crEdit').addEventListener('click', () => openEditCreator(c.id));
+  /* Every campaign is offered, not only the active ones: a wrapped
+     campaign still takes a late addition, and hiding it made the list
+     look broken. Active ones come first; ones this creator is already on
+     are shown but disabled, so the list never silently shrinks. */
   $('#crAddTo').addEventListener('click', () => {
     if (isBlocked(c)) { toast('This creator is blacklisted — remove the flag first'); return; }
-    const opts = activeCampaigns().filter((cp) => !DB.participants.some((p) => p.campaignId === cp.id && p.creatorId === c.id));
+    const onIt = new Set(DB.participants.filter((p) => p.creatorId === c.id).map((p) => p.campaignId));
+    const byStart = (a, b) => String(b.start || '').localeCompare(String(a.start || '')) || String(a.brand || '').localeCompare(String(b.brand || ''));
+    const active = DB.campaigns.filter((cp) => cp.status !== 'wrapped').sort(byStart);
+    const wrapped = DB.campaigns.filter((cp) => cp.status === 'wrapped').sort(byStart);
+    const label = (cp) => esc(cp.brand || 'Untitled') + (cp.name ? ' — ' + esc(cp.name) : '') +
+      (onIt.has(cp.id) ? ' · already on it' : ` (fit ${suggestScore(c, cp).score})`);
+    const opt = (cp) => `<option value="${esc(cp.id)}"${onIt.has(cp.id) ? ' disabled' : ''}>${label(cp)}</option>`;
+    const available = DB.campaigns.filter((cp) => !onIt.has(cp.id)).length;
     openDrawer('Add ' + esc(c.handle) + ' to a campaign', `
-      <div class="field"><label>Campaign</label><select id="atCp">${opts.map((cp) => `<option value="${cp.id}">${esc(cp.brand)} — ${esc(cp.name)} (fit ${suggestScore(c, cp).score})</option>`).join('')}</select></div>
+      <div class="field"><label>Find a campaign</label><input type="text" id="atFind" placeholder="brand or campaign name"/></div>
+      <div class="field"><label>Campaign · ${DB.campaigns.length} in total, ${available} available</label>
+        <select id="atCp" size="10" style="height:auto">
+          ${active.length ? `<optgroup label="Active (${active.length})">${active.map(opt).join('')}</optgroup>` : ''}
+          ${wrapped.length ? `<optgroup label="Wrapped (${wrapped.length})">${wrapped.map(opt).join('')}</optgroup>` : ''}
+        </select></div>
       <button class="btn primary" id="atGo">Add as Sourced</button>`);
+    const firstFree = $('#atCp').querySelector('option:not([disabled])');
+    if (firstFree) firstFree.selected = true;
+    $('#atFind').addEventListener('input', (e) => {
+      const q = e.target.value.trim().toLowerCase();
+      $$('#atCp option').forEach((o) => { o.hidden = !!q && !o.textContent.toLowerCase().includes(q); });
+      const vis = $('#atCp').querySelector('option:not([disabled]):not([hidden])');
+      if (vis) vis.selected = true;
+    });
     $('#atGo').addEventListener('click', () => {
       const cpId = $('#atCp').value;
+      if (!cpId || !byCampaign[cpId]) { toast('Pick a campaign'); return; }
       if (DB.participants.some((p) => p.campaignId === cpId && p.creatorId === c.id)) { toast('Already on that campaign'); return; }
       DB.participants.push({ id: cpId + '-' + c.id, campaignId: cpId, creatorId: c.id, stage: 'sourced', source: c.source,
         fee: 0, contactedAt: null, repliedAt: null, confirmedAt: null, shippedAt: null, dropReason: null, revisions: 0, content: null, note: '' });
-      closeDrawer(); toast('Added'); render();
+      closeDrawer(); toast('Added to ' + (byCampaign[cpId].brand || 'the campaign')); render();
     });
+  });
+}
+
+/* ---- editing a creator's details ----
+
+   The profile figures (followers, ER, average views) are the ones staff
+   most often need to correct by hand while the Meta connection is not
+   live. A manual edit is marked as such (metricsSource: 'manual') so a
+   later Sheet or API figure can be told apart from it. Imports only ever
+   fill blanks, so what is typed here is not overwritten by a Notion sync. */
+function openEditCreator(id) {
+  const c = byCreator[id];
+  if (!c) return;
+  const numVal = (v) => (v == null || v === '' ? '' : v);
+  openDrawer('Edit ' + esc(c.handle), `
+    <div class="grid g2" style="gap:10px">
+      <div class="field"><label>Handle</label><input type="text" id="ecHandle" value="${esc(c.handle || '')}"/></div>
+      <div class="field"><label>Name</label><input type="text" id="ecName" value="${esc(c.name || '')}"/></div>
+      <div class="field"><label>Platform</label><select id="ecPlatform">${PLATFORMS.concat(PLATFORMS.includes(c.platform) || !c.platform ? [] : [c.platform])
+        .map((p) => `<option${p === c.platform ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select></div>
+      <div class="field"><label>Country</label><input type="text" id="ecCountry" list="ecCountries" value="${esc(c.country || '')}"/>
+        <datalist id="ecCountries">${COUNTRIES.map((x) => `<option value="${esc(x)}">`).join('')}</datalist></div>
+    </div>
+    <div class="field"><label>Categories (comma-separated)</label><input type="text" id="ecCats" value="${esc((c.categories || []).join(', '))}" placeholder="${esc(CATEGORIES.slice(0, 3).join(', '))}"/></div>
+    <div class="lbl" style="margin-top:6px">Profile metrics</div>
+    <div class="grid g3" style="gap:10px">
+      <div class="field"><label>Followers</label><input type="number" min="0" step="1" id="ecFollowers" value="${numVal(c.followers)}"/></div>
+      <div class="field"><label>ER (%)</label><input type="number" min="0" max="100" step="0.01" id="ecEr" value="${numVal(c.er)}"/></div>
+      <div class="field"><label>Avg views</label><input type="number" min="0" step="1" id="ecAvgViews" value="${numVal(c.avgViews)}"/></div>
+    </div>
+    <div class="grid g2" style="gap:10px">
+      <div class="field"><label>Typical rate (₩)</label><input type="number" min="0" step="1" id="ecRate" value="${numVal(c.rate)}"/></div>
+      <div class="field"><label>Email</label><input type="text" id="ecEmail" value="${esc(c.email || '')}"/></div>
+    </div>
+    <div class="field"><label>Contact (phone, Kakao, etc.)</label><input type="text" id="ecContact" value="${esc(c.contact || '')}"/></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn primary" id="ecSave">Save</button>
+      <button class="btn" id="ecBack">Back</button>
+    </div>`);
+  $('#ecBack').addEventListener('click', () => showCreator(c.id));
+  $('#ecSave').addEventListener('click', () => {
+    const handle = $('#ecHandle').value.trim();
+    if (!handle) { toast('A creator needs a handle'); return; }
+    const clash = findCreatorByHandle(handle);
+    if (clash && clash.id !== c.id) { toast(handle + ' is already another creator — merge them instead'); return; }
+    const n = (sel, lo, hi) => {
+      const raw = $(sel).value.trim();
+      if (raw === '') return { ok: true, v: 0 };
+      const v = Number(raw);
+      return Number.isFinite(v) && v >= lo && v <= hi ? { ok: true, v } : { ok: false };
+    };
+    const f = n('#ecFollowers', 0, 1e10), e = n('#ecEr', 0, 100), a = n('#ecAvgViews', 0, 1e11), r = n('#ecRate', 0, 1e12);
+    if (!f.ok || !e.ok || !a.ok || !r.ok) { toast('Check the numbers — followers, ER (0–100), views and rate'); return; }
+    const metricsChanged = Math.round(f.v) !== (c.followers || 0) || e.v !== (c.er || 0) || Math.round(a.v) !== (c.avgViews || 0);
+    c.handle = handle.startsWith('@') ? handle : '@' + handle.replace(/^@+/, '');
+    c.name = $('#ecName').value.trim();
+    c.platform = $('#ecPlatform').value;
+    c.country = $('#ecCountry').value.trim();
+    c.categories = [...new Set($('#ecCats').value.split(',').map((x) => x.trim()).filter(Boolean))];
+    c.followers = Math.round(f.v); c.er = Math.round(e.v * 100) / 100; c.avgViews = Math.round(a.v);
+    c.rate = Math.round(r.v);
+    c.email = $('#ecEmail').value.trim();
+    c.contact = $('#ecContact').value.trim();
+    c.tier = tierOf(c.followers || 0).id;
+    if (metricsChanged) { c.metricsSource = 'manual'; c.metricsSyncedAt = new Date().toISOString(); }
+    toast('Creator saved');
+    showCreator(c.id);
+    render();
   });
 }
 /* ============================================================
@@ -8825,13 +8920,18 @@ function smTabRows() {
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <input type="checkbox" data-smton="${i}" ${t.on ? 'checked' : ''} title="read this tab"/>
         <span style="font-size:12px;color:var(--text-3)">Tab</span>
-        <input type="text" data-smtname="${i}" value="${esc(t.name || '')}" placeholder="KOWORK" style="width:150px"/>
+        ${t.found
+          ? `<strong data-smtfound="${i}" style="min-width:150px">${esc(t.name || '')}</strong>`
+          : `<input type="text" data-smtname="${i}" value="${esc(t.name || '')}" placeholder="KOWORK" style="width:150px"/>`}
         <span style="color:var(--text-3)">→</span>
         <span style="font-size:12px;color:var(--text-3)">Campaign</span>
         <select data-smtcp="${i}" style="min-width:220px">${smCampaignOptions(t.campaignId)}</select>
-        <input type="text" data-smtgid="${i}" value="${esc(t.gid || '')}" placeholder="gid" style="width:110px" title="the number after gid= in the tab's URL"/>
+        ${t.found
+          ? `<span style="font-size:11.5px;color:var(--text-3)">gid ${esc(t.gid || '')}</span>`
+          : `<input type="text" data-smtgid="${i}" value="${esc(t.gid || '')}" placeholder="gid" style="width:110px" title="the number after gid= in the tab's URL"/>`}
         <button class="btn xs" data-smtdel="${i}">Remove</button>
       </div>
+      ${t.missing ? `<div style="font-size:12px;margin-top:6px;color:var(--amber)">Not in the Sheet any more — renamed tabs keep their gid, so this one was deleted or its gid changed.</div>` : ''}
       <div style="font-size:12px;margin-top:6px;color:${cp ? 'var(--text-2)' : 'var(--amber)'}">
         ${cp ? `Tab <strong>${esc(t.name || '?')}</strong> → Campaign <strong>${esc(cp.brand)}</strong>`
              : `Not mapped yet — existing posts on this tab still update, but no new post can be added from it.`}
@@ -8883,10 +8983,14 @@ function settingsSheetMetrics(view) {
 
     <div class="card" style="max-width:900px;margin-bottom:14px">
       <div class="card-head"><h3>Campaign tabs</h3><div class="sp"></div>
-        <button class="btn xs" id="smAddTab">+ Add tab</button></div>
-      <p class="card-sub">Map each tab to its campaign once. That mapping is the only place a campaign comes from —
-        there is no campaign column. Find a tab's <strong>gid</strong> in the Sheet's address bar when the tab is open.</p>
-      <div style="margin-top:12px" id="smTabs">${smTabRows() || '<p class="card-sub">No tabs yet — add one per campaign.</p>'}</div>
+        <button class="btn xs primary" id="smFind" ${SM.base ? '' : 'disabled'}>Find tabs</button>
+        <button class="btn xs" id="smAddTab">+ Add by hand</button></div>
+      <p class="card-sub">Find tabs lists every tab in the master Sheet. Tick the ones to read and map each to its campaign
+        once — that mapping is the only place a campaign comes from; there is no campaign column. The Sheet must be shared
+        as <strong>Anyone with the link → Viewer</strong>.</p>
+      <div id="smFindOut" style="font-size:12.5px;margin-top:8px;color:var(--text-2)">${SM.discovered
+        ? 'Last found ' + SM.discovered.count + ' tab' + (SM.discovered.count === 1 ? '' : 's') + ' in the Sheet.' : ''}</div>
+      <div style="margin-top:12px" id="smTabs">${smTabRows() || '<p class="card-sub">No tabs yet — press Find tabs.</p>'}</div>
       <div class="divider"></div>
       <div class="lbl">Columns on every campaign tab</div>
       <p class="card-sub">Already set to your master Sheet's headers. Change one only if a tab is laid out differently.
@@ -8925,7 +9029,31 @@ function wireSheetMetrics(view) {
   const save = () => { saveSheetMetricsConfig(); };
   const redraw = () => { render(); };
 
-  $('#smBase').addEventListener('change', (e) => { SM.base = e.target.value.trim(); save(); redraw(); });
+  /* A new link lists its tabs straight away; the list is what the rest of
+     the panel is built on. */
+  const findTabs = async () => {
+    const out = $('#smFindOut'), btn = $('#smFind');
+    if (!SM.base) return;
+    if (btn) btn.disabled = true;
+    if (out) { out.style.color = 'var(--text-2)'; out.textContent = 'Reading the tab list…'; }
+    try {
+      const r = await discoverSheetTabs();
+      render();
+      const note = $('#smFindOut');
+      if (note) note.textContent = `Found ${r.count} tab${r.count === 1 ? '' : 's'} in the Sheet` +
+        (r.added ? ` — ${r.added} new. Tick the ones to read and check each campaign.` : '.');
+    } catch (err) {
+      const note = $('#smFindOut');
+      if (note) { note.style.color = 'var(--red)'; note.textContent = err.message; }
+      const b = $('#smFind'); if (b) b.disabled = false;
+    }
+  };
+  $('#smBase').addEventListener('change', (e) => {
+    const was = SM.base;
+    SM.base = e.target.value.trim(); save(); redraw();
+    if (SM.base && SM.base !== was) findTabs();
+  });
+  $('#smFind').addEventListener('click', findTabs);
   $('#smEr').addEventListener('change', (e) => { SM.erUnit = e.target.value; save(); });
   $('#smZero').addEventListener('change', (e) => { SM.skipZero = e.target.value === 'skip'; save(); });
   $('#smCreate').addEventListener('change', (e) => { SM.allowCreate = e.target.value === 'yes'; save(); });
@@ -8974,7 +9102,7 @@ function wireSheetMetrics(view) {
     const lines = [];
     for (const t of (SM.contentTabs || []).filter((x) => x.on)) {
       try {
-        const rows = await fetchSheetTab(t.gid);
+        const rows = await fetchSheetTab(t);
         const idx = smHeaderIndex(rows[0] || [], map);
         const missing = SM_CONTENT_FIELDS.filter((f) => idx[f] == null);
         const kind = idx.influencer != null
@@ -12161,7 +12289,8 @@ function bookingBoard(mount, cp) {
                 ${blocked ? '<span class="pill grey" style="margin-left:6px">Blocked</span>' : ''}</td>
               <td>${rows.length}</td><td>${cap}</td>
               <td>${bk}${bk >= cap && cap ? ' <span class="pill amber">Full</span>' : ''}</td>
-              <td style="text-align:right"><button class="btn xs" data-block="${esc(d)}">${blocked ? 'Unblock' : 'Block day'}</button></td>
+              <td style="text-align:right"><button class="btn xs" data-block="${esc(d)}">${blocked ? 'Unblock' : 'Block day'}</button>
+                <button class="btn xs" data-delday="${esc(d)}">Delete day</button></td>
             </tr>` + (isOpen ? rows.map((s) => `<tr data-slot-row="1">
               <td style="padding-left:26px;color:var(--text-2)">${esc(s.time)}</td>
               <td colspan="2"><input type="number" min="1" value="${s.capacity}" data-cap="${esc(s._id)}"
@@ -12169,7 +12298,8 @@ function bookingBoard(mount, cp) {
               <td>${s.booked} booked</td>
               <td style="text-align:right">
                 <button class="btn xs" data-slotstatus="${esc(s._id)}" data-to="${s.status === 'open' ? 'closed' : 'open'}">${s.status === 'open' ? 'Close' : 'Open'}</button>
-                <button class="btn xs" data-delslot="${esc(s._id)}"${s.booked ? ' disabled title="Someone has booked this"' : ''}>Delete</button>
+                <button class="btn xs" data-editslot="${esc(s._id)}">Edit</button>
+                <button class="btn xs" data-delslot="${esc(s._id)}">Delete</button>
               </td></tr>`).join('') + `<tr><td colspan="5" style="padding-left:26px">
                 <input type="time" data-newtime="${esc(d)}" style="width:110px;padding:3px 6px;font-size:12px"/>
                 <input type="number" min="1" value="1" data-newcap="${esc(d)}" style="width:60px;padding:3px 6px;font-size:12px"/> seats
@@ -12204,10 +12334,12 @@ function bookingBoard(mount, cp) {
           const cr = p ? byCreator[p.creatorId] : null;
           return `<tr>
             <td style="white-space:nowrap">${esc(b.date)} ${esc(b.time)}</td>
-            <td>${cr ? esc(cr.handle) : `<span style="color:var(--amber)">${esc((b.guest || {}).handle || '—')} · unmatched</span>`}</td>
+            <td>${cr ? esc(cr.handle) : `<span style="color:var(--amber)">${esc((b.guest || {}).handle || '—')} · unmatched</span>`}
+              ${b.staffNote ? `<div style="font-size:11.5px;color:var(--text-3)">${esc(b.staffNote)}</div>` : ''}</td>
             <td>${b.partySize || 1}</td>
             <td><span class="pill grey">${esc(b.source || 'creator')}</span></td>
             <td style="text-align:right">
+              <button class="btn xs" data-editbk="${esc(b._id)}">Edit</button>
               <button class="btn xs" data-move="${esc(b._id)}">Move</button>
               <button class="btn xs" data-cancel="${esc(b._id)}">Cancel</button></td></tr>`;
         }).join('')}
@@ -12271,8 +12403,30 @@ function wireBookingBoard(cp) {
     guard(() => bookingCall('/api/booking/slot', { scheduleId: sc._id, date: d, time, capacity }));
   }));
 
-  $$('[data-delslot]').forEach((b) => b.addEventListener('click', () => guard(
-    () => bookingCall('/api/booking/slot/' + b.dataset.delslot, null, 'DELETE'))));
+  /* A slot with bookings can be deleted, but only as a decision: the
+     count is spelled out and the bookings are cancelled, not orphaned. */
+  $$('[data-delslot]').forEach((b) => b.addEventListener('click', () => {
+    const slot = BOOKING.slots.find((x) => x._id === b.dataset.delslot);
+    if (!slot) return;
+    const n = BOOKING.bookings.filter((x) => x.slotId === slot._id).length;
+    if (n && !window.confirm(`${n} booking${n === 1 ? '' : 's'} on ${slot.date} ${slot.time} will be cancelled and the slot deleted. ` +
+      'The creators are not told automatically — tell them yourself. Go ahead?')) return;
+    guard(() => bookingCall('/api/booking/slot/' + slot._id + (n ? '?cancelBookings=1' : ''), null, 'DELETE'),
+      n ? `Slot deleted, ${n} booking${n === 1 ? '' : 's'} cancelled` : 'Slot deleted');
+  }));
+  $$('[data-editslot]').forEach((b) => b.addEventListener('click', () => openEditSlot(cp, b.dataset.editslot)));
+  $$('[data-delday]').forEach((b) => b.addEventListener('click', (e) => {
+    e.stopPropagation();          /* the row itself toggles open */
+    const d = b.dataset.delday;
+    const ids = new Set(BOOKING.slots.filter((x) => x.date === d).map((x) => x._id));
+    const n = BOOKING.bookings.filter((x) => ids.has(x.slotId)).length;
+    if (!window.confirm(n
+      ? `Delete all ${ids.size} slot${ids.size === 1 ? '' : 's'} on ${d}? ${n} booking${n === 1 ? '' : 's'} will be cancelled — the creators are not told automatically.`
+      : `Delete all ${ids.size} slot${ids.size === 1 ? '' : 's'} on ${d}?`)) return;
+    guard(() => bookingCall('/api/booking/date/delete', { scheduleId: sc._id, date: d, cancelBookings: !!n }),
+      n ? `${d} deleted, ${n} booking${n === 1 ? '' : 's'} cancelled` : `${d} deleted`);
+  }));
+  $$('[data-editbk]').forEach((b) => b.addEventListener('click', () => openEditBooking(cp, b.dataset.editbk)));
 
   $$('[data-slotstatus]').forEach((b) => b.addEventListener('click', () => guard(
     () => bookingCall('/api/booking/slot/' + b.dataset.slotstatus, { status: b.dataset.to }, 'PATCH'))));
@@ -12294,7 +12448,7 @@ function wireBookingBoard(cp) {
     const bk = BOOKING.bookings.find((x) => x._id === b.dataset.cancel);
     if (!bk) return;
     if (!window.confirm('Cancel this booking? The creator is not told — there are no notifications yet, so tell them yourself.')) return;
-    guard(() => bookingCall('/api/book/manage/' + bk.manageToken + '/cancel', { reason: 'cancelled by staff' }), 'Booking cancelled');
+    guard(() => bookingCall('/api/booking/booking/' + bk._id + '/cancel', { reason: 'cancelled by staff' }), 'Booking cancelled');
   }));
   $$('[data-match]').forEach((b) => b.addEventListener('click', () => openMatchBooking(cp, b.dataset.match)));
 }
@@ -12344,6 +12498,88 @@ function openAddBookingDate(cp) {
    a full slot can still be chosen. A human deciding to squeeze somebody
    in is a real decision, and refusing it outright would only send them
    to the database. It is recorded rather than prevented. */
+/* ---- editing a slot: its date, time and seats ----
+
+   Bookings on the slot move with it. Nobody is told automatically, so
+   the drawer says how many people that is. */
+function openEditSlot(cp, slotId) {
+  const slot = BOOKING.slots.find((x) => x._id === slotId);
+  if (!slot) return;
+  const n = BOOKING.bookings.filter((x) => x.slotId === slot._id).length;
+  openDrawer(`Edit slot — ${esc(slot.date)} ${esc(slot.time)}`, `
+    <div class="grid g3" style="gap:10px">
+      <div class="field"><label>Date</label><input type="date" id="esDate" value="${esc(slot.date)}"/></div>
+      <div class="field"><label>Time</label><input type="time" id="esTime" value="${esc(slot.time)}"/></div>
+      <div class="field"><label>Seats</label><input type="number" min="1" id="esCap" value="${slot.capacity}"/></div>
+    </div>
+    <div class="field"><label>Note (staff only)</label><input type="text" id="esNote" value="${esc(slot.note || '')}" maxlength="200"/></div>
+    ${n ? `<div class="note" style="margin:8px 0">${n} booking${n === 1 ? '' : 's'} on this slot will move with it. The creator${n === 1 ? ' is' : 's are'} not told automatically.</div>` : ''}
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn primary" id="esSave">Save</button>
+      <button class="btn" id="esCancel">Cancel</button>
+    </div>`);
+  $('#esCancel').addEventListener('click', closeDrawer);
+  $('#esSave').addEventListener('click', async () => {
+    const body = { note: $('#esNote').value.trim() };
+    const date = $('#esDate').value, time = $('#esTime').value, cap = +$('#esCap').value;
+    if (date !== slot.date) body.date = date;
+    if (time !== slot.time) body.time = time;
+    if (cap !== slot.capacity) body.capacity = cap;
+    try {
+      const r = await bookingCall('/api/booking/slot/' + slot._id, body, 'PATCH');
+      closeDrawer();
+      await loadBooking(cp.id, true);
+      toast(r.bookingsMoved ? `Slot changed — ${r.bookingsMoved} booking${r.bookingsMoved === 1 ? '' : 's'} moved with it` : 'Slot saved');
+      render();
+    } catch (err) { toast(err.message); }
+  });
+}
+
+/* ---- editing one booking: people and a staff note ----
+
+   The time is changed with Move (a different slot), so the seat claim
+   stays the one atomic path it has always been. */
+function openEditBooking(cp, bookingId) {
+  const bk = BOOKING.bookings.find((x) => x._id === bookingId);
+  if (!bk) return;
+  const p = bk.participantId ? DB.participants.find((x) => x.id === bk.participantId) : null;
+  const cr = p ? byCreator[p.creatorId] : null;
+  const who = cr ? cr.handle : ((bk.guest || {}).handle || 'unmatched booking');
+  openDrawer(`Edit booking — ${esc(who)}`, `
+    <p class="card-sub"><strong>${esc(bk.date)} ${esc(bk.time)}</strong> · booked by ${esc(bk.source || 'creator')}</p>
+    <div class="grid g2" style="gap:10px;margin-top:10px">
+      <div class="field"><label>People</label><input type="number" min="1" max="50" id="ebParty" value="${bk.partySize || 1}"/></div>
+    </div>
+    <div class="field"><label>Staff note</label><textarea id="ebNote" style="min-height:60px" maxlength="500">${esc(bk.staffNote || '')}</textarea></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      <button class="btn primary" id="ebSave">Save</button>
+      <button class="btn" id="ebMove">Change time…</button>
+      <div class="sp"></div>
+      <button class="btn" id="ebCancel" style="color:var(--red)">Cancel booking</button>
+    </div>`);
+  const done = async (msg) => { closeDrawer(); await loadBooking(cp.id, true); toast(msg); render(); };
+  $('#ebMove').addEventListener('click', () => { closeDrawer(); openStaffMove(cp, bk._id); });
+  $('#ebCancel').addEventListener('click', async () => {
+    if (!window.confirm('Cancel this booking? The creator is not told — there are no notifications yet, so tell them yourself.')) return;
+    try { await bookingCall('/api/booking/booking/' + bk._id + '/cancel', { reason: 'cancelled by staff' }); await done('Booking cancelled'); }
+    catch (err) { toast(err.message); }
+  });
+  $('#ebSave').addEventListener('click', async () => {
+    const body = { staffNote: $('#ebNote').value.trim() };
+    const party = +$('#ebParty').value;
+    if (party !== (bk.partySize || 1)) body.partySize = party;
+    try {
+      await bookingCall('/api/booking/booking/' + bk._id, body, 'PATCH');
+      await done('Booking saved');
+    } catch (err) {
+      if (/Not enough seats/.test(err.message) && window.confirm(err.message + ' Save it over capacity anyway?')) {
+        try { await bookingCall('/api/booking/booking/' + bk._id, Object.assign(body, { overCapacity: true }), 'PATCH'); await done('Saved — over capacity, recorded as a staff decision'); }
+        catch (e2) { toast(e2.message); }
+      } else toast(err.message);
+    }
+  });
+}
+
 function openStaffMove(cp, bookingId) {
   const bk = BOOKING.bookings.find((x) => x._id === bookingId);
   if (!bk) return;
@@ -12500,7 +12736,7 @@ function saveSheetMetricsConfig() {
     localStorage.setItem(SHEET_METRICS_KEY, JSON.stringify({
       base: SM.base, erUnit: SM.erUnit, skipZero: SM.skipZero, allowCreate: SM.allowCreate,
       contentTabs: SM.contentTabs, creatorTab: SM.creatorTab,
-      contentMap: SM.contentMap, creatorMap: SM.creatorMap,
+      contentMap: SM.contentMap, creatorMap: SM.creatorMap, discovered: SM.discovered || null,
       at: SM.at ? SM.at.toISOString() : null
     }));
   } catch (e) { /* storage blocked */ }
@@ -12995,32 +13231,68 @@ function applySheetCreators(plan) {
 
 /* ---- reading the Sheet ----------------------------------------------
 
-   A published-to-web CSV needs no key and no token, which is why it is
-   the transport: nothing secret ends up in this browser, and the Sheet
-   stays readable by the people who already maintain it. If Google
-   refuses the request the message says so plainly rather than leaving a
-   blank panel — the usual cause is a Sheet that has not been published,
-   which is a two-click fix rather than a bug here. */
-async function fetchSheetTab(gid) {
-  const url = sheetCsvUrl(SM.base, gid);
-  if (!url) throw new Error('No Sheet URL set.');
+   Through the server, always. docs.google.com sends no CORS headers, so
+   a page on this origin cannot read a Sheet directly — the request dies
+   in the browser before a byte arrives, and the old direct fetch failed
+   that way against every real Sheet. server/sheet-proxy.js makes the two
+   reads (tab list, one tab's CSV) server-side, read-only, against
+   docs.google.com and nothing else. The Sheet needs "Anyone with the
+   link can view"; no key or token lives in this browser. */
+async function smProxyGet(path, params) {
+  const q = new URLSearchParams(Object.assign({ sheet: SM.base }, params || {}));
   let res;
   try {
-    res = await fetch(url, { redirect: 'follow' });
+    res = await fetch('/api/sheet-metrics/' + path + '?' + q.toString(), { credentials: 'same-origin' });
   } catch (err) {
-    throw new Error('Could not reach the Sheet. If it is not published to the web, ' +
-      'open it and use File → Share → Publish to web.');
+    throw new Error('Could not reach the dashboard server to read the Sheet.');
   }
-  if (!res.ok) {
-    throw new Error(res.status === 404
-      ? 'That Sheet or tab was not found — check the link and the tab id.'
-      : 'The Sheet refused the request (' + res.status + '). It may not be published to the web.');
-  }
-  const text = await res.text();
-  if (/^\s*</.test(text)) {
-    throw new Error('Google returned a web page rather than CSV — the Sheet is probably not published.');
-  }
-  const rows = parseCsvLoose(text);
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 401) throw new Error('Your session has ended — sign in again, then read the Sheet.');
+  if (!res.ok || !body.ok) throw new Error(body.error || ('The server answered ' + res.status + '.'));
+  return body;
+}
+
+/* Every tab in the master Sheet, as { gid, name }. */
+async function fetchSheetTabList() {
+  if (!SM.base) throw new Error('No Sheet link set.');
+  const body = await smProxyGet('tabs');
+  return { tabs: body.tabs || [], gidHint: body.gidHint || '' };
+}
+
+/* Merges the Sheet's tab list into the saved tabs. Keyed on gid, which
+   survives a rename; a tab added by hand before discovery is matched on
+   its name and given its gid. What the operator chose — which tabs are
+   on, which campaign each maps to — is never overwritten. A new tab is
+   switched on only when its name already names a campaign. */
+async function discoverSheetTabs() {
+  const { tabs } = await fetchSheetTabList();
+  const list = SM.contentTabs = SM.contentTabs || [];
+  const found = new Set();
+  let added = 0;
+  tabs.forEach((g) => {
+    found.add(g.gid);
+    let t = list.find((x) => x.gid && String(x.gid) === String(g.gid));
+    if (!t) t = list.find((x) => !x.gid && String(x.name || '').trim().toLowerCase() === g.name.trim().toLowerCase());
+    if (t) { t.gid = g.gid; t.name = g.name; t.found = true; t.missing = false; return; }
+    const campaignId = smSuggestCampaign(g.name);
+    list.push({ name: g.name, gid: g.gid, campaignId, on: !!campaignId, found: true, missing: false });
+    added++;
+  });
+  list.forEach((t) => { if (t.found && t.gid && !found.has(String(t.gid))) t.missing = true; });
+  SM.discovered = { at: new Date().toISOString(), count: tabs.length };
+  saveSheetMetricsConfig();
+  return { count: tabs.length, added };
+}
+
+/* One tab's rows. Takes a saved tab ({ gid, name }) or a bare gid. */
+async function fetchSheetTab(tab) {
+  const t = (tab && typeof tab === 'object') ? tab : { gid: tab };
+  const gid = String(t.gid == null ? '' : t.gid).trim();
+  const name = String(t.name || '').trim();
+  if (!SM.base) throw new Error('No Sheet link set.');
+  if (!gid && !name) throw new Error('This tab has neither a gid nor a name — use Find tabs.');
+  const body = await smProxyGet('csv', gid ? { gid } : { name });
+  const rows = parseCsvLoose(body.csv || '');
   if (!rows.length) throw new Error('That tab is empty.');
   return rows;
 }
@@ -13037,10 +13309,17 @@ async function dryRunSheetMetrics() {
   const map = Object.assign({}, SM_CONTENT_DEFAULT_MAP, SM.contentMap || {});
   let linkedInPlan = [];
   const claimed = new Set();        /* one post named on two tabs */
+  /* nothing switched on is a setup state, not a result — say so rather
+     than show a preview of zeroes */
+  if (!tabs.length) {
+    result.errors.push((SM.contentTabs || []).length
+      ? 'No campaign tab is switched on — tick the tabs to read under Campaign tabs.'
+      : 'No campaign tabs yet — use Find tabs to list the tabs in your Sheet.');
+  }
 
   for (const t of tabs) {
     try {
-      const rows = await fetchSheetTab(t.gid);
+      const rows = await fetchSheetTab(t);
       const plan = planSheetContent(rows, map, {
         tab: t.name, campaignId: t.campaignId, skipZero: SM.skipZero,
         erUnit: SM.erUnit, allowCreate: SM.allowCreate, linkedInPlan
@@ -13064,7 +13343,7 @@ async function dryRunSheetMetrics() {
 
   if (SM.creatorTab && SM.creatorTab.on && (SM.creatorTab.gid || SM.creatorTab.name)) {
     try {
-      const rows = await fetchSheetTab(SM.creatorTab.gid);
+      const rows = await fetchSheetTab(SM.creatorTab);
       const cmap = Object.keys(SM.creatorMap || {}).length
         ? SM.creatorMap : guessSheetColumns(rows[0] || [], SM_CREATOR_ALIASES);
       result.creators = planSheetCreators(rows, cmap, { skipZero: SM.skipZero, erUnit: SM.erUnit });

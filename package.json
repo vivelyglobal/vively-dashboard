@@ -34,7 +34,8 @@
     "check:bookpage": "node tools/booking-page.mjs",
     "check:bookadmin": "node tools/seed.mjs > tmp/seed.json && node tools/booking-admin-page.mjs",
     "check:bookrace": "node tools/rehearse-booking.mjs",
-    "check:sheetmetrics": "node tools/seed.mjs > tmp/seed.json && node tools/sheet-metrics-page.mjs"
+    "check:sheetmetrics": "node tools/seed.mjs > tmp/seed.json && node tools/sheet-metrics-page.mjs",
+    "check:staffedits": "node tools/seed.mjs > tmp/seed.json && node tools/staff-edits-page.mjs"
   },
   "engines": {
     "node": ">=18"

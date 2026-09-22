@@ -84,6 +84,24 @@ function mountBookingRoutes(app, deps) {
     return true;
   };
 
+  /* A staff cancel: the same guarded status transition as the creator's,
+     so a booking is cancelled — and its seats returned — exactly once.
+     The row is kept, marked cancelled, with who did it and why. Returns
+     whether this call was the one that cancelled it. */
+  async function staffCancel(bk, reason) {
+    const bkCol = await bookings();
+    const done = await bkCol.updateOne(
+      { _id: bk._id, status: "confirmed" },
+      { $set: { status: "cancelled", cancelledAt: new Date(), cancelReason: String(reason || "").slice(0, 500),
+                updatedAt: new Date() },
+        $push: { history: { at: new Date(), action: "cancelled", by: "staff", reason: String(reason || "").slice(0, 200) } } }
+    );
+    if (!done.modifiedCount) return false;
+    const release = B.releasePlan(bk.slotId, bk.partySize);
+    await (await slots()).updateOne(release.filter, release.update);
+    return true;
+  }
+
   /* Generous on purpose. Mobile carriers in Korea put a great many
      people behind one address, and a campaign link is handed to thirty
      or forty creators at once — so a limit tight enough to be a real
@@ -271,29 +289,89 @@ function mountBookingRoutes(app, deps) {
       if (body.status === "open" || body.status === "closed") patch.status = body.status;
       if (body.note != null) patch.note = String(body.note).slice(0, 200);
 
-      await sl.updateOne({ _id: slot._id }, { $set: patch });
-      return res.json({ ok: true, slot: { ...slot, ...patch } });
+      /* A new date or time. The bookings on the slot go with it — the
+         seat is the same seat, just at a different hour — and each one
+         records the change, since the creator is not told automatically. */
+      let retimed = null;
+      if (body.date != null || body.time != null) {
+        const check = B.validateSlot({
+          date: body.date != null ? body.date : slot.date,
+          time: body.time != null ? body.time : slot.time,
+          capacity: patch.capacity || slot.capacity
+        });
+        if (!check.ok) return res.status(400).json({ error: check.message, code: check.code });
+        if (check.date !== slot.date || check.time !== slot.time) {
+          const schedule = await (await schedules()).findOne({ _id: slot.scheduleId });
+          const tz = (schedule && schedule.timezone) || slot.timezone;
+          const startsAt = B.wallClockToInstant(check.date, check.time, tz);
+          if (!startsAt) return res.status(400).json({ error: "That date and time could not be resolved in " + tz + "." });
+          const clash = await sl.findOne({ scheduleId: slot.scheduleId, date: check.date, time: check.time });
+          if (clash && clash._id !== slot._id) {
+            return res.status(409).json({ error: "There is already a slot at " + check.date + " " + check.time + ".", code: "slot-exists" });
+          }
+          /* keep the slot's own length; fall back to the schedule's */
+          const own = slot.endsAt && slot.startsAt ? (new Date(slot.endsAt) - new Date(slot.startsAt)) / 60000 : 0;
+          const minutes = own > 0 ? own : ((schedule && schedule.slotMinutes) || 90);
+          patch.date = check.date; patch.time = check.time; patch.startsAt = startsAt;
+          patch.endsAt = new Date(startsAt.getTime() + minutes * 60000);
+          retimed = { from: slot.date + " " + slot.time, to: check.date + " " + check.time };
+        }
+      }
+
+      try {
+        await sl.updateOne({ _id: slot._id }, { $set: patch });
+      } catch (err) {
+        if (err && err.code === 11000) return res.status(409).json({ error: "There is already a slot at that time.", code: "slot-exists" });
+        throw err;
+      }
+      let moved = 0;
+      if (retimed) {
+        const bkCol = await bookings();
+        const onSlot = await bkCol.find({ slotId: slot._id, status: "confirmed" }).toArray();
+        for (const bk of onSlot) {
+          await bkCol.updateOne({ _id: bk._id, status: "confirmed" }, {
+            $set: { date: patch.date, time: patch.time, startsAt: patch.startsAt, updatedAt: new Date() },
+            $push: { history: { at: new Date(), action: "retimed", by: "staff", from: retimed.from, to: retimed.to } }
+          });
+          moved++;
+        }
+      }
+      return res.json({ ok: true, slot: { ...slot, ...patch }, bookingsMoved: moved });
     } catch (err) {
       console.error("PATCH /api/booking/slot failed:", err.message);
       return res.status(502).json({ error: "Could not reach the database." });
     }
   }));
 
-  /* A slot with bookings on it is not deleted out from under them. */
+  /* A slot with bookings on it is not deleted out from under them by
+     accident: without ?cancelBookings=1 it is refused. With it — which the
+     dashboard sends only after the person has confirmed — each booking is
+     cancelled (kept on record, seats returned) and then the slot goes. */
+  async function deleteSlot(slot, cancelBookings) {
+    const bkCol = await bookings();
+    const onSlot = await bkCol.find({ slotId: slot._id, status: "confirmed" }).toArray();
+    if (onSlot.length && !cancelBookings) return { refused: onSlot.length };
+    let cancelled = 0;
+    for (const bk of onSlot) if (await staffCancel(bk, "slot deleted by staff")) cancelled++;
+    await (await slots()).deleteOne({ _id: slot._id });
+    return { cancelled };
+  }
+  const wantsCancel = (req) => /^(1|true|yes)$/i.test(String(req.query.cancelBookings || (req.body || {}).cancelBookings || ""));
+
   app.delete("/api/booking/slot/:id", requireStaff(async (req, res) => {
     if (needsDb(res)) return;
     try {
       const sl = await slots();
       const slot = await sl.findOne({ _id: req.params.id });
       if (!slot) return res.status(404).json({ error: "No such slot." });
-      if ((slot.booked || 0) > 0) {
+      const r = await deleteSlot(slot, wantsCancel(req));
+      if (r.refused) {
         return res.status(409).json({
-          error: slot.booked + " already booked on that slot — cancel those bookings first, or close the slot instead.",
-          code: "slot-has-bookings"
+          error: r.refused + " booking" + (r.refused === 1 ? " is" : "s are") + " on that slot — delete it with its bookings cancelled, or close the slot instead.",
+          code: "slot-has-bookings", bookings: r.refused
         });
       }
-      await sl.deleteOne({ _id: slot._id });
-      return res.json({ ok: true });
+      return res.json({ ok: true, cancelled: r.cancelled });
     } catch (err) {
       console.error("DELETE /api/booking/slot failed:", err.message);
       return res.status(502).json({ error: "Could not reach the database." });
@@ -319,6 +397,116 @@ function mountBookingRoutes(app, deps) {
     } catch (err) {
       console.error("POST /api/booking/date failed:", err.message);
       return res.status(502).json({ error: "Could not reach the database." });
+    }
+  }));
+
+  /* Every slot on one date, and the date's block if it had one. Refused
+     while any of them has bookings unless cancelBookings is set, so one
+     click cannot quietly cancel a day of visits. */
+  app.post("/api/booking/date/delete", requireStaff(async (req, res) => {
+    if (needsDb(res)) return;
+    const body = req.body || {};
+    const date = B.normDate(body.date);
+    if (!date) return res.status(400).json({ error: "A date as YYYY-MM-DD, please." });
+    try {
+      const s = await schedules();
+      const schedule = await s.findOne({ _id: String(body.scheduleId || "") });
+      if (!schedule) return res.status(404).json({ error: "No booking schedule for that campaign yet." });
+      const daySlots = await (await slots()).find({ scheduleId: schedule._id, date }).toArray();
+      const cancel = wantsCancel(req);
+      if (!cancel) {
+        const bkCol = await bookings();
+        let n = 0;
+        for (const sl of daySlots) n += (await bkCol.find({ slotId: sl._id, status: "confirmed" }).toArray()).length;
+        if (n) {
+          return res.status(409).json({ error: n + " booking" + (n === 1 ? " is" : "s are") + " on " + date + ".",
+            code: "date-has-bookings", bookings: n });
+        }
+      }
+      let cancelled = 0;
+      for (const sl of daySlots) cancelled += (await deleteSlot(sl, true)).cancelled || 0;
+      await s.updateOne({ _id: schedule._id }, { $pull: { closedDates: date }, $set: { updatedAt: new Date() } });
+      return res.json({ ok: true, slots: daySlots.length, cancelled });
+    } catch (err) {
+      console.error("POST /api/booking/date/delete failed:", err.message);
+      return res.status(502).json({ error: "Could not reach the database." });
+    }
+  }));
+
+  /* ---- staff: one booking ------------------------------------------- */
+
+  /* Cancel from the dashboard. Recorded as staff, not as the creator. */
+  app.post("/api/booking/booking/:id/cancel", requireStaff(async (req, res) => {
+    if (needsDb(res)) return;
+    try {
+      const bk = await (await bookings()).findOne({ _id: req.params.id });
+      if (!bk) return res.status(404).json({ error: "No such booking." });
+      if (bk.status !== "confirmed") return res.json({ ok: true, alreadyCancelled: true });
+      const did = await staffCancel(bk, (req.body || {}).reason || "cancelled by staff");
+      return res.json({ ok: true, alreadyCancelled: !did });
+    } catch (err) {
+      console.error("POST /api/booking/booking/cancel failed:", err.message);
+      return res.status(502).json({ error: "Could not cancel that booking." });
+    }
+  }));
+
+  /* Edit a booking's party size and staff note. More people claim the
+     extra seats atomically, like any booking; fewer give seats back. A
+     person may overfill the slot on purpose (overCapacity), as with a
+     staff move. The time is changed with Move, not here. */
+  app.patch("/api/booking/booking/:id", requireStaff(async (req, res) => {
+    if (needsDb(res)) return;
+    const body = req.body || {};
+    try {
+      const bkCol = await bookings();
+      const bk = await bkCol.findOne({ _id: req.params.id });
+      if (!bk || bk.status !== "confirmed") return res.status(404).json({ error: "No such booking." });
+      const set = { updatedAt: new Date() };
+      const hist = { at: new Date(), action: "edited", by: "staff" };
+
+      if (body.partySize != null) {
+        const next = Math.floor(Number(body.partySize));
+        if (!Number.isFinite(next) || next < 1 || next > 50) {
+          return res.status(400).json({ error: "People has to be a whole number from 1 to 50." });
+        }
+        const prev = bk.partySize || 1;
+        if (next !== prev) {
+          const sl = await slots();
+          if (next > prev) {
+            const plan = B.claimPlan(bk.slotId, next - prev);
+            const got = await sl.findOneAndUpdate(plan.filter, plan.update, { returnDocument: "after" });
+            if (!got) {
+              if (!body.overCapacity) {
+                const slot = await sl.findOne({ _id: bk.slotId });
+                return res.status(409).json({ error: "Not enough seats left on that slot.", code: "slot_full",
+                  free: slot ? Math.max(0, (slot.capacity || 0) - (slot.booked || 0)) : 0 });
+              }
+              await sl.updateOne({ _id: bk.slotId }, { $inc: { booked: next - prev }, $set: { updatedAt: new Date() } });
+              set.overCapacity = true;
+            }
+          } else {
+            const back = B.releasePlan(bk.slotId, prev - next);
+            await sl.updateOne(back.filter, back.update);
+          }
+          set.partySize = next;
+          hist.partySize = { from: prev, to: next };
+        }
+      }
+      if (body.staffNote != null) { set.staffNote = String(body.staffNote).slice(0, 500); hist.note = true; }
+
+      const done = await bkCol.updateOne({ _id: bk._id, status: "confirmed" }, { $set: set, $push: { history: hist } });
+      if (!done.modifiedCount && set.partySize != null && set.partySize !== bk.partySize) {
+        /* cancelled underneath the edit: give the seat change back */
+        const d = set.partySize - (bk.partySize || 1);
+        const sl = await slots();
+        if (d > 0) { const b2 = B.releasePlan(bk.slotId, d); await sl.updateOne(b2.filter, b2.update); }
+        else if (d < 0) await sl.updateOne({ _id: bk.slotId }, { $inc: { booked: -d } });
+        return res.status(409).json({ error: "That booking was cancelled while you were editing it." });
+      }
+      return res.json({ ok: true, booking: { ...bk, ...set } });
+    } catch (err) {
+      console.error("PATCH /api/booking/booking failed:", err.message);
+      return res.status(502).json({ error: "Could not edit that booking." });
     }
   }));
 
