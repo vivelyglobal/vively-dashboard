@@ -1,6 +1,6 @@
 import { DAY, TODAY } from '../lib/dates.js';
 import { kmb } from '../lib/format.js';
-import { DB } from '../model/db.js';
+import { DB, byCreator } from '../model/db.js';
 import { CAMPAIGN_STATUS, avColor, initials, stageOf } from '../model/vocab.js';
 import { esc } from './dom.js';
 import { toast } from './overlay.js';
@@ -9,7 +9,7 @@ export function avatarHtml(handle, big) {
   return `<div class="av${big ? ' lg' : ''}" style="background:${avColor(handle)}">${initials(handle)}</div>`;
 }
 export function whoHtml(cr, sub) {
-  return `<div class="who">${avatarHtml(cr.handle)}<div style="min-width:0"><div class="h">${esc(cr.handle)}</div><div class="s">${esc(sub || (kmb(cr.followers) + ' · ' + cr.platform))}</div></div></div>`;
+  return `<div class="who">${avatarHtml(cr.handle)}<div style="min-width:0"><div class="h">${esc(cr.handle)}${flagMark(cr)}</div><div class="s">${esc(sub || (kmb(cr.followers) + ' · ' + cr.platform))}</div></div></div>`;
 }
 export function stagePill(stageId) {
   const s = stageOf(stageId);
@@ -33,6 +33,33 @@ export const FLAGS = {
 export function flagPill(flag) {
   const f = FLAGS[flag];
   return f ? `<span class="pill ${f.cls}">${f.icon} ${f.label}</span>` : '';
+}
+
+/* The marker that follows a blacklisted or flagged creator everywhere —
+   rosters, boards, content, analytics, bookings. Preferred creators get
+   nothing: a star beside every good name is noise, and the point of this
+   is that a bad name cannot be missed. Takes a creator or a flag. */
+export function flagMark(cr) {
+  const flag = cr && typeof cr === 'object' ? cr.flag : cr;
+  if (flag !== 'blocked' && flag !== 'caution') return '';
+  const f = FLAGS[flag];
+  const why = cr && cr.flagReason ? ' — ' + cr.flagReason : '';
+  return `<span class="flag-mark ${flag}" title="${esc(f.label + why)}">${f.icon} ${esc(f.label)}</span>`;
+}
+
+/* The class a row or card carries when its creator is flagged, so the
+   whole line reads as a warning rather than one small badge. */
+export function flagRowClass(cr) {
+  const flag = cr && cr.flag;
+  return flag === 'blocked' ? 'flagged-blocked' : flag === 'caution' ? 'flagged-caution' : '';
+}
+
+/* Flagged creators on one campaign's roster, worst first. */
+export function flaggedOnRoster(campaignId) {
+  return DB.participants.filter((p) => p.campaignId === campaignId && p.stage !== 'dropped')
+    .map((p) => ({ p, cr: byCreator[p.creatorId] }))
+    .filter((x) => x.cr && (x.cr.flag === 'blocked' || x.cr.flag === 'caution'))
+    .sort((a, b) => (a.cr.flag === 'blocked' ? 0 : 1) - (b.cr.flag === 'blocked' ? 0 : 1));
 }
 
 export function deltaHtml(v, invert) {

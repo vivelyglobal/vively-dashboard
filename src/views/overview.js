@@ -5,7 +5,7 @@ import { DB, byCampaign, byCreator, notify } from '../model/db.js';
 import { campaignStats, dailySeries, funnelOf, partsOf, portfolioStats, viralScore } from '../model/stats.js';
 import { STAGE_IDX } from '../model/vocab.js';
 import { $, esc } from '../ui/dom.js';
-import { emptyState, statCard, statusPill, whoHtml } from '../ui/html.js';
+import { emptyState, flaggedOnRoster, statCard, statusPill, whoHtml } from '../ui/html.js';
 
 /* ============================================================
    VIEW — OVERVIEW  (layer 2 items × layer 3 tabs)
@@ -41,6 +41,23 @@ export function alertsList() {
 
     const inReview = ps.filter((p) => p.stage === 'review' || p.stage === 'submitted');
     if (inReview.length >= 3) push('warning', 'chasing', `${inReview.length} drafts waiting on review`, `${cp.brand} · ${cp.name}`, `#/campaigns/${cp.id}/content`);
+
+    /* A blacklisted creator on an active campaign is a mistake somebody
+       has to undo, not a number to watch — so it is said here as well as
+       on the roster itself. */
+    const flagged = flaggedOnRoster(cp.id);
+    const blockedOn = flagged.filter((x) => x.cr.flag === 'blocked');
+    const cautionOn = flagged.filter((x) => x.cr.flag === 'caution');
+    if (blockedOn.length) {
+      push('critical', 'flag', `${blockedOn.length} blacklisted creator${blockedOn.length === 1 ? '' : 's'} on this roster`,
+        `${cp.brand} · ${blockedOn.slice(0, 3).map((x) => x.cr.handle).join(', ')}${blockedOn.length > 3 ? ' and more' : ''}`,
+        `#/campaigns/${cp.id}/roster`);
+    }
+    if (cautionOn.length) {
+      push('warning', 'flag', `${cautionOn.length} creator${cautionOn.length === 1 ? '' : 's'} marked caution on this roster`,
+        `${cp.brand} · ${cautionOn.slice(0, 3).map((x) => x.cr.handle).join(', ')}${cautionOn.length > 3 ? ' and more' : ''}`,
+        `#/campaigns/${cp.id}/roster`);
+    }
 
     const s = campaignStats(cp);
     const daysToStart = Math.round((new Date(cp.start) - TODAY) / DAY);

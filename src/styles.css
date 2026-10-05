@@ -397,6 +397,44 @@ body.auth-locked .auth-close { display: none; }
   border-radius: var(--r-lg); padding: 9px 12px;
 }
 
+/* A flagged creator, wherever one is shown. Small enough to sit inside a
+   table cell or a drawer title, loud enough that nobody emails a
+   blacklisted creator by accident. */
+.flag-mark {
+  display: inline-flex; align-items: center; gap: 3px; margin-left: 6px;
+  font-size: 10.5px; font-weight: 700; letter-spacing: .02em;
+  padding: 1px 5px; border-radius: 5px; vertical-align: middle; white-space: nowrap;
+}
+.flag-mark.blocked {
+  color: var(--critical); background: color-mix(in srgb, var(--critical) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--critical) 45%, transparent);
+}
+.flag-mark.caution {
+  color: var(--warning); background: color-mix(in srgb, var(--warning) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
+}
+/* the row or card a blacklisted creator sits on */
+tr.flagged-blocked > td, .kb-card.flagged-blocked {
+  background: color-mix(in srgb, var(--critical) 7%, transparent);
+}
+tr.flagged-blocked > td:first-child, .kb-card.flagged-blocked {
+  box-shadow: inset 3px 0 0 var(--critical);
+}
+tr.flagged-caution > td:first-child, .kb-card.flagged-caution {
+  box-shadow: inset 3px 0 0 var(--warning);
+}
+.flag-note {
+  display: flex; align-items: flex-start; gap: 8px; margin-bottom: 12px;
+  font-size: 12.5px; color: var(--text-2);
+  border: 1px solid color-mix(in srgb, var(--critical) 45%, var(--line));
+  background: color-mix(in srgb, var(--critical) 8%, transparent);
+  border-radius: var(--r-lg); padding: 9px 12px;
+}
+.flag-note.caution-only {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--line));
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+}
+
 /* stat tile */
 .card.stat { align-self: stretch; }
 .stat .label { font-size: 12.5px; color: var(--text-2); display: flex; align-items: center; gap: 6px; }

@@ -2,7 +2,7 @@ import { DB, byCreator, notify } from '../model/db.js';
 import { isBlocked } from '../model/settings.js';
 import { partsOf } from '../model/stats.js';
 import { $, $$, esc } from '../ui/dom.js';
-import { copyText, statCard } from '../ui/html.js';
+import { copyText, flagMark, statCard } from '../ui/html.js';
 import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';
 
 /* ============================================================
@@ -239,7 +239,7 @@ export function bookingBoard(mount, cp) {
           const cr = p ? byCreator[p.creatorId] : null;
           return `<tr>
             <td style="white-space:nowrap">${esc(b.date)} ${esc(b.time)}</td>
-            <td>${cr ? esc(cr.handle) : `<span style="color:var(--amber)">${esc((b.guest || {}).handle || '—')} · unmatched</span>`}
+            <td>${cr ? esc(cr.handle) + flagMark(cr) : `<span style="color:var(--amber)">${esc((b.guest || {}).handle || '—')} · unmatched</span>`}
               ${b.staffNote ? `<div style="font-size:11.5px;color:var(--text-3)">${esc(b.staffNote)}</div>` : ''}</td>
             <td>${b.partySize || 1}</td>
             <td><span class="pill grey">${esc(b.source || 'creator')}</span></td>

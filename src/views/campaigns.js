@@ -13,7 +13,7 @@ import { CAMPAIGN_STATUS, CATEGORIES, COUNTRIES, STAGES, STAGE_IDX, newId, stage
 import { GCAL_PREFS } from '../sync/gcal.js';
 import { syncStageToNotion } from '../sync/notionWriteback.js';
 import { $, $$, esc } from '../ui/dom.js';
-import { FLAGS, avatarHtml, copyText, daysAgo, downloadFile, emptyState, flagPill, stagePill, statCard, statusPill, tierPill, toCsv, whoHtml } from '../ui/html.js';
+import { FLAGS, avatarHtml, copyText, daysAgo, downloadFile, emptyState, flagMark, flagPill, flagRowClass, flaggedOnRoster, stagePill, statCard, statusPill, tierPill, toCsv, whoHtml } from '../ui/html.js';
 import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';
 import { bookingTab, inviteParticipantToBook } from './booking.js';
 import { campaignCalendarTab, renderCampaignCalendar, upcomingVisitsStrip } from './calendarView.js';
@@ -327,6 +327,27 @@ export function confirmDeleteCampaign(cp) {
    ------------------------------------------------------------------- */
 /* Said once in words above the board, because a row of small amber dots
    tells you something is wrong but not what to do about it. */
+/* Flagged creators on this campaign, said once at the top of the roster.
+   A blacklisted creator on a live campaign is the thing nobody should
+   have to notice for themselves, so it is stated before the board. */
+export function flaggedRosterBanner(cp) {
+  const rows = flaggedOnRoster(cp.id);
+  if (!rows.length) return '';
+  const blocked = rows.filter((x) => x.cr.flag === 'blocked');
+  const caution = rows.filter((x) => x.cr.flag === 'caution');
+  const list = (arr) => arr.map((x) => `<a href="#" data-flagpid="${esc(x.p.id)}">${esc(x.cr.handle)}</a>`).join(', ');
+  const reasons = rows.filter((x) => x.cr.flagReason).slice(0, 2)
+    .map((x) => esc(x.cr.handle) + ': ' + esc(x.cr.flagReason));
+  return `<div class="flag-note${blocked.length ? '' : ' caution-only'}">
+    <span class="flag-mark ${blocked.length ? 'blocked' : 'caution'}" style="margin-left:0">${blocked.length ? '⊘' : '!'}</span>
+    <span>
+      ${blocked.length ? `<strong>${blocked.length} blacklisted creator${blocked.length === 1 ? '' : 's'} on this campaign:</strong> ${list(blocked)}.` : ''}
+      ${caution.length ? `${blocked.length ? '<br>' : '<strong>Flagged:</strong> '}${caution.length} marked caution: ${list(caution)}.` : ''}
+      ${reasons.length ? `<div style="margin-top:4px;color:var(--text-3)">${reasons.join(' · ')}</div>` : ''}
+      <div style="margin-top:4px;color:var(--text-3)">Open the card to see why, or clear the flag in the creator's profile.</div>
+    </span></div>`;
+}
+
 export function visitMismatchBanner(cp) {
   const off = visitMismatchesIn(cp.id);
   if (!off.length) return '';
@@ -445,12 +466,16 @@ export function rosterTab(mount, cp) {
       <button class="btn primary sm" id="addCreators">+ Add creators</button>
     </div>
     ${sharedNotionFormBanner(cp)}
+    ${flaggedRosterBanner(cp)}
     ${visitMismatchBanner(cp)}
     ${upcomingVisitsStrip(cp)}
     <div id="rosterBody"></div>`;
 
   const body = $('#rosterBody');
   if (state.boardMode === 'board') renderBoard(body, cp); else renderRosterTable(body, cp);
+  $$('[data-flagpid]', mount).forEach((a) => a.addEventListener('click', (e) => {
+    e.preventDefault(); showParticipant(a.dataset.flagpid);
+  }));
   $$('.cal-item', mount).forEach((el) => el.addEventListener('click', () => showParticipant(el.dataset.pid)));
 
   $('#boardSeg').addEventListener('click', (e) => {
@@ -479,7 +504,7 @@ export function renderBoard(mount, cp) {
         <span class="kh">${st.label}</span><span class="kc">${items.length}</span></header>
       <div class="kb-list" data-stage="${st.id}">${items.map((p) => {
         const cr = byCreator[p.creatorId];
-        return `<div class="kb-card" draggable="true" data-pid="${p.id}">
+        return `<div class="kb-card ${flagRowClass(cr)}" draggable="true" data-pid="${p.id}">
           ${whoHtml(cr)}
           <div class="kb-meta"><span>ER ${cr.er}%</span><span>${esc(cr.country)}</span>${p.fee ? `<span>${wonK(p.fee)}</span>` : ''}</div>
           ${visitSlotOf(p) ? `<div style="font-size:11px;color:var(--text-2);margin-top:5px">🗓 ${esc(visitSlotOf(p))}${p.confirmedVisitAt ? ' <span style="color:var(--text-3)">confirmed</span>' : ''}${visitMismatchMark(p)}</div>` : ''}
@@ -529,7 +554,7 @@ export function renderRosterTable(mount, cp) {
       <th>Visit</th><th>Contacted</th><th>Confirmed</th><th class="num">Fee</th><th class="num">Views</th><th></th></tr></thead>
     <tbody>${ps.map((p) => {
       const cr = byCreator[p.creatorId];
-      return `<tr>
+      return `<tr class="${flagRowClass(cr)}">
         <td>${whoHtml(cr)}</td>
         <td><span class="tag">${esc(p.source)}</span></td>
         <td class="num">${num(cr.followers)}</td><td class="num">${cr.er}%</td>
@@ -607,7 +632,7 @@ export function openAddCreators(cp) {
     return `<div class="ac-item" data-id="${c.id}">
       ${avatarHtml(c.handle)}
       <div style="min-width:0;flex:1">
-        <div style="font-size:13px;font-weight:500">${hl(c.handle)} <span style="color:var(--text-3);font-weight:400">${hl(c.name)}</span> ${flagPill(c.flag)}</div>
+        <div style="font-size:13px;font-weight:500">${hl(c.handle)} <span style="color:var(--text-3);font-weight:400">${hl(c.name)}</span> ${c.flag === 'caution' || c.flag === 'blocked' ? flagMark(c) : flagPill(c.flag)}</div>
         <div style="font-size:11.5px;color:var(--text-3)">${kmb(c.followers)} · ER ${c.er}% · ${esc(c.country)} · ${esc(c.categories.join(', '))}${c.campaignsDone ? ` · ${c.campaignsDone} past` : ' · new'}</div>
         ${s.reasons.length ? `<div style="font-size:11px;color:var(--text-3);margin-top:3px">${s.reasons.map((r) => `<span class="tag">${esc(r)}</span>`).join(' ')}</div>` : ''}
       </div>
@@ -691,11 +716,16 @@ export function showParticipant(pid) {
   const p = DB.participants.find((x) => x.id === pid);
   if (!p) return;
   const cr = byCreator[p.creatorId], cp = byCampaign[p.campaignId], c = p.content;
-  openDrawer(`${avatarHtml(cr.handle)} <span style="margin-left:8px">${esc(cr.handle)}</span>`, `
+  openDrawer(`${avatarHtml(cr.handle)} <span style="margin-left:8px">${esc(cr.handle)}</span>${flagMark(cr)}`, `
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
       ${stagePill(p.stage)} ${tierPill(cr.tier)} <span class="pill grey">${esc(cr.platform)}</span> <span class="pill grey">${esc(cr.country)}</span> ${flagPill(cr.flag)}
     </div>
-    ${cr.flag && cr.flagReason ? `<div class="note ${cr.flag === 'blocked' ? 'warn' : ''}" style="margin-bottom:14px"><strong>${FLAGS[cr.flag].label}:</strong> ${esc(cr.flagReason)}</div>` : ''}
+    ${(cr.flag === 'blocked' || cr.flag === 'caution') ? `<div class="flag-note${cr.flag === 'caution' ? ' caution-only' : ''}">
+      <span class="flag-mark ${cr.flag}" style="margin-left:0">${FLAGS[cr.flag].icon}</span>
+      <span><strong>${FLAGS[cr.flag].label}${cr.flagAt ? ' · ' + esc(cr.flagAt) : ''}${cr.flagReason ? ':' : ''}</strong>
+        ${cr.flagReason ? esc(cr.flagReason) : 'No reason was recorded.'}
+        ${cr.flag === 'blocked' ? '<div style="margin-top:3px;color:var(--text-3)">This creator is blacklisted — they should not be contacted or sent product for this campaign.</div>' : ''}</span></div>`
+      : (cr.flag && cr.flagReason ? `<div class="note" style="margin-bottom:14px"><strong>${FLAGS[cr.flag].label}:</strong> ${esc(cr.flagReason)}</div>` : '')}
     <dl class="kv" style="margin-bottom:18px">
       <dt>Campaign</dt><dd><a href="#/campaigns/${cp.id}/roster">${esc(cp.brand)} — ${esc(cp.name)}</a></dd>
       <dt>Found via</dt><dd>${esc(p.source)}</dd>

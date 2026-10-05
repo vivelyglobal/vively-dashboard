@@ -1,15 +1,17 @@
 import { SERIES_HEX, barsH, splitBar } from '../charts/index.js';
+import { normHeader } from '../import/excel.js';
 import { TODAY, dLabel, iso } from '../lib/dates.js';
-import { engagementsOf, kmb, num, pct, won } from '../lib/format.js';
-import { findCreatorByHandle } from '../model/creators.js';
-import { DB, byCampaign, byCreator, notify } from '../model/db.js';
+import { engagementsOf, kmb, num, won } from '../lib/format.js';
+import { readXlsx } from '../lib/xlsx.js';
+import { findCreatorByHandle, normHandle } from '../model/creators.js';
+import { DB, byCampaign, byCreator, notify, serverSave, toastAfterSave } from '../model/db.js';
 import { SETTINGS, isBlocked } from '../model/settings.js';
 import { suggestScore } from '../model/suggest.js';
-import { CATEGORIES, COUNTRIES, PLATFORMS, tierOf } from '../model/vocab.js';
+import { CATEGORIES, COUNTRIES, PLATFORMS, newId, tierOf } from '../model/vocab.js';
+import { parseCsvLoose } from '../sync/sheetMetrics.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { FLAGS, avatarHtml, daysAgo, downloadFile, emptyState, flagPill, sortTable, stagePill, statCard, tierPill, toCsv, whoHtml } from '../ui/html.js';
 import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';
-import { state } from './overview.js';
 
 /* ============================================================
    VIEW — CREATOR DATABASE
@@ -106,6 +108,7 @@ export function renderCreators(view, item, tab) {
         <div class="field"><label>Platform</label><select id="crPlatform">${optList(PLATFORMS, f.platform, 'Any platform')}</select></div>
         <button class="btn sm" id="crReset">Reset</button>
         <button class="btn sm" id="crExport">Export ${list.length}</button>
+        <button class="btn primary sm" id="crImport">Import creators</button>
       </div>
     </div>
 
@@ -159,6 +162,7 @@ export function renderCreators(view, item, tab) {
     clearTimeout(creatorSearchTimer); creatorSearchCaret = null;
     state.creatorFilters = { q: '', tier: '', cat: '', country: '', platform: '', worked: '' }; notify();
   });
+  $('#crImport').addEventListener('click', () => openCreatorImport());
   $('#crExport').addEventListener('click', () => {
     downloadFile(toCsv(['handle','name','platform','followers','er','avg_views','tier','categories','country','languages','source','rate_krw','campaigns','best_views','rating','last_worked','tags','email','flag','flag_reason'],
       sorted.map((c) => [c.handle, c.name, c.platform, c.followers, c.er, c.avgViews, c.tier, c.categories.join('|'), c.country, c.languages.join('|'),
@@ -415,4 +419,383 @@ export function openEditCreator(id) {
     showCreator(c.id);
     notify();
   });
+}
+/* ============================================================
+   IMPORTING A LIST OF CREATORS
+
+   Any sheet, any column order, any language of header. The file is read
+   as it is; the operator says which column is which; a preview says
+   exactly what would happen to each row; and only then is anything
+   written.
+
+   Two rules it never breaks:
+     - a creator already here is only ever FILLED IN, never overwritten.
+       A scrape with half its columns empty cannot wipe a follower count
+       somebody checked by hand.
+     - a handle already in the database is never added twice. The match
+       is the same normalised handle the rest of the app uses, so
+       "@Minji", "minji" and a profile URL are one creator.
+   ============================================================ */
+
+export const CREATOR_IMPORT_FIELDS = [
+  { k: 'handle', label: 'Handle', req: true, hint: '@name, or a profile link',
+    aliases: ['handle', 'username', 'user name', 'user', 'profile', 'profile handle', 'instagram', 'instagram handle', 'ig', 'ig id', 'tiktok', 'account', 'sns', 'sns id', 'id', '아이디', '계정', '인스타'] },
+  { k: 'name', label: 'Name', aliases: ['name', 'full name', 'creator', 'creator name', 'influencer', 'influencer name', '이름', '성명'] },
+  { k: 'platform', label: 'Platform', hint: 'Instagram, TikTok, YouTube',
+    aliases: ['platform', 'channel', 'sns platform', 'media', '매체', '플랫폼'] },
+  { k: 'followers', label: 'Followers', aliases: ['followers', 'follower', 'follower count', 'followers count', 'fans', 'subscribers', '팔로워', '구독자'] },
+  { k: 'er', label: 'ER (%)', hint: '4.2 or 0.042 both read as 4.2%',
+    aliases: ['er', 'engagement rate', 'engagement', 'eng rate', 'engagement %', '참여율'] },
+  { k: 'avgViews', label: 'Avg views', aliases: ['avg views', 'average views', 'avg view', 'avg plays', 'mean views', '평균 조회수', '평균조회수'] },
+  { k: 'country', label: 'Country', aliases: ['country', 'market', 'nation', 'location', 'region', '국가', '지역'] },
+  { k: 'categories', label: 'Categories', hint: 'comma or | separated',
+    aliases: ['category', 'categories', 'niche', 'vertical', 'topic', 'genre', '카테고리', '분야'] },
+  { k: 'rate', label: 'Rate (₩)', aliases: ['rate', 'fee', 'price', 'cost', 'rate krw', 'quote', '단가', '비용', '견적'] },
+  { k: 'email', label: 'Email', aliases: ['email', 'e mail', 'mail', 'email address', '이메일'] },
+  { k: 'contact', label: 'Contact', hint: 'phone, Kakao, DM — anything',
+    aliases: ['contact', 'phone', 'phone number', 'mobile', 'kakao', 'kakaotalk', 'kakao id', 'telephone', 'whatsapp', '연락처', '전화', '카톡'] },
+  { k: 'notes', label: 'Notes', aliases: ['notes', 'note', 'memo', 'comment', 'comments', 'remark', 'remarks', '비고', '메모'] },
+  { k: 'source', label: 'Found via', aliases: ['source', 'found via', 'origin', 'via', 'channel source', '출처', '경로'] },
+  { k: 'flag', label: 'Flag', hint: 'blacklist / caution / preferred',
+    aliases: ['flag', 'flags', 'blacklist', 'black list', 'blocked', 'status', 'warning', '주의', '블랙리스트'] },
+  { k: 'flagReason', label: 'Flag reason', aliases: ['flag reason', 'reason', 'blacklist reason', 'why', 'issue', '사유', '이유'] }
+];
+
+export let creatorImport = null;
+
+/* A number as a spreadsheet writes one: commas, a currency mark, a
+   trailing %, or 12.3K / 1.2M shorthand. Blank stays blank — it is the
+   difference between "no figure" and "zero", and only the first may be
+   filled in later. */
+export function ciNumber(v) {
+  if (v == null || v === '') return null;
+  let str = String(v).trim().toLowerCase().replace(/[,\s₩$%]/g, '');
+  if (!str || str === '-' || /^n\/?a$/.test(str)) return null;
+  let mult = 1;
+  const suffix = str.slice(-1);
+  if (suffix === 'k') { mult = 1e3; str = str.slice(0, -1); }
+  else if (suffix === 'm') { mult = 1e6; str = str.slice(0, -1); }
+  else if (suffix === '만') { mult = 1e4; str = str.slice(0, -1); }
+  const n = parseFloat(str);
+  return isNaN(n) ? null : n * mult;
+}
+
+/* An engagement rate written either way. 0.042 is a decimal rate and 4.2
+   is a percentage; nothing in between is ambiguous in practice. */
+export function ciEngagement(v) {
+  const n = ciNumber(v);
+  if (n == null) return null;
+  const pct = n > 0 && n <= 1 ? n * 100 : n;
+  return pct > 100 ? null : Math.round(pct * 100) / 100;
+}
+
+/* The handle out of whatever the cell holds — a bare name, an @name, or
+   a profile URL. */
+export function ciHandle(v) {
+  const raw = String(v == null ? '' : v).trim();
+  if (!raw) return '';
+  const m = raw.match(/(?:instagram\.com|tiktok\.com|youtube\.com)\/@?([\w.\-]+)/i);
+  let h = m ? m[1] : raw.replace(/^https?:\/\/[^/]+\//, '').replace(/[/?#].*$/, '');
+  h = h.replace(/^@+/, '').trim();
+  if (!h || /\s/.test(h) || h.length > 60) return '';
+  return '@' + h;
+}
+
+/* Only the three flags this app has, and only from words that plainly
+   mean them. Anything else is left alone rather than guessed at. */
+export function ciFlag(v) {
+  const t = String(v == null ? '' : v).trim().toLowerCase();
+  if (!t) return '';
+  if (/black|blocked|ban|do not|금지|블랙/.test(t)) return 'blocked';
+  if (/caution|careful|warn|risk|주의/.test(t)) return 'caution';
+  if (/prefer|favourite|favorite|vip|우수/.test(t)) return 'preferred';
+  return '';
+}
+
+export function guessCreatorColumns(headers) {
+  const norm = headers.map((h) => normHeader(h));
+  const map = {}, taken = new Set();
+  const claim = (k, i) => { if (i >= 0 && !taken.has(i) && map[k] == null) { map[k] = i; taken.add(i); } };
+  /* an exact header wins over one that merely contains the word, or
+     "avg views" would be claimed by "views" */
+  CREATOR_IMPORT_FIELDS.forEach((f) => claim(f.k, norm.findIndex((h) => h && f.aliases.includes(h))));
+  CREATOR_IMPORT_FIELDS.forEach((f) => claim(f.k, norm.findIndex((h) => h && f.aliases.some((a) => h.includes(a)))));
+  return map;
+}
+
+export function openCreatorImport() {
+  creatorImport = { fileName: '', sheets: [], sheetIdx: 0, headers: [], rows: [], map: {} };
+  openDrawer('Import creators from a file', `
+    <div class="note" style="margin-bottom:16px">
+      An .xlsx or .csv with one creator per row. The columns can be in any order and named anything —
+      the next step asks you which column is which. Creators already in the database are matched by
+      handle and only have their <strong>empty</strong> fields filled in; nothing already here is overwritten.
+    </div>
+    <div class="dz" id="ciDrop">
+      <div><strong>Click or drop an .xlsx / .csv file</strong></div>
+      <div style="margin-top:4px;font-size:12px;color:var(--text-3)">e.g. "scoutlab-shortlist.xlsx"</div>
+      <input type="file" id="ciFile" accept=".xlsx,.csv" style="display:none"/>
+    </div>
+    <div id="ciOut" style="margin-top:18px"></div>`, true);
+
+  const dz = $('#ciDrop'), input = $('#ciFile');
+  dz.addEventListener('click', () => input.click());
+  dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('drag'); });
+  dz.addEventListener('dragleave', () => dz.classList.remove('drag'));
+  dz.addEventListener('drop', (e) => {
+    e.preventDefault(); dz.classList.remove('drag');
+    if (e.dataTransfer.files[0]) loadCreatorImportFile(e.dataTransfer.files[0]);
+  });
+  input.addEventListener('change', () => { if (input.files[0]) loadCreatorImportFile(input.files[0]); });
+}
+
+export async function loadCreatorImportFile(file) {
+  const out = $('#ciOut');
+  out.innerHTML = `<div class="empty">Reading ${esc(file.name)}…</div>`;
+  try {
+    creatorImport.fileName = file.name;
+    if (/\.csv$/i.test(file.name)) {
+      /* the loose reader, because a notes column with a line break in it
+         tears every later column off the row otherwise */
+      creatorImport.sheets = [{ name: file.name, rows: parseCsvLoose(await file.text()) }];
+    } else {
+      const wb = await readXlsx(file);
+      creatorImport.sheets = wb.sheets.filter((sh) => sh.rows.length > 1);
+      if (!creatorImport.sheets.length) throw new Error('No rows found in that workbook.');
+    }
+    useCreatorImportSheet(0);
+  } catch (err) {
+    out.innerHTML = `<div class="note warn"><strong>Could not read that file.</strong> ${esc(err.message)}</div>`;
+  }
+}
+
+export function useCreatorImportSheet(i) {
+  const st = creatorImport;
+  const sheet = st.sheets[i] || { rows: [] };
+  st.sheetIdx = i;
+  st.rows = sheet.rows.filter((r) => r && r.some((c) => c != null && String(c).trim() !== ''));
+  st.headers = st.rows[0] || [];
+  st.map = guessCreatorColumns(st.headers.map((h) => String(h == null ? '' : h)));
+  renderCreatorImportMap();
+}
+
+/* Each column named as the sheet names it, with a value from the first
+   row beside it — the fastest way for a person to tell two columns of
+   numbers apart. */
+export function ciColumnOptions(selected) {
+  const st = creatorImport;
+  const cols = st.headers.map((h, i) => {
+    const sample = (st.rows[1] || [])[i];
+    const head = String(h == null || String(h).trim() === '' ? 'column ' + (i + 1) : h).slice(0, 40);
+    const label = head + (sample != null && String(sample).trim() !== '' ? ' — e.g. ' + String(sample).slice(0, 22) : '');
+    return `<option value="${i}" ${selected === i ? 'selected' : ''}>${esc(label)}</option>`;
+  }).join('');
+  return '<option value="">— not in the file —</option>' + cols;
+}
+
+export function renderCreatorImportMap() {
+  const st = creatorImport;
+  const plan = planCreatorImport();
+  $('#ciOut').innerHTML = `
+    ${st.sheets.length > 1 ? `<div class="field" style="max-width:360px"><label>Sheet</label>
+      <select id="ciSheet">${st.sheets.map((sh, i) => `<option value="${i}" ${i === st.sheetIdx ? 'selected' : ''}>${esc(sh.name || 'Sheet ' + (i + 1))} · ${sh.rows.length - 1} rows</option>`).join('')}</select></div>` : ''}
+    <div class="lbl">Match your columns</div>
+    <p class="card-sub">${esc(st.fileName)} · ${Math.max(0, st.rows.length - 1)} row${st.rows.length === 2 ? '' : 's'}.
+      Guessed from the header row — change anything that is wrong. Only <strong>Handle</strong> is required.</p>
+    <div style="margin-top:10px">
+      ${CREATOR_IMPORT_FIELDS.map((fd) => `
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:5px">
+          <span style="width:112px;font-size:12px;color:${fd.req ? 'var(--text)' : 'var(--text-3)'}">${esc(fd.label)}${fd.req ? ' *' : ''}</span>
+          <select data-cimap="${fd.k}" style="flex:1;max-width:320px">${ciColumnOptions(st.map[fd.k])}</select>
+          <span style="font-size:11.5px;color:var(--text-3)">${esc(fd.hint || '')}</span>
+        </div>`).join('')}
+    </div>
+    <div class="divider"></div>
+    ${creatorImportPreviewHtml(plan)}`;
+
+  const sheetSel = $('#ciSheet');
+  if (sheetSel) sheetSel.addEventListener('change', (e) => useCreatorImportSheet(+e.target.value));
+  $$('[data-cimap]').forEach((sel) => sel.addEventListener('change', () => {
+    const v = sel.value;
+    if (v === '') delete st.map[sel.dataset.cimap];
+    else st.map[sel.dataset.cimap] = +v;
+    renderCreatorImportMap();
+  }));
+  const go = $('#ciGo');
+  if (go) go.addEventListener('click', () => applyCreatorImport());
+  const cancel = $('#ciCancel');
+  if (cancel) cancel.addEventListener('click', closeDrawer);
+}
+
+/* What the file would do, row by row, before it does any of it. Pure:
+   the preview and the import read the same plan. */
+export function planCreatorImport(state) {
+  /* takes the state so the plan can be worked out — and tested — without
+     a drawer open; defaults to the one the drawer is filling in */
+  const st = state || creatorImport;
+  const out = { creates: [], fills: [], skipped: [], noChange: [] };
+  if (!st || !st.rows.length) return out;
+  if (st.map.handle == null) { out.noHandleColumn = true; return out; }
+  const seen = new Map();          /* normalised handle → the row that claimed it */
+
+  st.rows.slice(1).forEach((row, n) => {
+    const rowNo = n + 2;
+    const cell = (k) => (st.map[k] == null ? '' : row[st.map[k]]);
+    const handle = ciHandle(cell('handle'));
+    if (!handle) { out.skipped.push({ rowNo, why: 'no handle in that row' }); return; }
+    const key = normHandle(handle);
+    if (seen.has(key)) { out.skipped.push({ rowNo, handle, why: 'same handle as row ' + seen.get(key) }); return; }
+    seen.set(key, rowNo);
+
+    const platformCell = String(cell('platform') || '').trim();
+    const v = {
+      handle,
+      name: String(cell('name') || '').trim(),
+      platform: /tiktok|틱톡/i.test(platformCell) ? 'TikTok'
+        : /youtube|유튜브/i.test(platformCell) ? 'YouTube'
+        : /insta|인스타/i.test(platformCell) ? 'Instagram'
+        : (PLATFORMS.includes(platformCell) ? platformCell : ''),
+      followers: ciNumber(cell('followers')),
+      er: ciEngagement(cell('er')),
+      avgViews: ciNumber(cell('avgViews')),
+      country: String(cell('country') || '').trim(),
+      categories: [...new Set(String(cell('categories') || '').split(/[,|/]/).map((x) => x.trim()).filter(Boolean))],
+      rate: ciNumber(cell('rate')),
+      email: String(cell('email') || '').trim(),
+      contact: String(cell('contact') || '').trim(),
+      notes: String(cell('notes') || '').trim(),
+      source: String(cell('source') || '').trim(),
+      flag: ciFlag(cell('flag')),
+      flagReason: String(cell('flagReason') || '').trim()
+    };
+
+    const existing = findCreatorByHandle(handle);
+    if (!existing) { out.creates.push({ rowNo, v }); return; }
+
+    /* fill blanks only — the whole point of the import being safe */
+    const fills = [];
+    const blankNum = (x) => !Number(x);
+    const blankStr = (x) => !String(x == null ? '' : x).trim();
+    if (v.name && blankStr(existing.name)) fills.push(['name', v.name]);
+    if (v.platform && blankStr(existing.platform)) fills.push(['platform', v.platform]);
+    if (v.followers != null && blankNum(existing.followers)) fills.push(['followers', Math.round(v.followers)]);
+    if (v.er != null && blankNum(existing.er)) fills.push(['er', v.er]);
+    if (v.avgViews != null && blankNum(existing.avgViews)) fills.push(['avgViews', Math.round(v.avgViews)]);
+    if (v.country && blankStr(existing.country)) fills.push(['country', v.country]);
+    if (v.rate != null && blankNum(existing.rate)) fills.push(['rate', Math.round(v.rate)]);
+    if (v.email && blankStr(existing.email)) fills.push(['email', v.email]);
+    if (v.contact && blankStr(existing.contact)) fills.push(['contact', v.contact]);
+    if (v.notes && blankStr(existing.notes)) fills.push(['notes', v.notes]);
+    if (v.source && blankStr(existing.source)) fills.push(['source', v.source]);
+    const newCats = v.categories.filter((x) => !(existing.categories || []).includes(x));
+    if (newCats.length) fills.push(['categories', newCats]);
+    /* a flag is never changed by a file — only given to a creator who has
+       none. Clearing a blacklist is a decision somebody makes here. */
+    if (v.flag && !existing.flag) {
+      fills.push(['flag', v.flag]);
+      if (v.flagReason) fills.push(['flagReason', v.flagReason]);
+    }
+
+    if (fills.length) out.fills.push({ rowNo, cr: existing, fills, v });
+    else out.noChange.push({ rowNo, handle });
+  });
+  return out;
+}
+
+export function creatorImportPreviewHtml(plan) {
+  if (plan.noHandleColumn) {
+    return `<div class="note warn"><strong>Say which column holds the handle.</strong>
+      Everything else is optional, but without a handle a row cannot become a creator.</div>`;
+  }
+  const rows = [
+    ...plan.creates.slice(0, 8).map((c) => ({ rowNo: c.rowNo, handle: c.v.handle, what: 'new creator',
+      detail: [c.v.followers != null ? kmb(Math.round(c.v.followers)) + ' followers' : '', c.v.country,
+               c.v.categories.join(', '), c.v.flag ? FLAGS[c.v.flag].label : ''].filter(Boolean).join(' · ') })),
+    ...plan.fills.slice(0, 8).map((u) => ({ rowNo: u.rowNo, handle: u.cr.handle,
+      what: 'fills ' + u.fills.length + ' empty field' + (u.fills.length === 1 ? '' : 's'),
+      detail: u.fills.map(([k, val]) => k + ' → ' + (Array.isArray(val) ? val.join(', ') : val)).join(' · ') }))
+  ];
+  const total = plan.creates.length + plan.fills.length;
+  return `
+    <div class="grid g4" style="gap:10px;margin-bottom:14px">
+      ${statCard('New creators', plan.creates.length, { foot: 'not in the database yet' })}
+      ${statCard('Filled in', plan.fills.length, { foot: 'existing, empty fields only' })}
+      ${statCard('Already complete', plan.noChange.length, { foot: 'nothing left to fill' })}
+      ${statCard('Skipped', plan.skipped.length, { foot: 'no handle, or a repeat' })}
+    </div>
+    ${rows.length ? `<details open><summary style="cursor:pointer;font-size:12.5px;color:var(--text-2)">What would change</summary>
+      <div class="tbl-wrap" style="margin-top:8px"><table class="tbl"><thead><tr>
+        <th>Row</th><th>Handle</th><th>What</th><th>Detail</th></tr></thead><tbody>
+        ${rows.map((r) => `<tr><td>${r.rowNo}</td><td class="strong">${esc(r.handle)}</td>
+          <td>${esc(r.what)}</td><td style="font-size:12px;color:var(--text-2)">${esc(r.detail)}</td></tr>`).join('')}
+      </tbody></table></div>
+      ${total > rows.length ? `<p class="card-sub">and ${total - rows.length} more.</p>` : ''}</details>` : ''}
+    ${plan.skipped.length ? `<details><summary style="cursor:pointer;font-size:12.5px;color:var(--text-2)">${plan.skipped.length} skipped</summary>
+      <div style="font-size:12px;color:var(--text-3);margin-top:6px">
+        ${plan.skipped.slice(0, 20).map((sk) => `Row ${sk.rowNo}${sk.handle ? ' (' + esc(sk.handle) + ')' : ''} — ${esc(sk.why)}`).join('<br>')}
+      </div></details>` : ''}
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="btn primary" id="ciGo" ${total ? '' : 'disabled'}>
+        ${total ? `Import: add ${plan.creates.length}, fill ${plan.fills.length}` : 'Nothing to import'}</button>
+      <button class="btn" id="ciCancel">Cancel</button>
+    </div>`;
+}
+
+/* Writes a plan into the database. Separate from the drawer so the rule
+   that matters — fill blanks, never overwrite, never duplicate a handle —
+   is exercised directly by the tests. */
+export function applyCreatorPlan(plan, fileName) {
+  const now = new Date().toISOString();
+  let added = 0, filled = 0;
+
+  plan.creates.forEach(({ v }) => {
+    /* checked again here, not only in the preview: the drawer may have
+       sat open while the same handle arrived another way, and a second
+       @minji is the one thing this importer must never produce */
+    if (findCreatorByHandle(v.handle)) return;
+    const followers = v.followers != null ? Math.round(v.followers) : 0;
+    const id = newId('im');
+    const c = {
+      id, handle: v.handle, name: v.name || v.handle.replace(/^@/, ''),
+      platform: v.platform || 'Instagram', followers,
+      er: v.er != null ? v.er : 0,
+      avgViews: v.avgViews != null ? Math.round(v.avgViews) : 0,
+      categories: v.categories, country: v.country || '', languages: ['EN'],
+      tier: tierOf(followers).id, source: v.source || 'Imported CSV',
+      rate: v.rate != null ? Math.round(v.rate) : 0,
+      reliability: null, avgTurnaroundDays: null, campaignsDone: 0, lastWorked: null,
+      email: v.email || '', contact: v.contact || '', tags: [], notes: v.notes || '',
+      campaignIds: [], contentCount: 0, totalViews: 0, bestViews: 0,
+      flag: v.flag || null, flagReason: v.flag ? v.flagReason : '', flagAt: v.flag ? iso(TODAY) : null,
+      importedAt: now, importedFrom: fileName || ''
+    };
+    if (v.followers != null || v.er != null || v.avgViews != null) {
+      c.metricsSource = 'file_import'; c.metricsSyncedAt = now;
+    }
+    DB.creators.push(c); byCreator[id] = c; added++;
+  });
+
+  plan.fills.forEach(({ cr, fills }) => {
+    let metrics = false;
+    fills.forEach(([k, val]) => {
+      if (k === 'categories') cr.categories = [...new Set([...(cr.categories || []), ...val])];
+      else cr[k] = val;
+      if (k === 'followers' || k === 'er' || k === 'avgViews') metrics = true;
+      if (k === 'flag') cr.flagAt = iso(TODAY);
+    });
+    if (fills.some(([k]) => k === 'followers')) cr.tier = tierOf(cr.followers || 0).id;
+    if (metrics) { cr.metricsSource = 'file_import'; cr.metricsSyncedAt = now; }
+    filled++;
+  });
+
+  return { added, filled };
+}
+
+export function applyCreatorImport() {
+  const { added, filled } = applyCreatorPlan(planCreatorImport(), creatorImport && creatorImport.fileName);
+  closeDrawer();
+  const msg = `${added} creator${added === 1 ? '' : 's'} added` + (filled ? `, ${filled} filled in` : '');
+  toast(msg);
+  notify();
+  serverSave({ force: true, silent: true }).then((r) => toastAfterSave(msg, r));
 }

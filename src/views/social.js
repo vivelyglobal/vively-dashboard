@@ -3,7 +3,7 @@ import { kmb, num } from '../lib/format.js';
 import { DB, SOCIAL_MATCH_STATUS, byCampaign, byCreator, notify, socialEngagementRate, socialEngagements, socialViewRatio } from '../model/db.js';
 import { avColor, tierOf } from '../model/vocab.js';
 import { $, $$, esc } from '../ui/dom.js';
-import { avatarHtml, downloadFile, emptyState, statCard, tierPill, toCsv } from '../ui/html.js';
+import { avatarHtml, downloadFile, emptyState, flagMark, statCard, tierPill, toCsv } from '../ui/html.js';
 import { openDrawer } from '../ui/overlay.js';
 
 /* ============================================================
@@ -222,7 +222,7 @@ export function showSocialContent(id) {
   const ratio = socialViewRatio(c, cr);
   const snaps = (c.curve || []).filter((x) => x && x.at);
 
-  openDrawer(`${avatarHtml(cr.handle || c.username || '?')} <span style="margin-left:8px">${esc(cr.handle || c.username || 'Content')}</span>`, `
+  openDrawer(`${avatarHtml(cr.handle || c.username || '?')} <span style="margin-left:8px">${esc(cr.handle || c.username || 'Content')}</span>${flagMark(cr)}`, `
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
       ${socialStatusPill(c.matchStatus)}
       <span class="pill grey">${esc(c.platform)}</span>
