@@ -347,6 +347,7 @@ export function showCreator(id) {
       if (!cpId || !byCampaign[cpId]) { toast('Pick a campaign'); return; }
       if (DB.participants.some((p) => p.campaignId === cpId && p.creatorId === c.id)) { toast('Already on that campaign'); return; }
       DB.participants.push({ id: cpId + '-' + c.id, campaignId: cpId, creatorId: c.id, stage: 'sourced', source: c.source,
+        appliedAt: new Date().toISOString(),
         fee: 0, contactedAt: null, repliedAt: null, confirmedAt: null, shippedAt: null, dropReason: null, revisions: 0, content: null, note: '' });
       closeDrawer(); toast('Added to ' + (byCampaign[cpId].brand || 'the campaign')); notify();
     });

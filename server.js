@@ -697,6 +697,22 @@ app.get("/api/workspace", requireStaff(async (req, res) => {
   }
 }));
 
+/* Just the revision and the time, for a page that wants to know whether
+   somebody else has saved since it loaded. The workspace itself is far
+   too big to poll — this reads two fields and nothing else. */
+app.get("/api/workspace/meta", requireStaff(async (req, res) => {
+  if (!MONGODB_URI) return res.status(503).json({ error: "Database not configured on the server yet." });
+  try {
+    const col = await getWorkspaceCollection();
+    const doc = await col.findOne({ _id: WORKSPACE_ID }, { projection: { revision: 1, savedAt: 1, savedBy: 1 } });
+    return res.json({ ok: true, revision: (doc && doc.revision) || 0, savedAt: (doc && doc.savedAt) || null,
+                      savedBy: (doc && doc.savedBy) || null });
+  } catch (err) {
+    console.error("GET /api/workspace/meta failed:", err.message);
+    return res.status(502).json({ error: "Could not reach the database." });
+  }
+}));
+
 /* Set when the booking routes mount. The workspace save reads live
    bookings through it so a stale client cannot un-book anybody. */
 let bookingApi = null;

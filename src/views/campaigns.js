@@ -22,6 +22,7 @@ import { briefTab, messagesTab } from './messages.js';
 import { openNotionDiagnostic, openNotionSync } from './notionDiag.js';
 import { openNotionImportWizard } from './notionImport.js';
 import { state } from './overview.js';
+import { plannerTab } from './planner.js';
 import { reportTab } from './report.js';
 
 /* ============================================================
@@ -29,7 +30,7 @@ import { reportTab } from './report.js';
    layer 2 = the campaign list · layer 3 = tabs on one campaign
    ============================================================ */
 export const CAMPAIGN_TABS = [
-  ['roster', 'Roster & pipeline'], ['booking', 'Booking'], ['calendar', 'Visit calendar'], ['content', 'Content review'],
+  ['planner', 'Planner'], ['roster', 'Roster & pipeline'], ['booking', 'Booking'], ['calendar', 'Visit calendar'], ['content', 'Content review'],
   ['performance', 'Performance'], ['creators', 'Creator results'], ['messages', 'Messages'],
   ['brief', 'Brief'], ['report', 'Report']
 ];
@@ -175,14 +176,14 @@ export function renderCampaign(view, id, tab) {
       <button class="icon-btn no-print" id="cpDelete" title="Delete this campaign">&#128465;</button>
     </div>
 
-    <div class="grid g6" style="margin-bottom:16px;">
+    ${tab === 'planner' ? '' : `<div class="grid g6" style="margin-bottom:16px;">
       ${statCard('Confirmed', `${s.confirmed}<span style="font-size:15px;color:var(--text-3)"> / ${cp.targetCreators}</span>`, { foot: `${num(s.contacted)} contacted` })}
       ${statCard('Delivered', s.delivered, { foot: `${pct(s.deliveryRate, 0)} of confirmed` })}
       ${statCard('Views', kmb(s.views), { foot: `${pct(s.paidViews / (s.views || 1), 0)} paid` })}
       ${statCard('Engagement rate', s.views ? pct(s.er) : '—', { foot: `${kmb(s.eng)} total` })}
       ${statCard('Spend', wonK(s.spend), { foot: `${wonK(cp.budget)} budget` })}
       ${statCard('CPM', s.reach ? money2(s.cpm) : '—', { hint: 'Spend ÷ reach × 1,000', foot: s.views ? `CPV ${money2(s.cpv)}` : '' })}
-    </div>
+    </div>`}
 
     <div id="cpTab"></div>`;
 
@@ -191,9 +192,9 @@ export function renderCampaign(view, id, tab) {
   $('#cpDelete').addEventListener('click', () => confirmDeleteCampaign(cp));
 
   const mount = $('#cpTab');
-  ({ roster: rosterTab, booking: bookingTab, calendar: campaignCalendarTab, content: contentTab,
+  ({ planner: plannerTab, roster: rosterTab, booking: bookingTab, calendar: campaignCalendarTab, content: contentTab,
      performance: campaignPerformanceTab, creators: campaignCreatorsTab, messages: messagesTab,
-     brief: briefTab, report: reportTab }[tab] || rosterTab)(mount, cp);
+     brief: briefTab, report: reportTab }[tab] || plannerTab)(mount, cp);
 }
 
 /* ------------------------------ edit & delete ------------------------------ */
@@ -670,7 +671,7 @@ export function openAddCreators(cp) {
     picked.forEach((c) => {
       if (DB.participants.some((p) => p.campaignId === cp.id && p.creatorId === c.id)) return;
       DB.participants.push({
-        id: cp.id + '-' + c.id, campaignId: cp.id, creatorId: c.id, stage: 'sourced',
+        id: cp.id + '-' + c.id, campaignId: cp.id, creatorId: c.id, stage: 'sourced', appliedAt: new Date().toISOString(),
         source: c.source, fee: 0, contactedAt: null, repliedAt: null, confirmedAt: null,
         shippedAt: null, dropReason: null, revisions: 0, content: null, note: ''
       });

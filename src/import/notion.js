@@ -565,6 +565,8 @@ export async function runNotionSync(cp, opts) {
       p.headcount = merge('headcount', p.headcount);
       if (ap.gender && cr) cr.gender = ap.gender;
       p.importedStatus = ap.statusRaw || p.importedStatus;
+      /* rows that pre-date the field get theirs on the next sync */
+      if (!p.appliedAt && row.createdTime) p.appliedAt = row.createdTime;
       /* a booking removed in Notion has to clear here too, or the calendar
          keeps an event for a visit that is no longer happening */
       const nextVisit = merge('visitAt', p.visitAt);
@@ -601,6 +603,9 @@ export async function runNotionSync(cp, opts) {
         fullName: ap.fullName, address: ap.address, contact: ap.contact, nationality: ap.nationality,
         visitAt: ap.visitAt, arrivingDate: '', otherSns: ap.otherSns, importedStatus: ap.statusRaw,
         formNotes: ap.formNotes, remark: ap.remark || '', headcount: ap.headcount || '',
+        /* when they actually applied — Notion stamps every submission, and
+           the planner's waiting queue is meaningless without it */
+        appliedAt: row.createdTime || new Date().toISOString(),
         notionPageId: row.pageId, content: null
       };
       applyStageDates(np, ap.stage, cp);
