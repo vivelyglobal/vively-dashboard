@@ -97,6 +97,34 @@ export function emptyState(title, body, opts) {
 }
 export const NO_DATA = () => !DB.campaigns.length && !DB.creators.length;
 
+/* Excel pastes a tab-separated clipboard into separate columns, and a
+   text/html table even keeps them when the text has commas in it. Both
+   flavours go on the clipboard; anything that cannot take the rich one
+   still gets the tabs. */
+export const cell = (c) => String(c == null ? '' : c);
+export function tableTsv(rows) {
+  return rows.map((r) => r.map((c) => cell(c).replace(/[\t\r\n]+/g, ' ')).join('\t')).join('\n');
+}
+export function tableHtml(rows) {
+  return '<table>' + rows.map((r, i) => '<tr>' + r.map((c) =>
+    `<t${i ? 'd' : 'h'}>${esc(cell(c))}</t${i ? 'd' : 'h'}>`).join('') + '</tr>').join('') + '</table>';
+}
+export function copyTable(rows, what) {
+  const tsv = tableTsv(rows);
+  const html = tableHtml(rows);
+  const done = () => toast((what || 'Copied') + ' — paste straight into Excel');
+  try {
+    if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+      navigator.clipboard.write([new ClipboardItem({
+        'text/plain': new Blob([tsv], { type: 'text/plain' }),
+        'text/html': new Blob([html], { type: 'text/html' })
+      })]).then(done).catch(() => copyText(tsv, what));
+      return;
+    }
+  } catch (e) { /* older browser: tabs still paste into columns */ }
+  copyText(tsv, what);
+}
+
 export function copyText(text, what) {
   navigator.clipboard.writeText(text).then(() => toast((what || 'Copied') + ' copied to clipboard'))
     .catch(() => {

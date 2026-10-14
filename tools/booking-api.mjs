@@ -418,6 +418,54 @@ ok('asked, it deletes every slot on the day and cancels the bookings',
   && !(await slotRow(d1._id)) && !(await slotRow(e2._id)) && (await bkRow('dayone')).status === 'cancelled');
 ok('an empty day deletes without asking', (await call('/api/booking/date/delete', { body: { scheduleId, date: day3 } })).status === 200);
 
+/* ---- wiping a campaign's booking back to a blank slate -------------
+
+   Last, because there is nothing left afterwards. */
+
+const count = async (name, filter) => (await col(name).find(filter).toArray()).length;
+const beforeWipe = {
+  slots: await count('booking_slots', { scheduleId }),
+  bookings: await count('campaign_bookings', { campaignId: 'cp_1' }),
+  invites: await count('booking_invites', { campaignId: 'cp_1' })
+};
+ok('there is something to wipe', beforeWipe.slots > 0 && beforeWipe.bookings > 0 && beforeWipe.invites > 0,
+  JSON.stringify(beforeWipe));
+ok('a wipe without the campaign id typed back is refused',
+  (await call('/api/booking/campaign/cp_1', { method: 'DELETE' })).status === 400);
+ok('and a mistyped one too',
+  (await call('/api/booking/campaign/cp_1?confirm=cp_2', { method: 'DELETE' })).status === 400);
+ok('nothing was removed by those attempts',
+  (await count('booking_slots', { scheduleId })) === beforeWipe.slots);
+
+const wipe = await call('/api/booking/campaign/cp_1?confirm=cp_1', { method: 'DELETE' });
+ok('typed back, it wipes and reports what went', wipe.status === 200
+  && wipe.body.slots === beforeWipe.slots && wipe.body.bookings === beforeWipe.bookings
+  && wipe.body.invites === beforeWipe.invites, JSON.stringify(wipe.body));
+ok('the slots, bookings, invites and the schedule are all gone', await (async () => {
+  const [sl, bk, iv, sc] = await Promise.all([
+    count('booking_slots', { scheduleId }),
+    count('campaign_bookings', { campaignId: 'cp_1' }),
+    count('booking_invites', { campaignId: 'cp_1' }),
+    count('booking_schedules', { campaignId: 'cp_1' })
+  ]);
+  return sl === 0 && bk === 0 && iv === 0 && sc === 0;
+})());
+ok('the old public link now 404s', (await call('/api/book/' + publicToken)).status === 404);
+ok('the campaign reads as never set up', await (async () => {
+  const r = await call('/api/booking/campaign/cp_1');
+  return r.status === 200 && r.body.schedule === null && !r.body.slots.length;
+})());
+ok('wiping again is harmless', await (async () => {
+  const r = await call('/api/booking/campaign/cp_1?confirm=cp_1', { method: 'DELETE' });
+  return r.status === 200 && r.body.alreadyGone === true;
+})());
+ok('a fresh schedule can be created for the same campaign afterwards', await (async () => {
+  const r = await call('/api/booking/schedule', { body: {
+    campaignId: 'cp_1', venueName: 'Sushikoji', timezone: 'Asia/Seoul', slotMinutes: 90
+  } });
+  return r.status === 200 && r.body.schedule.publicToken !== publicToken;
+})());
+
 srv.close();
 console.log(errs.length ? '\n' + errs.length + ' FAILED' : '\nall booking API checks passed');
 process.exit(errs.length ? 1 : 0);

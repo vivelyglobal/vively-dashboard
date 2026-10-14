@@ -2482,6 +2482,34 @@ function emptyState(title, body, opts) {
 }
 const NO_DATA = () => !DB.campaigns.length && !DB.creators.length;
 
+/* Excel pastes a tab-separated clipboard into separate columns, and a
+   text/html table even keeps them when the text has commas in it. Both
+   flavours go on the clipboard; anything that cannot take the rich one
+   still gets the tabs. */
+const cell = (c) => String(c == null ? '' : c);
+function tableTsv(rows) {
+  return rows.map((r) => r.map((c) => cell(c).replace(/[\t\r\n]+/g, ' ')).join('\t')).join('\n');
+}
+function tableHtml(rows) {
+  return '<table>' + rows.map((r, i) => '<tr>' + r.map((c) =>
+    `<t${i ? 'd' : 'h'}>${esc(cell(c))}</t${i ? 'd' : 'h'}>`).join('') + '</tr>').join('') + '</table>';
+}
+function copyTable(rows, what) {
+  const tsv = tableTsv(rows);
+  const html = tableHtml(rows);
+  const done = () => toast((what || 'Copied') + ' — paste straight into Excel');
+  try {
+    if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+      navigator.clipboard.write([new ClipboardItem({
+        'text/plain': new Blob([tsv], { type: 'text/plain' }),
+        'text/html': new Blob([html], { type: 'text/html' })
+      })]).then(done).catch(() => copyText(tsv, what));
+      return;
+    }
+  } catch (e) { /* older browser: tabs still paste into columns */ }
+  copyText(tsv, what);
+}
+
 function copyText(text, what) {
   navigator.clipboard.writeText(text).then(() => toast((what || 'Copied') + ' copied to clipboard'))
     .catch(() => {
@@ -13464,6 +13492,8 @@ const BOOKING = { campaignId: null, schedule: null, slots: [], bookings: [], inv
                   at: null, error: null, loading: false, openDates: {} };
 
 async function loadBooking(campaignId, force) {
+  /* an override is for one sitting on one campaign, never a setting */
+  if (BOOKING.campaignId !== campaignId) { BOOKING.inviteScope = SAFE_SCOPE; BOOKING.inviteAdvanced = false; }
   if (BOOKING.campaignId === campaignId && BOOKING.at && !force) return BOOKING;
   BOOKING.campaignId = campaignId;
   BOOKING.loading = true;
@@ -13502,13 +13532,78 @@ const inviteUrl = (tok) => location.origin + '/book/i/' + tok;
 /* A creator on the roster who could be invited but has not been. Blocked
    creators are left out: the blacklist is meant to keep them off a
    campaign, and an invite link is an invitation. */
-function bookableParticipants(cp) {
-  const invited = new Set(BOOKING.invites.map((i) => i.participantId));
-  const booked = new Set(BOOKING.bookings.map((b) => b.participantId).filter(Boolean));
+/* Who a booking link is for.
+
+   A campaign roster holds everybody who was ever considered. Sending a
+   booking link to all of them is how a sourced maybe ends up at the
+   restaurant. The default is the people the campaign has actually
+   confirmed — which is what a Notion sync writes when the form says
+   confirmed — and the wider scopes are a deliberate choice on screen. */
+const INVITE_SCOPES = [
+  ['confirmed', 'Confirmed only', (p) => STAGE_IDX[p.stage] >= STAGE_IDX.confirmed && p.stage !== 'dropped', ''],
+  ['shortlisted', 'Shortlisted and up', (p) => STAGE_IDX[p.stage] >= STAGE_IDX.shortlisted && p.stage !== 'dropped',
+    'includes unconfirmed creators'],
+  ['all', 'Everyone on the roster', (p) => p.stage !== 'dropped', 'includes unconfirmed creators']
+];
+const SAFE_SCOPE = 'confirmed';
+
+function inviteScope() {
+  const want = BOOKING.inviteScope || 'confirmed';
+  return INVITE_SCOPES.find((x) => x[0] === want) || INVITE_SCOPES[0];
+}
+
+/* Everyone in scope, whether or not they already have a link. */
+function invitableParticipants(cp, scope) {
+  const test = (INVITE_SCOPES.find((x) => x[0] === scope) || inviteScope())[2];
   return partsOf(cp.id).filter((p) => {
     const cr = byCreator[p.creatorId];
-    return cr && !isBlocked(cr) && !invited.has(p.id) && !booked.has(p.id);
+    return cr && !isBlocked(cr) && test(p);
   });
+}
+
+/* …and the ones still without one. */
+function bookableParticipants(cp, scope) {
+  const invited = new Set(BOOKING.invites.map((i) => i.participantId));
+  const booked = new Set(BOOKING.bookings.map((b) => b.participantId).filter(Boolean));
+  return invitableParticipants(cp, scope).filter((p) => !invited.has(p.id) && !booked.has(p.id));
+}
+
+/* The table the intern pastes into the spreadsheet: two columns, name in
+   A and link in B, one creator per row, and only creators who actually
+   have a link — a blank link column is how the wrong person gets sent
+   nothing or the wrong thing. Everything else lives in the CSV below. */
+function inviteRows(cp) {
+  const byPart = {};
+  (BOOKING.invites || []).forEach((i) => { byPart[i.participantId] = i; });
+  const rows = [['Name', 'Booking Link']];
+  invitableParticipants(cp).forEach((p) => {
+    const cr = byCreator[p.creatorId] || {};
+    const inv = byPart[p.id];
+    if (!inv) return;
+    rows.push([p.fullName || cr.name || cr.handle || '', inviteUrl(inv._id)]);
+  });
+  return rows;
+}
+
+/* The fuller picture, for whoever wants the working file rather than the
+   message list. Here a creator without a link is worth seeing. */
+function inviteRowsFull(cp) {
+  const byPart = {};
+  (BOOKING.invites || []).forEach((i) => { byPart[i.participantId] = i; });
+  const rows = [['Name', 'Handle', 'Stage', 'Booking', 'Link']];
+  invitableParticipants(cp).forEach((p) => {
+    const cr = byCreator[p.creatorId] || {};
+    const inv = byPart[p.id];
+    const bk = (BOOKING.bookings || []).find((b) => b.participantId === p.id);
+    rows.push([
+      p.fullName || cr.name || cr.handle || '',
+      cr.handle || '',
+      stageOf(p.stage).label,
+      bk ? `${bk.date} ${bk.time}` : 'not booked',
+      inv ? inviteUrl(inv._id) : ''
+    ]);
+  });
+  return rows;
 }
 
 function bookingTab(mount, cp) {
@@ -14340,7 +14435,10 @@ function parseVenueHours(text, base) {
 function bookingShareCard(cp) {
   const sc = BOOKING.schedule;
   const live = BOOKING.slots.filter((s) => s.status === 'open').length;
-  const invites = BOOKING.invites || [];
+  const scope = inviteScope();
+  const safeScope = scope[0] === SAFE_SCOPE;
+  const inScope = invitableParticipants(cp);
+  const invites = (BOOKING.invites || []).filter((i) => inScope.some((p) => p.id === i.participantId));
   const toInvite = bookableParticipants(cp);
   const dates = [...new Set(BOOKING.slots.map((s) => s.date))].sort();
   const span = dates.length
@@ -14363,7 +14461,32 @@ function bookingShareCard(cp) {
     <p class="card-sub">The invite link is the one to use: it knows who the creator is, so the booking matches
       itself to the roster and cannot become somebody else if it is forwarded.</p>
 
-    <div class="lbl" style="margin-top:12px">Invite links</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">
+      <span class="lbl" style="margin:0">Who gets a link</span>
+      <span class="pill ${safeScope ? 'green' : 'orange'}">${esc(scope[1])} · ${inScope.length}</span>
+      ${safeScope ? `<span style="font-size:11.5px;color:var(--text-3)">Shortlisted and unapproved creators are
+        left out, so nobody can be sent a link by mistake.</span>` : ''}
+      <div class="sp"></div>
+      <button class="btn xs" id="bkAdvanced">${BOOKING.inviteAdvanced ? 'Hide advanced' : 'Advanced'}</button>
+    </div>
+    ${!safeScope ? `<div class="note warn" style="margin-top:8px">
+      <strong>Override on — unconfirmed creators are included.</strong>
+      Links, the Excel copy and the CSV all cover ${inScope.length} ${scope[1].toLowerCase()}.
+      <button class="btn xs" id="bkScopeReset" style="margin-left:6px">Back to confirmed only</button>
+    </div>` : ''}
+    ${BOOKING.inviteAdvanced ? `<div class="note ${safeScope ? '' : 'warn'}" style="margin-top:8px">
+      <strong>Advanced — who gets a link.</strong>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:7px">
+        <select id="bkScope" style="width:auto;padding:4px 8px;font-size:12px">
+          ${INVITE_SCOPES.map(([id, label, , warn]) => `<option value="${id}" ${scope[0] === id ? 'selected' : ''}>${
+            label}${warn ? ' ⚠ ' + warn : ''} (${invitableParticipants(cp, id).length})</option>`).join('')}
+        </select>
+        <span style="font-size:11.5px;color:var(--text-3)">Anything wider than confirmed sends booking links to
+          creators the brand has not approved. Blacklisted and dropped creators are never included.</span>
+      </div>
+    </div>` : ''}
+
+    <div class="lbl" style="margin-top:12px">Invite links · ${inScope.length} ${scope[1].toLowerCase()}</div>
     ${invites.length ? `<div class="tbl-wrap" style="margin-top:6px;max-height:190px;overflow-y:auto"><table class="tbl"><tbody>
       ${invites.map((i) => {
         const b = BOOKING.bookings.find((x) => x.participantId === i.participantId);
@@ -14373,9 +14496,13 @@ function bookingShareCard(cp) {
       }).join('')}
     </tbody></table></div>` : '<p class="card-sub" style="margin:4px 0 0">No invites yet.</p>'}
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
-      ${toInvite.length ? `<button class="btn sm" id="bkInviteAll">Invite all ${toInvite.length} on the roster</button>` : ''}
-      ${invites.length ? '<button class="btn sm" id="bkCopyAll">Copy every link as a list</button>' : ''}
+      ${toInvite.length ? `<button class="btn sm" id="bkInviteAll">Make links for ${toInvite.length} more</button>` : ''}
+      ${invites.length ? `<button class="btn sm primary" id="bkCopyExcel">Copy for Excel (${invites.length})</button>` : ''}
+      ${invites.length ? '<button class="btn sm" id="bkCsv">Download full CSV</button>' : ''}
     </div>
+    ${invites.length ? `<p class="card-sub" style="margin-top:6px">Copy for Excel gives two columns — name in A,
+      booking link in B — one row per creator, ${invites.length} ${safeScope ? 'confirmed ' : ''}in all. The CSV is the
+      fuller working file: handle, stage and booking time as well.</p>` : ''}
 
     <div class="divider"></div>
     <div class="lbl">Open link — anyone holding it can book</div>
@@ -14390,7 +14517,109 @@ function bookingShareCard(cp) {
     <pre id="bkMsg" style="white-space:pre-wrap;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;
       padding:10px 12px;font-size:12.5px;line-height:1.6;margin:6px 0 0">${esc(message)}</pre>
     <button class="btn xs" id="bkCopyMsg" style="margin-top:8px">Copy message</button>
+
+    <div class="divider"></div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button class="btn sm" id="bkEditSetup">Edit booking settings</button>
+      <div class="sp"></div>
+      <button class="btn sm" id="bkWipe" style="color:var(--critical)">Delete booking and start again</button>
+    </div>
+    <p class="card-sub" style="margin-top:7px">Deleting removes the schedule, every date, every invite link and every
+      booking on this campaign. The creators are not told, and the links stop working.</p>
   </div>`;
+}
+
+/* ---- changing the settings after the first day ----
+   The setup form used to exist only while there was no schedule, so a
+   wrong venue name or time zone was permanent. It is the same form. */
+function openBookingSettings(cp) {
+  const sc = BOOKING.schedule;
+  const zones = ['Asia/Seoul', 'Asia/Tokyo', 'Asia/Bangkok', 'Asia/Singapore', 'Europe/London', 'America/New_York'];
+  openDrawer('Booking settings — ' + esc(cp.brand), `
+    <div class="grid g2" style="gap:10px">
+      <div class="field"><label>Venue name — what the creator sees</label>
+        <input type="text" id="bsVenue" value="${esc(sc.venueName || '')}"/></div>
+      <div class="field"><label>Time zone</label>
+        <select id="bsTz">${zones.concat(zones.includes(sc.timezone) ? [] : [sc.timezone])
+          .map((z) => `<option ${z === sc.timezone ? 'selected' : ''}>${esc(z)}</option>`).join('')}</select></div>
+      <div class="field"><label>How long each visit takes (minutes)</label>
+        <input type="number" id="bsMins" min="5" value="${esc(String(sc.slotMinutes || 90))}"/></div>
+      <div class="field"><label>Close booking this many hours before</label>
+        <input type="number" id="bsDeadline" min="0" value="${esc(String(sc.deadlineHours || 0))}"/></div>
+      <div class="field"><label>Most people per booking</label>
+        <input type="number" id="bsParty" min="1" value="${esc(String(sc.maxPartySize || 1))}"/></div>
+      <div class="field"><label>Status</label>
+        <select id="bsStatus">${['open', 'paused', 'closed'].map((x) =>
+          `<option ${sc.status === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+    </div>
+    <div class="field"><label>A note on the booking page</label>
+      <input type="text" id="bsNote" value="${esc(sc.noteForCreator || '')}"/></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn primary" id="bsSave">Save</button>
+      <button class="btn" id="bsCancel">Cancel</button>
+    </div>`);
+  $('#bsCancel').addEventListener('click', closeDrawer);
+  $('#bsSave').addEventListener('click', async () => {
+    try {
+      await bookingCall('/api/booking/schedule', {
+        campaignId: cp.id, venueName: $('#bsVenue').value.trim(), timezone: $('#bsTz').value,
+        slotMinutes: +$('#bsMins').value || 90, deadlineHours: +$('#bsDeadline').value || 0,
+        maxPartySize: +$('#bsParty').value || 1, status: $('#bsStatus').value,
+        noteForCreator: $('#bsNote').value.trim()
+      });
+      closeDrawer();
+      await loadBooking(cp.id, true);
+      toast('Booking settings saved'); render();
+    } catch (err) { toast(err.message); }
+  });
+}
+
+/* ---- the clean slate ----
+   Typed confirmation rather than a yes/no box: this throws away real
+   bookings, and the creators holding those links are not told. */
+function openBookingWipe(cp) {
+  const n = { slots: BOOKING.slots.length, bookings: BOOKING.bookings.length, invites: BOOKING.invites.length };
+  const booked = BOOKING.bookings.filter((b) => b.participantId).length;
+  openDrawer('Delete booking — ' + esc(cp.brand), `
+    <div class="flag-note"><span class="flag-mark blocked" style="margin-left:0">⊘</span>
+      <span><strong>This cannot be undone.</strong> ${n.slots} date${n.slots === 1 ? '' : 's'},
+      ${n.invites} invite link${n.invites === 1 ? '' : 's'} and ${n.bookings} booking${n.bookings === 1 ? '' : 's'}
+      are deleted. Every link already sent stops working, and nobody is told.</span></div>
+    ${booked ? `<label style="display:flex;gap:8px;align-items:flex-start;margin:12px 0;font-size:12.5px">
+      <input type="checkbox" id="bwClear" checked style="width:auto;margin-top:3px"/>
+      <span>Also clear the confirmed visit time these bookings put on ${booked} roster row${booked === 1 ? '' : 's'}.
+        Leave it ticked unless you are rebuilding the same dates.</span></label>` : ''}
+    <div class="field" style="margin-top:12px"><label>Type the campaign's brand to confirm — <strong>${esc(cp.brand)}</strong></label>
+      <input type="text" id="bwName" placeholder="${esc(cp.brand)}"/></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn primary" id="bwGo" style="background:var(--critical);border-color:var(--critical);color:#fff">Delete it all</button>
+      <button class="btn" id="bwCancel">Keep it</button>
+    </div>`);
+  $('#bwCancel').addEventListener('click', closeDrawer);
+  $('#bwGo').addEventListener('click', async () => {
+    if ($('#bwName').value.trim().toLowerCase() !== String(cp.brand || '').trim().toLowerCase()) {
+      toast('Type the brand exactly to confirm'); return;
+    }
+    const clear = $('#bwClear') ? $('#bwClear').checked : false;
+    const pids = BOOKING.bookings.map((b) => b.participantId).filter(Boolean);
+    try {
+      await bookingCall('/api/booking/campaign/' + encodeURIComponent(cp.id) + '?confirm=' + encodeURIComponent(cp.id), null, 'DELETE');
+      if (clear) {
+        pids.forEach((id) => {
+          const p = DB.participants.find((x) => x.id === id);
+          if (p) p.confirmedVisitAt = '';
+        });
+      }
+      RULE_DRAFT = null;
+      BOOKING.campaignId = null; BOOKING.at = null; BOOKING.schedule = null;
+      BOOKING.slots = []; BOOKING.bookings = []; BOOKING.invites = [];
+      closeDrawer();
+      await loadBooking(cp.id, true);
+      toast('Booking deleted — set it up again whenever you like');
+      render();
+      serverSave({ force: true, silent: true });
+    } catch (err) { toast(err.message); }
+  });
 }
 
 /* ---- wiring the availability card ---- */
@@ -14479,9 +14708,27 @@ function wireBookingShare(cp) {
   if (copy2) copy2.addEventListener('click', () => copyText(bookingUrl(sc.publicToken)));
   const msg = $('#bkCopyMsg');
   if (msg) msg.addEventListener('click', () => copyText($('#bkMsg').textContent));
-  const all = $('#bkCopyAll');
-  if (all) all.addEventListener('click', () => copyText((BOOKING.invites || [])
-    .map((i) => `${i.name || i.handle || i.participantId}: ${inviteUrl(i._id)}`).join('\n')));
+  const adv = $('#bkAdvanced');
+  if (adv) adv.addEventListener('click', () => { BOOKING.inviteAdvanced = !BOOKING.inviteAdvanced; render(); });
+  const scopeSel = $('#bkScope');
+  if (scopeSel) scopeSel.addEventListener('change', (e) => { BOOKING.inviteScope = e.target.value; render(); });
+  const scopeBack = $('#bkScopeReset');
+  if (scopeBack) scopeBack.addEventListener('click', () => { BOOKING.inviteScope = SAFE_SCOPE; render(); });
+  const xls = $('#bkCopyExcel');
+  if (xls) xls.addEventListener('click', () => {
+    const rows = inviteRows(cp);
+    copyTable(rows, `${rows.length - 1} name${rows.length === 2 ? '' : 's'} and link${rows.length === 2 ? '' : 's'}`);
+  });
+  const csv = $('#bkCsv');
+  if (csv) csv.addEventListener('click', () => {
+    const rows = inviteRowsFull(cp);
+    downloadFile(toCsv(rows[0], rows.slice(1)),
+      `${cp.brand.toLowerCase().replace(/\W+/g, '-')}-booking-links.csv`, 'text/csv;charset=utf-8');
+  });
+  const edit = $('#bkEditSetup');
+  if (edit) edit.addEventListener('click', () => openBookingSettings(cp));
+  const wipe = $('#bkWipe');
+  if (wipe) wipe.addEventListener('click', () => openBookingWipe(cp));
   const inviteAll = $('#bkInviteAll');
   if (inviteAll) inviteAll.addEventListener('click', async () => {
     const list = bookableParticipants(cp);

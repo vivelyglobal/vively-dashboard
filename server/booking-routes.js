@@ -608,6 +608,46 @@ function mountBookingRoutes(app, deps) {
     }
   }));
 
+  /* The clean slate.
+
+     Everything this campaign's booking owns: the schedule, its dates,
+     the invite links and every booking, confirmed or not. There is no
+     undo, so the campaign id has to be repeated in ?confirm= — a
+     mis-routed DELETE cannot wipe a live campaign by accident. The
+     visit times already projected onto the roster live in the workspace
+     document, not here; the dashboard clears those itself, because only
+     it knows which of them a person typed by hand. */
+  app.delete("/api/booking/campaign/:campaignId", requireStaff(async (req, res) => {
+    if (needsDb(res)) return;
+    const campaignId = String(req.params.campaignId || "").trim();
+    if (!campaignId) return res.status(400).json({ error: "Which campaign?" });
+    if (String(req.query.confirm || "") !== campaignId) {
+      return res.status(400).json({ error: "Deleting a campaign's booking needs ?confirm=<campaignId>." });
+    }
+    try {
+      const s = await schedules();
+      const schedule = await s.findOne({ campaignId });
+      if (!schedule) return res.json({ ok: true, alreadyGone: true, slots: 0, bookings: 0, invites: 0 });
+
+      const sl = await slots(), bk = await bookings(), inv = await invites();
+      const slotRows = await sl.find({ scheduleId: schedule._id }).toArray();
+      const bookingRows = await bk.find({ campaignId }).toArray();
+      const inviteRows = await inv.find({ campaignId }).toArray();
+
+      for (const row of slotRows) await sl.deleteOne({ _id: row._id });
+      for (const row of bookingRows) await bk.deleteOne({ _id: row._id });
+      for (const row of inviteRows) await inv.deleteOne({ _id: row._id });
+      await s.deleteOne({ _id: schedule._id });
+
+      console.log("Booking deleted for %s: %d slots, %d bookings, %d invites",
+        campaignId, slotRows.length, bookingRows.length, inviteRows.length);
+      return res.json({ ok: true, slots: slotRows.length, bookings: bookingRows.length, invites: inviteRows.length });
+    } catch (err) {
+      console.error("DELETE /api/booking/campaign failed:", err.message);
+      return res.status(502).json({ error: "Could not reach the database." });
+    }
+  }));
+
   /* ---- staff: invites ------------------------------------------------ */
 
   app.post("/api/booking/invite", requireStaff(async (req, res) => {

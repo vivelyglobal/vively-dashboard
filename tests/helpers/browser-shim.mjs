@@ -19,3 +19,6 @@ if (typeof globalThis.localStorage === 'undefined') {
     removeItem: (k) => store.delete(k)
   };
 }
+if (typeof globalThis.location === 'undefined') {
+  globalThis.location = { origin: 'https://dash.test', href: 'https://dash.test/', pathname: '/', search: '', hash: '' };
+}

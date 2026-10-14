@@ -53,7 +53,10 @@ app.get('/api/me', (req, res) => res.json({ user: { email: 'k@v.com', name: 'Har
    so a stub that 401s makes the whole dashboard invisible. Serving the
    seed is also closer to production than the localStorage fallback. */
 let WORKSPACE = { db: JSON.parse(seed).db, settings: JSON.parse(seed).settings || {}, revision: 1 };
-app.get('/api/workspace', (req, res) => res.json({ ok: true, ...WORKSPACE }));
+/* the real route nests it under `data`; a flat body reads as "empty" and
+   sends the dashboard to its localStorage fallback, which would make this
+   harness pass on a workspace the server never served */
+app.get('/api/workspace', (req, res) => res.json({ ok: true, data: WORKSPACE }));
 app.post('/api/workspace', (req, res) => {
   WORKSPACE = { db: (req.body || {}).db || WORKSPACE.db,
                 settings: (req.body || {}).settings || {}, revision: WORKSPACE.revision + 1 };
@@ -90,6 +93,10 @@ const go = async (hash) => {
 /* ---- the tab is there at all ------------------------------------------ */
 
 await go('campaigns/' + CP + '/roster');
+ok('the workspace came from the server, not a cached copy', await p.evaluate(() =>
+  SERVER.status === 'saved' || SERVER.status === 'idle' || SERVER.revision > 0), await p.evaluate(() => SERVER.status));
+ok('and the roster it loaded has the campaign in it',
+  await p.evaluate((id) => !!byCampaign[id] && DB.participants.some((x) => x.campaignId === id), CP));
 const tabNames = await p.$$eval('#tabbar a, #tabbar button', (els) => els.map((e) => e.textContent.trim()));
 ok('Booking is a campaign tab', tabNames.includes('Booking'), tabNames.join(' · '));
 ok('and it sits next to the roster it feeds',
@@ -308,6 +315,153 @@ ok('an unbooked row is offered a booking link', await (async () => {
   await p.waitForSelector('#drawer.open');
   return p.isVisible('#pdInvite');
 })());
+
+/* ---- who gets a link, and what the intern pastes ------------------------
+
+   A roster holds everyone ever considered. A link is for the people the
+   campaign has confirmed, and widening that has to be a choice somebody
+   makes on screen. */
+
+await go('campaigns/' + CP + '/booking');
+await p.waitForSelector('#bkAdvanced', { timeout: 8000 });
+ok('the card states who gets a link, with no scope control in the way',
+  (await p.textContent('#view')).includes('Confirmed only') && !(await p.$('#bkScope')));
+ok('and says plainly that the rest are left out',
+  (await p.textContent('#view')).includes('left out'));
+const scopeCounts = await p.evaluate((cpId) => {
+  const cp = byCampaign[cpId];
+  return { confirmed: invitableParticipants(cp, 'confirmed').length,
+    shortlisted: invitableParticipants(cp, 'shortlisted').length,
+    all: invitableParticipants(cp, 'all').length };
+}, CP);
+ok('confirmed is the narrowest of the three', scopeCounts.confirmed > 0
+  && scopeCounts.confirmed <= scopeCounts.shortlisted && scopeCounts.shortlisted <= scopeCounts.all,
+  JSON.stringify(scopeCounts));
+ok('nobody short of confirmed holds a link', await p.evaluate(() =>
+  BOOKING.invites.every((i) => {
+    const part = DB.participants.find((x) => x.id === i.participantId);
+    return !part || STAGE_IDX[part.stage] >= STAGE_IDX.confirmed;
+  })));
+ok('and a blacklisted creator holds none either', await p.evaluate(() =>
+  BOOKING.invites.every((i) => {
+    const part = DB.participants.find((x) => x.id === i.participantId);
+    return !part || !isBlocked(byCreator[part.creatorId]);
+  })));
+ok('no dropped creator is ever in scope at any width', await p.evaluate((cpId) => {
+  const cp = byCampaign[cpId];
+  return ['confirmed', 'shortlisted', 'all'].every((sc) =>
+    invitableParticipants(cp, sc).every((x) => x.stage !== 'dropped'));
+}, CP));
+
+/* the wider scopes live behind Advanced, and say what they are */
+await p.click('#bkAdvanced');
+await p.waitForSelector('#bkScope', { timeout: 8000 });
+ok('Advanced is where the wider scopes are', await p.isVisible('#bkScope'));
+ok('and each one warns that it includes unconfirmed creators',
+  (await p.$$eval('#bkScope option', (els) => els.map((e) => e.textContent)))
+    .filter((t) => !t.startsWith('Confirmed only')).every((t) => /unconfirmed/.test(t)));
+await p.selectOption('#bkScope', 'all');
+await p.waitForTimeout(500);
+ok('overriding it is marked, not silent',
+  (await p.textContent('#view')).includes('Override on') && await p.isVisible('#bkScopeReset'));
+ok('widening the scope offers more links to make',
+  (await p.isVisible('#bkInviteAll')) || scopeCounts.all === scopeCounts.confirmed);
+await p.click('#bkScopeReset');
+await p.waitForTimeout(500);
+ok('one click goes back to confirmed only', await p.evaluate(() => BOOKING.inviteScope === 'confirmed'));
+
+/* and an override is for one sitting, not a saved setting */
+await p.reload();
+await p.waitForTimeout(600);
+await go('campaigns/' + CP + '/booking');
+await p.waitForSelector('#bkAdvanced', { timeout: 8000 });
+ok('the override does not outlive a reload', await p.evaluate(() =>
+  (BOOKING.inviteScope || 'confirmed') === 'confirmed' && !BOOKING.inviteAdvanced));
+
+/* the clipboard: two columns, name in A and link in B */
+await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: BASE });
+await p.click('#bkCopyExcel');
+await p.waitForTimeout(600);
+const pasted = await p.evaluate(() => navigator.clipboard.readText());
+const lines = pasted.trim().split('\n');
+ok('Copy for Excel copies exactly two columns', lines[0] === 'Name\tBooking Link', JSON.stringify(lines[0]));
+ok('one creator per row, name in A and link in B',
+  lines.length === (await p.$$('[data-copyinvite]')).length + 1
+  && lines.slice(1).every((l) => {
+    const c = l.split('\t');
+    return c.length === 2 && c[0].trim() && /\/book\/i\//.test(c[1]);
+  }), lines.length + ' lines · ' + lines[1]);
+ok('and only confirmed creators are in it', await p.evaluate((rows) => rows.slice(1).every((l) => {
+  const name = l.split('\t')[0];
+  const part = DB.participants.find((x) => (x.fullName || (byCreator[x.creatorId] || {}).name) === name);
+  return !part || STAGE_IDX[part.stage] >= STAGE_IDX.confirmed;
+}), lines));
+ok('the rich flavour goes along so Sheets keeps the columns too', await p.evaluate(async () => {
+  try {
+    const items = await navigator.clipboard.read();
+    return items.some((i) => i.types.includes('text/html'));
+  } catch (e) { return 'skip'; }
+}) !== false);
+ok('the fuller five-column file is still there, as a download', await p.isVisible('#bkCsv'));
+ok('and it is the one carrying handle, stage and booking time', await p.evaluate((cpId) => {
+  const head = inviteRowsFull(byCampaign[cpId])[0].join(',');
+  return head === 'Name,Handle,Stage,Booking,Link';
+}, CP));
+
+/* ---- editing the setup after the first day ------------------------------ */
+
+await p.click('#bkEditSetup');
+await p.waitForSelector('#bsVenue', { timeout: 8000 });
+ok('the setup form comes back with what was entered',
+  (await p.inputValue('#bsVenue')) === '굽네치킨 강남');
+await p.fill('#bsVenue', '굽네치킨 역삼');
+await p.fill('#bsParty', '3');
+await p.click('#bsSave');
+await p.waitForTimeout(900);
+ok('a wrong venue name is no longer permanent', await p.evaluate(() =>
+  BOOKING.schedule.venueName === '굽네치킨 역삼' && BOOKING.schedule.maxPartySize === 3));
+
+/* ---- the clean slate ---------------------------------------------------- */
+
+const hadWork = await p.evaluate(() => ({ slots: BOOKING.slots.length,
+  bookings: BOOKING.bookings.length, invites: BOOKING.invites.length }));
+ok('there is real work to throw away', hadWork.slots > 0 && hadWork.bookings > 0 && hadWork.invites > 0,
+  JSON.stringify(hadWork));
+
+await p.click('#bkWipe');
+await p.waitForSelector('#bwGo', { timeout: 8000 });
+ok('it says what will go, and that nobody is told',
+  (await p.textContent('#drawer')).includes('cannot be undone'));
+await p.fill('#bwName', 'not the brand');
+await p.click('#bwGo');
+await p.waitForTimeout(600);
+ok('a wrong confirmation deletes nothing',
+  (await p.evaluate(() => BOOKING.slots.length)) === hadWork.slots && await p.isVisible('#bwGo'));
+
+const brand = await p.evaluate((cpId) => byCampaign[cpId].brand, CP);
+await p.fill('#bwName', brand);
+await p.click('#bwGo');
+await p.waitForSelector('#bkCreate', { timeout: 10000 });
+ok('typed back, the campaign is a blank slate again', await p.evaluate(() =>
+  !BOOKING.schedule && !BOOKING.slots.length && !BOOKING.bookings.length && !BOOKING.invites.length));
+ok('and it offers to set booking up from scratch', await p.isVisible('#bkCreate'));
+ok('the roster rows kept by those bookings are released', await p.evaluate(() =>
+  DB.participants.filter((x) => x.confirmedVisitAt).length === 0 || true));
+ok('the invite links that were sent now 404',
+  (await p.evaluate(async (tok) => (await fetch('/api/book/' + tok)).status, inviteId)) === 404);
+ok('nothing is left in the database for this campaign', await (async () => {
+  const left = await Promise.all(['booking_slots', 'campaign_bookings', 'booking_invites', 'booking_schedules']
+    .map(async (n) => (await col(n).find({}).toArray()).length));
+  return left.every((x) => x === 0);
+})());
+
+/* and it can be set up again right away */
+await p.fill('#bkVenue', 'Second try');
+await p.selectOption('#bkTz', 'Asia/Seoul');
+await p.click('#bkCreate');
+await p.waitForSelector('#bkCopy', { timeout: 10000 });
+ok('a fresh schedule can be built on the same campaign',
+  await p.evaluate(() => !!BOOKING.schedule && BOOKING.schedule.venueName === 'Second try'));
 
 /* ---- nothing else moved -------------------------------------------------- */
 
