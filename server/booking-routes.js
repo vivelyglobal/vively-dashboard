@@ -195,6 +195,15 @@ function mountBookingRoutes(app, deps) {
         noteForCreator: String(body.noteForCreator || "").slice(0, 2000),
         updatedAt: new Date()
       };
+      /* The weekly rule the dates were generated from. Stored so the setup
+         screen can show it back and regenerate, never read to decide what is
+         bookable — the slots are the truth, as they always were. */
+      if (body.rule && typeof body.rule === "object") patch.rule = body.rule;
+      if (body.mode === "request" || body.mode === "instant") patch.mode = body.mode;
+      if (body.language === "en" || body.language === "ko") patch.language = body.language;
+      if (body.requestExpiryHours != null) {
+        patch.requestExpiryHours = Math.max(0, Math.min(336, Math.floor(Number(body.requestExpiryHours) || 0)));
+      }
       if (Array.isArray(body.closedDates)) {
         patch.closedDates = body.closedDates.map(B.normDate).filter(Boolean);
       }
@@ -268,6 +277,95 @@ function mountBookingRoutes(app, deps) {
         return res.status(409).json({ error: "That time already exists on that date." });
       }
       console.error("POST /api/booking/slot failed:", err.message);
+      return res.status(502).json({ error: "Could not reach the database." });
+    }
+  }));
+
+  /* Fifteen days of availability in one request.
+
+     The weekly rule is expanded in the browser — the preview the person
+     approved and what gets written have to be the same list, and one
+     expander means they cannot drift. This end validates every row the
+     same way the single-slot route does, and a time that already exists
+     on that date is skipped rather than refused: generating twice is a
+     normal thing to do after editing a rule, and it must never duplicate
+     a day or disturb a booked one. */
+  app.post("/api/booking/slots/bulk", requireStaff(async (req, res) => {
+    if (needsDb(res)) return;
+    const body = req.body || {};
+    const rows = Array.isArray(body.slots) ? body.slots : [];
+    if (!rows.length) return res.status(400).json({ error: "No dates to add." });
+    if (rows.length > 400) return res.status(400).json({ error: "That is more than 400 times — narrow the date range." });
+
+    try {
+      const s = await schedules();
+      const schedule = await s.findOne({ _id: String(body.scheduleId || "") });
+      if (!schedule) return res.status(404).json({ error: "No booking schedule for that campaign yet." });
+
+      const sl = await slots();
+      const already = new Set((await sl.find({ scheduleId: schedule._id }).toArray()).map((x) => x.date + " " + x.time));
+      const created = [];
+      const skipped = [];
+      const refused = [];
+
+      for (const row of rows) {
+        const check = B.validateSlot(row);
+        if (!check.ok) { refused.push({ row, why: check.message }); continue; }
+        const stamp = check.date + " " + check.time;
+        if (already.has(stamp)) { skipped.push(stamp); continue; }
+        const startsAt = B.wallClockToInstant(check.date, check.time, schedule.timezone);
+        if (!startsAt) { refused.push({ row, why: "unreadable in " + schedule.timezone }); continue; }
+        const minutes = Math.max(5, Math.floor(Number(row.minutes) || schedule.slotMinutes || 90));
+        already.add(stamp);
+        created.push({
+          _id: newId("slt"), scheduleId: schedule._id, campaignId: schedule.campaignId,
+          date: check.date, time: check.time, startsAt,
+          endsAt: new Date(startsAt.getTime() + minutes * 60000),
+          timezone: schedule.timezone, capacity: check.capacity, booked: 0, status: "open",
+          note: String(row.note || "").slice(0, 200),
+          generated: true, createdAt: new Date(), updatedAt: new Date()
+        });
+      }
+
+      if (created.length) {
+        try { await sl.insertMany(created, { ordered: false }); }
+        catch (err) { if (!err || err.code !== 11000) throw err; }
+      }
+      return res.json({ ok: true, created: created.length, skipped: skipped.length, refused });
+    } catch (err) {
+      console.error("POST /api/booking/slots/bulk failed:", err.message);
+      return res.status(502).json({ error: "Could not reach the database." });
+    }
+  }));
+
+  /* Clearing a range before regenerating. Only ever removes slots nobody
+     has booked; a booked day survives a rule change and is reported back
+     so the person can move it themselves. */
+  app.post("/api/booking/slots/clear", requireStaff(async (req, res) => {
+    if (needsDb(res)) return;
+    const body = req.body || {};
+    const from = B.normDate(body.from), to = B.normDate(body.to);
+    if (!from || !to) return res.status(400).json({ error: "A date range, as YYYY-MM-DD." });
+    try {
+      const s = await schedules();
+      const schedule = await s.findOne({ _id: String(body.scheduleId || "") });
+      if (!schedule) return res.status(404).json({ error: "No booking schedule for that campaign yet." });
+
+      const sl = await slots();
+      const bkCol = await bookings();
+      const inRange = (await sl.find({ scheduleId: schedule._id }).toArray())
+        .filter((x) => x.date >= from && x.date <= to);
+      let removed = 0;
+      const kept = [];
+      for (const slot of inRange) {
+        const live = await bkCol.find({ slotId: slot._id, status: { $ne: "cancelled" } }).toArray();
+        if (live.length) { kept.push(slot.date + " " + slot.time); continue; }
+        await sl.deleteOne({ _id: slot._id });
+        removed++;
+      }
+      return res.json({ ok: true, removed, kept });
+    } catch (err) {
+      console.error("POST /api/booking/slots/clear failed:", err.message);
       return res.status(502).json({ error: "Could not reach the database." });
     }
   }));

@@ -434,6 +434,32 @@ tr.flagged-caution > td:first-child, .kb-card.flagged-caution {
   border-color: color-mix(in srgb, var(--warning) 45%, var(--line));
   background: color-mix(in srgb, var(--warning) 8%, transparent);
 }
+/* ---- booking: the weekly rule and its preview ---- */
+.bk-dayrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 0; border-top: 1px dashed var(--line); }
+.bk-dayrow:first-child { border-top: 0; }
+.bk-dayrow label { min-width: 74px; }
+.bk-dayrow input[type="time"] { width: 122px; }
+.bk-dayrow.off label { color: var(--text-3); }
+.bk-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--surface-2);
+  border-radius: 999px; padding: 3px 10px; font-size: 11.5px; color: var(--text-2); }
+.bk-chip .x { color: var(--text-3); cursor: pointer; }
+.bk-chip .x:hover { color: var(--critical); }
+.bk-dow { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; margin-bottom: 4px; }
+.bk-dow span { text-align: center; font-size: 10px; color: var(--text-3); }
+.bk-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+.bk-cell { aspect-ratio: 1 / 0.82; border-radius: 6px; background: var(--surface-2); display: flex; flex-direction: column;
+  align-items: center; justify-content: center; font-size: 11px; color: var(--text-3); }
+.bk-cell.out { background: none; }
+.bk-cell.open { background: color-mix(in srgb, var(--blue) 16%, var(--surface-2)); color: var(--text); }
+.bk-cell.shut { background: repeating-linear-gradient(45deg, var(--surface-2), var(--surface-2) 4px, var(--surface-3) 4px, var(--surface-3) 8px); }
+.bk-cell.hol { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--s5) 60%, transparent); }
+.bk-cell i { font-style: normal; font-size: 9px; opacity: .8; }
+.bk-legend { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; font-size: 11px; color: var(--text-3); }
+.bk-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
+.bk-legend i.open { background: color-mix(in srgb, var(--blue) 45%, var(--surface-2)); }
+.bk-legend i.shut { background: var(--surface-3); }
+.bk-legend i.hol { background: var(--s5); }
+
 /* ---- planner: the tab a campaign opens on ---- */
 .g5 { grid-template-columns: repeat(5, minmax(0,1fr)); }
 /* The three columns stack on how much room they have, not on how wide
