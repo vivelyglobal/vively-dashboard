@@ -323,10 +323,7 @@ export function wireBookingBoard(cp) {
 
   $('#bkCopy').addEventListener('click', () => copyText(bookingUrl(sc.publicToken)));
   $('#bkPause').addEventListener('click', () => guard(
-    () => bookingCall('/api/booking/schedule', { campaignId: cp.id, timezone: sc.timezone,
-      slotMinutes: sc.slotMinutes, deadlineHours: sc.deadlineHours, maxPartySize: sc.maxPartySize,
-      venueName: sc.venueName, noteForCreator: sc.noteForCreator,
-      status: sc.status === 'paused' ? 'open' : 'paused' }),
+    () => patchSchedule(cp, { status: sc.status === 'paused' ? 'open' : 'paused' }),
     sc.status === 'paused' ? 'Booking reopened' : 'Booking paused'));
 
   $('#bkAddDate').addEventListener('click', () => openAddBookingDate(cp));
@@ -635,7 +632,7 @@ export function defaultBookingRule() {
   return {
     days: { Mon: null, Tue: ['18:30', '19:30'], Wed: ['18:30', '19:30'], Thu: ['18:30', '19:30'],
             Fri: ['18:30', '19:30'], Sat: ['18:30', '19:30'], Sun: ['18:00', '19:00'] },
-    stepMinutes: 15,
+    slotsPerDay: 1,
     perDay: 1,
     from: iso(start),
     to: iso(end),
@@ -650,6 +647,16 @@ export const ruleMinutes = (t) => {
 export const ruleTime = (n) => String(Math.floor(n / 60)).padStart(2, '0') + ':' + String(n % 60).padStart(2, '0');
 export const ruleDayName = (d) => RULE_DAYS[(d.getDay() + 6) % 7];
 
+/* How many times a day the venue will take, which is the number most
+   venues actually say out loud — "one table a night", "three sittings".
+   An older rule counted in minutes between times instead; it still works
+   and is converted the first time it is opened. */
+export const RULE_MAX_SLOTS = 24;
+export function ruleSlotCount(rule) {
+  const n = Math.floor(Number((rule || {}).slotsPerDay));
+  return n >= 1 ? Math.min(RULE_MAX_SLOTS, n) : null;
+}
+
 /* every exact time a creator could pick on one weekday */
 export function ruleTimesFor(rule, dayName) {
   const w = (rule.days || {})[dayName];
@@ -657,10 +664,34 @@ export function ruleTimesFor(rule, dayName) {
   const from = ruleMinutes(w[0]);
   const to = ruleMinutes(w[1] || w[0]);
   if (from == null || to == null || to < from) return from == null ? [] : [ruleTime(from)];
-  const step = Math.max(5, Math.floor(Number(rule.stepMinutes) || 15));
+  const want = ruleSlotCount(rule);
+  if (want == null) {                       /* a rule written before the count existed */
+    const step = Math.max(5, Math.floor(Number(rule.stepMinutes) || 15));
+    const out = [];
+    for (let t = from; t <= to; t += step) out.push(ruleTime(t));
+    return out;
+  }
+  if (want === 1 || to === from) return [ruleTime(from)];
+  /* spread them across the window, first on the hour it opens and last on
+     the hour it shuts, rounded to five minutes so the times read well */
+  const gap = Math.max(5, Math.round((to - from) / (want - 1) / 5) * 5);
   const out = [];
-  for (let t = from; t <= to; t += step) out.push(ruleTime(t));
+  for (let i = 0; i < want - 1; i++) {
+    const label = ruleTime(Math.min(to, from + i * gap));
+    if (!out.includes(label)) out.push(label);     /* a narrow window simply fits fewer */
+  }
+  const last = ruleTime(to);
+  if (!out.includes(last)) out.push(last);         /* the window shuts when the venue said */
   return out;
+}
+
+/* An older rule, or one read out of a pasted message, counts in minutes.
+   Turn that into the number of times it was already producing, once. */
+export function ruleWithSlotCount(rule) {
+  if (!rule || ruleSlotCount(rule) != null) return rule;
+  const open = RULE_DAYS.find((d) => Array.isArray((rule.days || {})[d]) && (rule.days[d] || [])[0]);
+  rule.slotsPerDay = open ? Math.max(1, ruleTimesFor(rule, open).length) : 1;
+  return rule;
 }
 
 /* Every day in the range, with the times it opens and why it does not.
@@ -715,20 +746,53 @@ export function bookingRuleSummary(rule, opts) {
   const days = expandBookingRule(rule, o);
   const live = days.filter((d) => d.open);
   const perDay = Math.max(1, Math.floor(Number(rule.perDay) || 1));
+  /* how many times a day it really offers, taken from an open day rather
+     than from the setting, so a window too narrow to fit them cannot
+     make this sentence lie */
+  const perTimes = open.length ? ruleTimesFor(rule, open[0]).length : 0;
 
   if (o.ko) {
     const windows = {};
     open.forEach((d) => { const w = rule.days[d].join('–'); (windows[w] = windows[w] || []).push(RULE_DAY_KO[d]); });
     return `${Object.entries(windows).map(([w, ds]) => `${ds.join('·')}요일 ${w} 도착`).join(' / ') || '가능한 요일 없음'}`
       + `${shut.length ? ` · ${shut.map((d) => RULE_DAY_KO[d]).join('·')}요일 휴무` : ''}`
-      + ` · 하루 ${perDay}팀 · 예약 가능 ${live.length}일`;
+      + ` · 하루 ${perTimes}타임${perDay > 1 ? ` · 타임당 ${perDay}팀` : ''} · 예약 가능 ${live.length}일`;
   }
   const windows = {};
   open.forEach((d) => { const w = rule.days[d].join('–'); (windows[w] = windows[w] || []).push(d); });
   const parts = Object.entries(windows).map(([w, ds]) => `${ds.join(', ')} arrive ${w}`);
   return `${parts.join('. ') || 'No days open yet'}.`
     + `${shut.length ? ` Closed ${shut.join(', ')}.` : ''}`
-    + ` ${perDay} booking a day, ${live.length} bookable day${live.length === 1 ? '' : 's'}.`;
+    + ` ${perTimes} time${perTimes === 1 ? '' : 's'} a day`
+    + `${perDay > 1 ? `, ${perDay} creators each` : ''}`
+    + `, ${live.length} bookable day${live.length === 1 ? '' : 's'}.`;
+}
+
+/* The window the group editor starts from: whatever the first open day
+   already says, so "apply to Mon–Fri" usually needs no typing at all. */
+export function ruleFirstWindow(rule) {
+  const open = RULE_DAYS.find((d) => Array.isArray((rule.days || {})[d]) && (rule.days[d] || [])[0]);
+  const w = open ? rule.days[open] : null;
+  return [w ? w[0] : '18:30', w ? (w[1] || w[0]) : '19:30'];
+}
+
+export const RULE_GROUPS = {
+  weekdays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
+  weekend: ['Sat', 'Sun'],
+  open: null,                      /* worked out from the rule itself */
+  all: RULE_DAYS
+};
+
+/* One window onto several days at once. A day in the group that was
+   closed is opened — choosing Mon–Fri and getting four of them is the
+   kind of half-done that costs an afternoon. Days outside it are left
+   exactly as they were. */
+export function applyRuleWindow(rule, which, from, to) {
+  const group = which === 'open'
+    ? RULE_DAYS.filter((d) => Array.isArray(rule.days[d]))
+    : (RULE_GROUPS[which] || []);
+  group.forEach((d) => { rule.days[d] = [from, to]; });
+  return group;
 }
 
 /* ---- the setup card itself ---- */
@@ -737,7 +801,7 @@ export let RULE_DRAFT = null;          /* what is on screen but not yet generate
 
 export function bookingRuleOf(sc) {
   if (RULE_DRAFT) return RULE_DRAFT;
-  RULE_DRAFT = JSON.parse(JSON.stringify((sc && sc.rule) || defaultBookingRule()));
+  RULE_DRAFT = ruleWithSlotCount(JSON.parse(JSON.stringify((sc && sc.rule) || defaultBookingRule())));
   return RULE_DRAFT;
 }
 
@@ -769,6 +833,8 @@ export function bookingAvailabilityCard(cp) {
   const existing = new Set(BOOKING.slots.map((s) => s.date + ' ' + s.time));
   const toAdd = bookingRuleSlots(rule, { holidays: holidayList(), closedDates: sc.closedDates || [], slotMinutes: sc.slotMinutes })
     .filter((s) => !existing.has(s.date + ' ' + s.time)).length;
+  const dayCap = Math.max(0, Math.floor(Number(sc.maxPerDay) || 0));
+  const bulkWindow = ruleFirstWindow(rule);
 
   return `<div class="card" style="margin-bottom:14px">
     <div class="card-head"><h3>When creators can come</h3>
@@ -789,9 +855,37 @@ export function bookingAvailabilityCard(cp) {
       <strong style="font-size:12.5px">The weekly rule</strong>
       <div class="sp"></div>
       <label style="font-size:11.5px;color:var(--text-3);display:flex;align-items:center;gap:6px;margin:0">
-        a time every <input type="number" id="bkStep" value="${rule.stepMinutes}" min="5" max="120" step="5" style="width:62px;padding:3px 6px;font-size:12px"/> min</label>
+        <input type="number" id="bkSlotsPerDay" value="${ruleSlotCount(rule) || 1}" min="1" max="${RULE_MAX_SLOTS}"
+          style="width:52px;padding:3px 6px;font-size:12px"/> time slot${(ruleSlotCount(rule) || 1) === 1 ? '' : 's'} a day</label>
       <label style="font-size:11.5px;color:var(--text-3);display:flex;align-items:center;gap:6px;margin:0">
-        <input type="number" id="bkPerDay" value="${rule.perDay}" min="1" max="20" style="width:52px;padding:3px 6px;font-size:12px"/> booking${rule.perDay === 1 ? '' : 's'} a day</label>
+        <input type="number" id="bkPerDay" value="${rule.perDay}" min="1" max="20" style="width:52px;padding:3px 6px;font-size:12px"/>
+        creator${rule.perDay === 1 ? '' : 's'} per time slot</label>
+    </div>
+
+    <div class="note${dayCap ? '' : ''}" style="margin:0 0 10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <strong>Max teams per day</strong>
+      <input type="number" id="bkMaxPerDay" value="${dayCap}" min="0" max="100"
+        style="width:62px;padding:3px 6px;font-size:12px"/>
+      <span style="font-size:11.5px;color:var(--text-3)">0 = unlimited. ${dayCap
+        ? `However many times are on offer, the ${dayCap === 1 ? 'first team closes' : `${dayCap}th team closes`}
+           the whole day. This is the one to use when the venue will take one team a night but is easy about when.`
+        : 'A day takes as many teams as it has times. Set 1 when the venue will only have one team that day.'}</span>
+    </div>
+
+    <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin:0 0 8px;font-size:11.5px;color:var(--text-3)">
+      <strong style="font-size:11.5px;color:var(--text-2)">Set several days at once</strong>
+      <input type="time" id="bkBulkFrom" value="${esc(bulkWindow[0])}"/>
+      <span>–</span>
+      <input type="time" id="bkBulkTo" value="${esc(bulkWindow[1])}"/>
+      <span>on</span>
+      <select id="bkBulkWho" style="width:auto;padding:3px 6px;font-size:12px">
+        <option value="weekdays">Mon–Fri</option>
+        <option value="weekend">Sat &amp; Sun</option>
+        <option value="open">every open day</option>
+        <option value="all">every day of the week</option>
+      </select>
+      <button class="btn xs" id="bkBulkApply">Apply</button>
+      <span>Opens those days if they are closed. The rest are left alone.</span>
     </div>
     <div id="bkRuleRows">${RULE_DAYS.map((d) => {
       const w = rule.days[d];
@@ -803,7 +897,9 @@ export function bookingAvailabilityCard(cp) {
           <input type="time" data-bkfrom="${d}" value="${esc(w[0])}"/>
           <span style="color:var(--text-3)">–</span>
           <input type="time" data-bkto="${d}" value="${esc(w[1] || w[0])}"/>
-          <span style="font-size:11.5px;color:var(--text-3)">${n} time${n === 1 ? '' : 's'}</span>`
+          <span style="font-size:11.5px;color:var(--text-3)" title="${esc(ruleTimesFor(rule, d).join(', '))}">${
+            n === 1 ? ruleTimesFor(rule, d)[0] : n + ' times: ' + ruleTimesFor(rule, d).join(', ')}</span>
+          <button class="btn xs" data-bkcopyday="${d}" title="Use ${esc(w[0])}–${esc(w[1] || w[0])} on every other open day">Copy to open days</button>`
         : '<span style="font-size:11.5px;color:var(--text-3)">closed</span>'}
       </div>`;
     }).join('')}</div>
@@ -843,6 +939,8 @@ export function bookingAvailabilityCard(cp) {
         <div style="font-size:12px;color:var(--text-3);margin-bottom:10px">
           ${live.length} day${live.length === 1 ? '' : 's'} · ${times} time${times === 1 ? '' : 's'} ·
           ${toAdd ? `<strong style="color:var(--text-2)">${toAdd} new</strong>` : 'nothing new to add'}
+          ${dayCap ? `<br/>Capped at ${dayCap} team${dayCap === 1 ? '' : 's'} a day —
+            at most <strong style="color:var(--text-2)">${live.length * dayCap}</strong> visits over the whole range.` : ''}
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn primary" id="bkGenerate" ${toAdd ? '' : 'disabled'}>Generate ${toAdd || ''} time${toAdd === 1 ? '' : 's'}</button>
@@ -1058,6 +1156,25 @@ export function bookingShareCard(cp) {
   </div>`;
 }
 
+/* Change one thing about the schedule without flattening the rest: the
+   route rebuilds the whole document from the body, so every field it
+   knows has to travel with the change. */
+export async function patchSchedule(cp, changes) {
+  const sc = BOOKING.schedule || {};
+  await bookingCall('/api/booking/schedule', Object.assign({
+    campaignId: cp.id,
+    venueName: sc.venueName || '',
+    timezone: sc.timezone,
+    slotMinutes: sc.slotMinutes || 90,
+    deadlineHours: sc.deadlineHours || 0,
+    maxPartySize: sc.maxPartySize || 1,
+    maxPerDay: sc.maxPerDay || 0,
+    status: sc.status || 'open',
+    noteForCreator: sc.noteForCreator || ''
+  }, changes || {}));
+  await loadBooking(cp.id, true);
+}
+
 /* ---- changing the settings after the first day ----
    The setup form used to exist only while there was no schedule, so a
    wrong venue name or time zone was permanent. It is the same form. */
@@ -1077,6 +1194,8 @@ export function openBookingSettings(cp) {
         <input type="number" id="bsDeadline" min="0" value="${esc(String(sc.deadlineHours || 0))}"/></div>
       <div class="field"><label>Most people per booking</label>
         <input type="number" id="bsParty" min="1" value="${esc(String(sc.maxPartySize || 1))}"/></div>
+      <div class="field"><label>Max teams per day — 0 = unlimited</label>
+        <input type="number" id="bsMaxPerDay" min="0" max="100" value="${esc(String(sc.maxPerDay || 0))}"/></div>
       <div class="field"><label>Status</label>
         <select id="bsStatus">${['open', 'paused', 'closed'].map((x) =>
           `<option ${sc.status === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
@@ -1094,6 +1213,7 @@ export function openBookingSettings(cp) {
         campaignId: cp.id, venueName: $('#bsVenue').value.trim(), timezone: $('#bsTz').value,
         slotMinutes: +$('#bsMins').value || 90, deadlineHours: +$('#bsDeadline').value || 0,
         maxPartySize: +$('#bsParty').value || 1, status: $('#bsStatus').value,
+        maxPerDay: Math.max(0, Math.floor(+$('#bsMaxPerDay').value) || 0),
         noteForCreator: $('#bsNote').value.trim()
       });
       closeDrawer();
@@ -1187,8 +1307,45 @@ export function wireBookingAvailability(cp) {
   $$('[data-bkto]').forEach((i) => i.addEventListener('change', () => {
     const d = i.dataset.bkto; rule.days[d] = [(rule.days[d] || [])[0] || i.value, i.value]; redraw();
   }));
-  $('#bkStep').addEventListener('change', (e) => { rule.stepMinutes = Math.max(5, +e.target.value || 15); redraw(); });
+  $('#bkSlotsPerDay').addEventListener('change', (e) => {
+    rule.slotsPerDay = Math.min(RULE_MAX_SLOTS, Math.max(1, Math.floor(+e.target.value) || 1));
+    delete rule.stepMinutes;                /* the count is the rule now */
+    redraw();
+  });
   $('#bkPerDay').addEventListener('change', (e) => { rule.perDay = Math.max(1, +e.target.value || 1); redraw(); });
+
+  /* the day cap lives on the schedule, not the rule: it has to hold for
+     slots that already exist, and the server is what enforces it */
+  $('#bkMaxPerDay').addEventListener('change', async (e) => {
+    const n = Math.max(0, Math.min(100, Math.floor(+e.target.value) || 0));
+    e.target.disabled = true;
+    try {
+      await patchSchedule(cp, { maxPerDay: n });
+      toast(n ? `Max ${n} team${n === 1 ? '' : 's'} a day` : 'Unlimited — a day takes every time on it');
+    } catch (err) { toast(err.message); }
+    e.target.disabled = false;
+    redraw();
+  });
+
+  $('#bkBulkApply').addEventListener('click', () => {
+    const from = $('#bkBulkFrom').value, to = $('#bkBulkTo').value;
+    if (!from || !to) { toast('Set both times first'); return; }
+    if (ruleMinutes(to) < ruleMinutes(from)) { toast('The window ends before it starts'); return; }
+    const which = $('#bkBulkWho').value;
+    const done = applyRuleWindow(rule, which, from, to);
+    if (!done.length) { toast('No day in that group yet'); return; }
+    toast(`${done.join(', ')} set to ${from}–${to}`);
+    redraw();
+  });
+  $$('[data-bkcopyday]').forEach((b) => b.addEventListener('click', () => {
+    const src = b.dataset.bkcopyday;
+    const w = rule.days[src];
+    if (!w) return;
+    const done = RULE_DAYS.filter((d) => d !== src && Array.isArray(rule.days[d]));
+    done.forEach((d) => { rule.days[d] = [w[0], w[1] || w[0]]; });
+    toast(done.length ? `${src}'s times copied to ${done.join(', ')}` : 'No other day is open to copy onto');
+    redraw();
+  }));
   $('#bkFrom').addEventListener('change', (e) => { rule.from = e.target.value; redraw(); });
   $('#bkTo').addEventListener('change', (e) => { rule.to = e.target.value; redraw(); });
   $('#bkSkipHol').addEventListener('change', (e) => { rule.skipHolidays = e.target.value === 'skip'; redraw(); });
@@ -1212,9 +1369,12 @@ export function wireBookingAvailability(cp) {
     btn.disabled = true; btn.textContent = 'Generating…';
     try {
       const r = await bookingCall('/api/booking/slots/bulk', { scheduleId: sc._id, slots: rows });
-      /* the rule is kept so the screen can show it back and regenerate */
-      await bookingCall('/api/booking/schedule', { campaignId: cp.id, timezone: sc.timezone, rule });
-      await loadBooking(cp.id, true);
+      /* The rule is kept so the screen can show it back and regenerate.
+         Through patchSchedule, because the route rebuilds the whole
+         document: a bare { campaignId, timezone, rule } used to blank the
+         venue name, the visit length and the party size on every
+         Generate. */
+      await patchSchedule(cp, { rule });
       toast(`${r.created} time${r.created === 1 ? '' : 's'} added${r.skipped ? `, ${r.skipped} already there` : ''}`);
       notify();
     } catch (err) { toast(err.message); btn.disabled = false; btn.textContent = 'Generate'; }

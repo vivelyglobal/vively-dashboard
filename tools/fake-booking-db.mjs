@@ -59,6 +59,24 @@ class Col {
     this.rows.push(JSON.parse(JSON.stringify(doc)));
     return { insertedId: doc._id };
   }
+  /* the bulk generate writes a whole fortnight in one call. With
+     ordered:false the real driver inserts everything it can and then
+     reports the duplicates, which is exactly what the route relies on. */
+  async insertMany(docs, opts) {
+    const unordered = !!(opts && opts.ordered === false);
+    let inserted = 0, dup = false;
+    for (const doc of docs || []) {
+      if (this.#clash(doc)) {
+        dup = true;
+        if (unordered) continue;
+        const e = new Error('dup'); e.code = 11000; e.insertedCount = inserted; throw e;
+      }
+      this.rows.push(JSON.parse(JSON.stringify(doc)));
+      inserted++;
+    }
+    if (dup) { const e = new Error('dup'); e.code = 11000; e.insertedCount = inserted; throw e; }
+    return { insertedCount: inserted };
+  }
   /* a copy, like the real driver — a handler that mutates what it read
      must not silently alter the stored row */
   async findOne(f) {

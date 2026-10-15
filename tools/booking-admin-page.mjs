@@ -463,6 +463,126 @@ await p.waitForSelector('#bkCopy', { timeout: 10000 });
 ok('a fresh schedule can be built on the same campaign',
   await p.evaluate(() => !!BOOKING.schedule && BOOKING.schedule.venueName === 'Second try'));
 
+/* ---- how many times a day ----------------------------------------------
+
+   The number a venue says out loud is "one sitting a night", or three —
+   not "a time every 20 minutes". On the fresh schedule just created, so
+   nothing earlier is disturbed. */
+
+await p.waitForSelector('#bkSlotsPerDay', { timeout: 8000 });
+ok('the rule asks how many time slots a day', (await p.inputValue('#bkSlotsPerDay')) === '1');
+ok('and one is what it starts at, not five', await p.evaluate(() =>
+  ruleTimesFor(bookingRuleOf(BOOKING.schedule), 'Tue').length === 1));
+ok('creators per time slot is a separate number', (await p.inputValue('#bkPerDay')) === '1');
+
+await p.fill('#bkSlotsPerDay', '3');
+await p.dispatchEvent('#bkSlotsPerDay', 'change');
+await p.waitForTimeout(500);
+ok('asking for three gives three times across the arrival window', await p.evaluate(() =>
+  JSON.stringify(ruleTimesFor(bookingRuleOf(BOOKING.schedule), 'Tue')) === '["18:30","19:00","19:30"]'));
+ok('and the card says three times a day in words',
+  (await p.textContent('#view')).includes('3 times a day'));
+
+/* a week that starts on a Monday, so the closed day is in it too */
+const monday = (() => {
+  const d = new Date(Date.now() + 10 * 86400000);
+  while (d.getDay() !== 1) d.setDate(d.getDate() + 1);
+  return d;
+})();
+const isoDay = (n) => new Date(monday.getTime() + n * 86400000).toISOString().slice(0, 10);
+await p.fill('#bkFrom', isoDay(0));
+await p.dispatchEvent('#bkFrom', 'change');
+await p.fill('#bkTo', isoDay(6));
+await p.dispatchEvent('#bkTo', 'change');
+await p.waitForTimeout(500);
+await p.click('#bkGenerate');
+await p.waitForTimeout(2000);
+
+const byDate = await p.evaluate(() => {
+  const out = {};
+  BOOKING.slots.forEach((s) => { (out[s.date] = out[s.date] || []).push(s.time); });
+  Object.values(out).forEach((v) => v.sort());
+  return out;
+});
+ok('one rule fills the whole week in a single press', Object.keys(byDate).length === 6,
+  Object.keys(byDate).length + ' days');
+ok('three times on each open day, no more', Object.values(byDate).every((t) => t.length === 3),
+  JSON.stringify(Object.values(byDate).map((t) => t.length)));
+ok('Monday stays closed', !byDate[isoDay(0)]);
+ok('the times are the ones the preview promised',
+  JSON.stringify(byDate[isoDay(1)]) === '["18:30","19:00","19:30"]', JSON.stringify(byDate[isoDay(1)]));
+ok('Sunday keeps its own earlier window',
+  JSON.stringify(byDate[isoDay(6)]) === '["18:00","18:30","19:00"]', JSON.stringify(byDate[isoDay(6)]));
+ok('each time takes one creator unless told otherwise',
+  await p.evaluate(() => BOOKING.slots.every((s) => s.capacity === 1)));
+
+/* ---- setting several days at once -------------------------------------- */
+
+await p.fill('#bkBulkFrom', '13:30');
+await p.fill('#bkBulkTo', '20:30');
+await p.selectOption('#bkBulkWho', 'weekdays');
+await p.click('#bkBulkApply');
+await p.waitForTimeout(500);
+ok('one apply sets Mon to Fri, opening the closed one', await p.evaluate(() => {
+  const r = bookingRuleOf(BOOKING.schedule);
+  return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].every((d) =>
+    Array.isArray(r.days[d]) && r.days[d][0] === '13:30' && r.days[d][1] === '20:30');
+}));
+ok('and leaves the weekend as it was', await p.evaluate(() => {
+  const r = bookingRuleOf(BOOKING.schedule);
+  return r.days.Sun[0] === '18:00' && r.days.Sat[0] === '18:30';
+}));
+ok('the day rows redraw with the new times',
+  (await p.inputValue('[data-bkfrom="Mon"]')) === '13:30');
+
+/* and one day's times copied onto the others */
+await p.fill('[data-bkfrom="Sun"]', '11:00');
+await p.dispatchEvent('[data-bkfrom="Sun"]', 'change');
+await p.fill('[data-bkto="Sun"]', '12:00');
+await p.dispatchEvent('[data-bkto="Sun"]', 'change');
+await p.waitForTimeout(400);
+await p.click('[data-bkcopyday="Sun"]');
+await p.waitForTimeout(500);
+ok('a day\'s window copies onto every other open day', await p.evaluate(() => {
+  const r = bookingRuleOf(BOOKING.schedule);
+  return Object.keys(r.days).every((d) => !r.days[d] || (r.days[d][0] === '11:00' && r.days[d][1] === '12:00'));
+}));
+
+/* ---- a cap on the whole day -------------------------------------------- */
+
+ok('generating the week did not blank the venue it was set up with',
+  await p.evaluate(() => BOOKING.schedule.venueName === 'Second try' && BOOKING.schedule.slotMinutes >= 5),
+  await p.evaluate(() => BOOKING.schedule.venueName + ' / ' + BOOKING.schedule.slotMinutes));
+
+ok('the card asks for the max teams per day', (await p.inputValue('#bkMaxPerDay')) === '0');
+ok('and says what zero means', (await p.textContent('#view')).includes('0 = unlimited'));
+await p.fill('#bkMaxPerDay', '1');
+await p.dispatchEvent('#bkMaxPerDay', 'change');
+await p.waitForTimeout(1200);
+ok('setting it saves on the schedule, where the server can enforce it',
+  await p.evaluate(() => BOOKING.schedule.maxPerDay === 1));
+ok('and the card says what it means in visits',
+  (await p.textContent('#view')).includes('Capped at 1 team a day'));
+ok('the settings drawer shows the same number', await (async () => {
+  await p.click('#bkEditSetup');
+  await p.waitForSelector('#bsMaxPerDay', { timeout: 8000 });
+  const v = await p.inputValue('#bsMaxPerDay');
+  await p.click('#bsCancel');
+  return v === '1';
+})());
+ok('changing the cap did not flatten the rest of the schedule',
+  await p.evaluate(() => BOOKING.schedule.venueName === 'Second try'
+    && BOOKING.schedule.timezone === 'Asia/Seoul' && BOOKING.schedule.status === 'open'));
+
+/* and back down to one a day */
+await p.fill('#bkSlotsPerDay', '1');
+await p.dispatchEvent('#bkSlotsPerDay', 'change');
+await p.waitForTimeout(500);
+ok('dropping it back to one a day is one edit, not fifteen', await p.evaluate(() =>
+  ruleTimesFor(bookingRuleOf(BOOKING.schedule), 'Tue').length === 1
+  && ruleTimesFor(bookingRuleOf(BOOKING.schedule), 'Sun').length === 1));
+ok('and the card says so', (await p.textContent('#view')).includes('1 time a day'));
+
 /* ---- nothing else moved -------------------------------------------------- */
 
 ok('the roster still renders', await (async () => {

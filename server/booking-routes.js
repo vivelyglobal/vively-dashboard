@@ -144,22 +144,58 @@ function mountBookingRoutes(app, deps) {
 
   /* What a creator's page is allowed to know. Never capacity, never
      booked — a number computed here, or nothing. */
+  /* How many bookings a day already holds, and how many more it may take.
+     A venue that offers five arrival times but will only have one team
+     that evening is the normal case, not an edge one. */
+  async function dayCounts(schedule) {
+    const cap = Math.max(0, Math.floor(Number(schedule.maxPerDay) || 0));
+    const used = new Map();
+    if (!cap) return { cap: 0, used };
+    const rows = await (await bookings())
+      .find({ scheduleId: schedule._id, status: "confirmed" }).toArray();
+    rows.forEach((r) => used.set(r.date, (used.get(r.date) || 0) + 1));
+    return { cap, used };
+  }
+
+  /* Is this booking one too many for its day?
+
+     Counting before the insert would let two people racing on two
+     different times of the same day both pass. So the booking goes in
+     first and the day is then arbitrated: the rows are put in the order
+     they were made, and anything past the cap is the one that loses.
+     Every racer reads the same list and reaches the same verdict, so
+     exactly `cap` bookings survive without a counter to drift. */
+  async function dayOverflow(schedule, date, selfId) {
+    const cap = Math.max(0, Math.floor(Number(schedule.maxPerDay) || 0));
+    if (!cap) return false;
+    const rows = await (await bookings())
+      .find({ scheduleId: schedule._id, date, status: "confirmed" }).toArray();
+    if (rows.length <= cap) return false;
+    rows.sort((a, b) =>
+      (new Date(a.bookedAt || 0) - new Date(b.bookedAt || 0)) || String(a._id).localeCompare(String(b._id)));
+    return rows.slice(cap).some((r) => String(r._id) === String(selfId));
+  }
+
   async function publicView(schedule, now) {
     const s = await slots();
     const rows = await s.find({ scheduleId: schedule._id }).sort({ date: 1, time: 1 }).toArray();
     const closed = new Set(schedule.closedDates || []);
+    const { cap, used } = await dayCounts(schedule);
     const byDate = new Map();
 
     rows.forEach((r) => {
       const past = B.deadlinePassed(r.startsAt, schedule.deadlineHours, now);
-      const left = closed.has(r.date) || past ? 0 : B.spotsLeft(r);
+      const dayFull = cap > 0 && (used.get(r.date) || 0) >= cap;
+      const left = closed.has(r.date) || past || dayFull ? 0 : B.spotsLeft(r);
       const day = byDate.get(r.date) || { date: r.date, blocked: closed.has(r.date), spotsLeft: 0, slots: [] };
       day.spotsLeft += left;
       day.slots.push({ id: r._id, time: r.time, spotsLeft: left, note: r.note || "" });
+      if (dayFull) day.dayFull = true;
       byDate.set(r.date, day);
     });
 
     return {
+      maxPerDay: cap,
       venueName: schedule.venueName || "",
       timezone: schedule.timezone,
       noteForCreator: schedule.noteForCreator || "",
@@ -191,6 +227,10 @@ function mountBookingRoutes(app, deps) {
         status: ["open", "paused", "closed"].includes(body.status) ? body.status : (existing ? existing.status : "open"),
         deadlineHours: Math.max(0, Math.floor(Number(body.deadlineHours) || 0)),
         maxPartySize: Math.max(1, Math.floor(Number(body.maxPartySize) || 1)),
+        /* how many bookings the venue will take in one day, whatever times
+           are on offer. 0 is "as many as the times allow", which is what
+           every schedule written before this did. */
+        maxPerDay: Math.max(0, Math.min(500, Math.floor(Number(body.maxPerDay) || 0))),
         venueName: String(body.venueName || "").slice(0, 200),
         noteForCreator: String(body.noteForCreator || "").slice(0, 2000),
         updatedAt: new Date()
@@ -913,6 +953,18 @@ function mountBookingRoutes(app, deps) {
         throw err;
       }
 
+      /* 4 — one booking too many for that day gives everything back */
+      if (await dayOverflow(schedule, doc.date, doc._id)) {
+        await (await bookings()).deleteOne({ _id: doc._id });
+        const back = B.releasePlan(slot._id, partySize);
+        await sl.updateOne(back.filter, back.update);
+        const view = await publicView(schedule, Date.now());
+        return res.status(409).json({
+          error: "그날은 예약이 마감되었습니다. 다른 날짜를 선택해 주세요.",
+          code: "day_full", ...view
+        });
+      }
+
       return res.json({
         ok: true,
         booking: {
@@ -1038,7 +1090,25 @@ function mountBookingRoutes(app, deps) {
         throw err;
       }
 
-      /* 3 — only now is the old seat given up */
+      /* 3 — a move into a day that is already full is undone whole */
+      if (next.date !== bk.date && await dayOverflow(schedule, next.date, bk._id)) {
+        await bkCol.updateOne({ _id: bk._id }, {
+          $set: { slotId: previousSlotId, date: bk.date, time: bk.time, startsAt: bk.startsAt, updatedAt: new Date() },
+          /* the move is undone, and said so — rewriting history to hide
+             the attempt would leave the audit trail lying */
+          $push: { history: { at: new Date(), action: "move-refused", by: "creator",
+            to: next.date + " " + next.time, reason: "day full" } }
+        });
+        const back = B.releasePlan(next._id, seats);
+        await sl.updateOne(back.filter, back.update);
+        const view = await publicView(schedule, Date.now());
+        return res.status(409).json({
+          error: "그날은 예약이 마감되었습니다. 기존 예약은 그대로 유지됩니다.",
+          code: "day_full", ...view
+        });
+      }
+
+      /* 4 — only now is the old seat given up */
       const release = B.releasePlan(previousSlotId, seats);
       await sl.updateOne(release.filter, release.update);
 

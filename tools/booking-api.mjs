@@ -418,6 +418,229 @@ ok('asked, it deletes every slot on the day and cancels the bookings',
   && !(await slotRow(d1._id)) && !(await slotRow(e2._id)) && (await bkRow('dayone')).status === 'cancelled');
 ok('an empty day deletes without asking', (await call('/api/booking/date/delete', { body: { scheduleId, date: day3 } })).status === 200);
 
+/* ---- a cap on the whole day --------------------------------------------
+
+   The venue offers five arrival times so the creator has a choice, but
+   will only have one team that evening. Its own campaign, so nothing
+   above is disturbed. */
+
+const capDay = (n) => new Date(Date.now() + (60 + n) * 86400000).toISOString().slice(0, 10);
+const capSch = await call('/api/booking/schedule', { body: {
+  campaignId: 'cp_cap', venueName: 'One team a night', timezone: 'Asia/Seoul', slotMinutes: 90, maxPerDay: 1
+} });
+ok('a schedule can be capped at one booking a day',
+  capSch.status === 200 && capSch.body.schedule.maxPerDay === 1);
+const capId = capSch.body.schedule._id;
+const capTok = capSch.body.schedule.publicToken;
+const capSlot = async (date, time) =>
+  (await call('/api/booking/slot', { body: { scheduleId: capId, date, time, capacity: 1 } })).body.slot;
+const t1 = await capSlot(capDay(0), '13:30');
+const t2 = await capSlot(capDay(0), '15:00');
+const t3 = await capSlot(capDay(0), '20:30');
+const other = await capSlot(capDay(1), '13:30');
+const capBook = (slot, who) => call('/api/book/' + capTok + '/confirm',
+  { body: { slotId: slot._id, name: who, handle: '@' + who } });
+
+const first = await capBook(t1, 'teamone');
+ok('the first team books the evening', first.status === 200);
+const second = await capBook(t2, 'teamtwo');
+ok('a second team is refused even though the other times are empty',
+  second.status === 409 && second.body.code === 'day_full', JSON.stringify(second.body).slice(0, 90));
+ok('and the refusal leaves no half-made booking behind',
+  (await col('campaign_bookings').find({ scheduleId: capId, date: capDay(0) }).toArray())
+    .filter((b) => b.status === 'confirmed').length === 1);
+ok('the seat it claimed on the way is given back',
+  (await col('booking_slots').findOne({ _id: t2._id })).booked === 0);
+ok('the creator page shows the whole day as full', await (async () => {
+  const v = await call('/api/book/' + capTok);
+  const day = v.body.dates.find((d) => d.date === capDay(0));
+  return day.spotsLeft === 0 && day.dayFull === true && day.slots.every((x) => x.spotsLeft === 0);
+})());
+ok('and the next day is still open', await (async () => {
+  const v = await call('/api/book/' + capTok);
+  return v.body.dates.find((d) => d.date === capDay(1)).spotsLeft === 1;
+})());
+ok('the cap is told to the page, not just enforced',
+  (await call('/api/book/' + capTok)).body.maxPerDay === 1);
+
+/* a race on two different times of the same capped day */
+const racers = await Promise.all([t2, t3].map((sl, i) => capBook(sl, 'racer' + i)));
+ok('two at once on one capped day: neither gets in past the cap',
+  racers.every((r) => r.status === 409 && r.body.code === 'day_full'),
+  racers.map((r) => r.status).join(','));
+ok('the day still holds exactly one booking',
+  (await col('campaign_bookings').find({ scheduleId: capId, date: capDay(0) }).toArray())
+    .filter((b) => b.status === 'confirmed').length === 1);
+ok('and no seat is left claimed by a refusal', await (async () => {
+  const rows = await col('booking_slots').find({ scheduleId: capId, date: capDay(0) }).toArray();
+  return rows.filter((r) => r.booked > 0).length === 1;
+})());
+
+/* moving into a full day, and freeing one by cancelling */
+const otherBk = await capBook(other, 'nextday');
+ok('the next day takes its one booking', otherBk.status === 200);
+const moveIn = await call('/api/book/manage/' + otherBk.body.booking.manageToken + '/move',
+  { body: { slotId: t3._id } });
+ok('moving into a full day is refused', moveIn.status === 409 && moveIn.body.code === 'day_full');
+ok('and the booking stays exactly where it was', await (async () => {
+  const row = await col('campaign_bookings').findOne({ manageToken: otherBk.body.booking.manageToken });
+  return row.date === capDay(1) && row.time === '13:30' && row.slotId === other._id
+    && row.history.some((h) => h.action === 'move-refused');
+})());
+ok('the seat it tried for is released again',
+  (await col('booking_slots').findOne({ _id: t3._id })).booked === 0);
+
+const firstRow = await col('campaign_bookings').findOne({ 'guest.handleNorm': 'teamone' });
+await call('/api/booking/booking/' + firstRow._id + '/cancel', { body: { reason: 'venue asked' } });
+ok('cancelling the one booking opens the day again', await (async () => {
+  const v = await call('/api/book/' + capTok);
+  const day = v.body.dates.find((d) => d.date === capDay(0));
+  return day.spotsLeft === 3 && !day.dayFull;
+})());
+ok('and somebody else can then take it', (await capBook(t2, 'latecomer')).status === 200);
+
+const uncapped = await call('/api/booking/schedule', { body: {
+  campaignId: 'cp_cap', venueName: 'One team a night', timezone: 'Asia/Seoul', slotMinutes: 90, maxPerDay: 0
+} });
+ok('the cap can be lifted', uncapped.status === 200 && uncapped.body.schedule.maxPerDay === 0);
+ok('and the day takes a second booking once it is', (await capBook(t3, 'secondteam')).status === 200);
+
+/* ---- the bulk generate behind the weekly rule ----------------------- */
+
+const bulkDay = (n) => new Date(Date.now() + (40 + n) * 86400000).toISOString().slice(0, 10);
+const bulkRows = [
+  { date: bulkDay(0), time: '18:30', capacity: 1 },
+  { date: bulkDay(0), time: '19:00', capacity: 1 },
+  { date: bulkDay(0), time: '19:30', capacity: 1 },
+  { date: bulkDay(1), time: '18:30', capacity: 1 }
+];
+const bulk = await call('/api/booking/slots/bulk', { body: { scheduleId, slots: bulkRows } });
+ok('a whole rule is written in one call', bulk.status === 200 && bulk.body.created === 4,
+  JSON.stringify(bulk.body));
+ok('three times land on the first day', await (async () => {
+  const rows = await col('booking_slots').find({ scheduleId, date: bulkDay(0) }).toArray();
+  return rows.length === 3 && rows.every((r) => r.capacity === 1 && r.generated === true);
+})());
+const again = await call('/api/booking/slots/bulk', { body: { scheduleId, slots: bulkRows } });
+ok('running it again adds nothing and says so', again.status === 200
+  && again.body.created === 0 && again.body.skipped === 4, JSON.stringify(again.body));
+ok('and the day still holds three times, not six',
+  (await col('booking_slots').find({ scheduleId, date: bulkDay(0) }).toArray()).length === 3);
+
+/* ---- two things a day cap must not do ----------------------------------
+
+   Both are about bookings that already exist. A cap is a limit on how
+   many teams come, never a reason to take away a visit somebody has
+   already been promised. */
+
+const capEdgeSch = (await call('/api/booking/schedule', { body: {
+  campaignId: 'cp_edge', venueName: 'Edge', timezone: 'Asia/Seoul', slotMinutes: 90, maxPerDay: 1
+} })).body.schedule;
+const capEdgeId = capEdgeSch._id, capEdgeTok = capEdgeSch.publicToken;
+const edgeDay = new Date(Date.now() + 80 * 86400000).toISOString().slice(0, 10);
+const edgeDay2 = new Date(Date.now() + 81 * 86400000).toISOString().slice(0, 10);
+const edgeSlot = async (date, time) =>
+  (await call('/api/booking/slot', { body: { scheduleId: capEdgeId, date, time, capacity: 1 } })).body.slot;
+const e1330 = await edgeSlot(edgeDay, '13:30');
+const e1630 = await edgeSlot(edgeDay, '16:30');
+const e1930 = await edgeSlot(edgeDay, '19:30');
+const eNext = await edgeSlot(edgeDay2, '13:30');
+
+/* 1 — the same team moving within the day it already holds */
+const creatorA = await call('/api/book/' + capEdgeTok + '/confirm',
+  { body: { slotId: e1330._id, name: 'Creator A', handle: '@creatora' } });
+ok('Creator A takes the one booking of the day', creatorA.status === 200);
+const aToken = creatorA.body.booking.manageToken;
+
+const sameDay = await call('/api/book/manage/' + aToken + '/move', { body: { slotId: e1630._id } });
+ok('at the cap, the same booking still moves 13:30 → 16:30 on its own day',
+  sameDay.status === 200 && sameDay.body.booking.time === '16:30',
+  JSON.stringify(sameDay.body).slice(0, 90));
+ok('the day still holds exactly one team, so nothing was over the cap', await (async () => {
+  const rows = (await col('campaign_bookings').find({ scheduleId: capEdgeId, date: edgeDay }).toArray())
+    .filter((b) => b.status === 'confirmed');
+  return rows.length === 1 && rows[0].time === '16:30';
+})());
+ok('the seat it came from is free again and the new one is taken',
+  (await col('booking_slots').findOne({ _id: e1330._id })).booked === 0
+  && (await col('booking_slots').findOne({ _id: e1630._id })).booked === 1);
+ok('and it can move again, to a third time on the same day', await (async () => {
+  const r = await call('/api/book/manage/' + aToken + '/move', { body: { slotId: e1930._id } });
+  return r.status === 200 && r.body.booking.time === '19:30';
+})());
+ok('staff moving it within the day is not refused either', await (async () => {
+  const bk = await col('campaign_bookings').findOne({ manageToken: aToken });
+  const r = await call('/api/booking/booking/' + bk._id + '/move', { body: { slotId: e1330._id } });
+  return r.status === 200 && (await col('campaign_bookings').findOne({ _id: bk._id })).time === '13:30';
+})());
+ok('a different creator still cannot take a second time that day',
+  (await call('/api/book/' + capEdgeTok + '/confirm',
+    { body: { slotId: e1630._id, name: 'Creator B', handle: '@creatorb' } })).body.code === 'day_full');
+ok('and moving onto another day, which has room, still works', await (async () => {
+  const r = await call('/api/book/manage/' + aToken + '/move', { body: { slotId: eNext._id } });
+  if (r.status !== 200) return false;
+  const back = await call('/api/book/manage/' + aToken + '/move', { body: { slotId: e1330._id } });
+  return back.status === 200;      /* put it back for the next case */
+})());
+
+/* 2 — tightening the cap under bookings that already exist */
+const lowSch = (await call('/api/booking/schedule', { body: {
+  campaignId: 'cp_low', venueName: 'Three already', timezone: 'Asia/Seoul', slotMinutes: 90, maxPerDay: 0
+} })).body.schedule;
+const lowId = lowSch._id, lowTok = lowSch.publicToken;
+const lowDay = new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10);
+const lowSlots = [];
+for (const t of ['12:00', '14:00', '16:00', '18:00']) {
+  lowSlots.push((await call('/api/booking/slot', { body: { scheduleId: lowId, date: lowDay, time: t, capacity: 1 } })).body.slot);
+}
+for (let i = 0; i < 3; i++) {
+  await call('/api/book/' + lowTok + '/confirm',
+    { body: { slotId: lowSlots[i]._id, name: 'Early ' + i, handle: '@early' + i } });
+}
+const bookedBefore = (await col('campaign_bookings').find({ scheduleId: lowId, date: lowDay }).toArray())
+  .filter((b) => b.status === 'confirmed');
+ok('three teams are booked on the day while it is uncapped', bookedBefore.length === 3);
+
+const tighten = await call('/api/booking/schedule', { body: {
+  campaignId: 'cp_low', venueName: 'Three already', timezone: 'Asia/Seoul', slotMinutes: 90, maxPerDay: 1
+} });
+ok('the cap can be lowered to 1 under them', tighten.status === 200 && tighten.body.schedule.maxPerDay === 1);
+ok('not one of the three bookings is cancelled or deleted', await (async () => {
+  const rows = await col('campaign_bookings').find({ scheduleId: lowId, date: lowDay }).toArray();
+  return rows.length === 3 && rows.every((r) => r.status === 'confirmed')
+    && bookedBefore.every((b) => rows.some((r) => r._id === b._id && r.time === b.time));
+})());
+ok('their seats are left exactly as they were', await (async () => {
+  const rows = await col('booking_slots').find({ scheduleId: lowId, date: lowDay }).toArray();
+  return rows.filter((r) => r.booked === 1).length === 3;
+})());
+ok('the fourth time takes nobody new while the day is over its cap', await (async () => {
+  const r = await call('/api/book/' + lowTok + '/confirm',
+    { body: { slotId: lowSlots[3]._id, name: 'Latecomer', handle: '@latecomer' } });
+  return r.status === 409 && r.body.code === 'day_full';
+})());
+ok('and that refusal left the three alone', await (async () => {
+  const rows = await col('campaign_bookings').find({ scheduleId: lowId, date: lowDay }).toArray();
+  return rows.filter((r) => r.status === 'confirmed').length === 3;
+})());
+ok('the day reads as full to a creator looking at it', await (async () => {
+  const v = await call('/api/book/' + lowTok);
+  const day = v.body.dates.find((d) => d.date === lowDay);
+  return day.dayFull === true && day.spotsLeft === 0;
+})());
+ok('one of the three can still move within the day', await (async () => {
+  const row = await col('campaign_bookings').findOne({ 'guest.handleNorm': 'early0' });
+  const r = await call('/api/book/manage/' + row.manageToken + '/move', { body: { slotId: lowSlots[3]._id } });
+  return r.status === 200 && r.body.booking.time === '18:00';
+})());
+ok('and staff can still cancel one by hand, which is the way back down', await (async () => {
+  const row = await col('campaign_bookings').findOne({ 'guest.handleNorm': 'early1' });
+  const r = await call('/api/booking/booking/' + row._id + '/cancel', { body: { reason: 'cap lowered' } });
+  const left = (await col('campaign_bookings').find({ scheduleId: lowId, date: lowDay }).toArray())
+    .filter((b) => b.status === 'confirmed');
+  return r.status === 200 && left.length === 2;
+})());
+
 /* ---- wiping a campaign's booking back to a blank slate -------------
 
    Last, because there is nothing left afterwards. */
