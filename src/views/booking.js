@@ -635,6 +635,7 @@ export function defaultBookingRule() {
             Fri: ['18:30', '19:30'], Sat: ['18:30', '19:30'], Sun: ['18:00', '19:00'] },
     slotsPerDay: 1,
     perDay: 1,
+    breaks: [],
     from: iso(start),
     to: iso(end),
     skipHolidays: true
@@ -659,29 +660,73 @@ export function ruleSlotCount(rule) {
 }
 
 /* every exact time a creator could pick on one weekday */
+/* A kitchen that shuts between lunch and dinner is still open 11:00 to
+   21:00 — it just will not seat anybody at three. The arrival window
+   minus its breaks, as the stretches that are left. */
+export function ruleSegments(rule, from, to) {
+  let segs = [[from, to]];
+  (rule.breaks || []).forEach((b) => {
+    const bs = ruleMinutes((b || [])[0]);
+    const be = ruleMinutes((b || [])[1]);
+    if (bs == null || be == null || be <= bs) return;
+    const next = [];
+    segs.forEach(([s, e]) => {
+      if (be <= s || bs >= e) { next.push([s, e]); return; }   /* nowhere near it */
+      if (bs > s) next.push([s, bs]);
+      if (be < e) next.push([be, e]);
+    });
+    segs = next;
+  });
+  return segs;
+}
+
+/* Where a position inside the open stretches lands on the clock. The
+   times are spread across the time the venue can actually take people,
+   so a break shifts them rather than swallowing them. */
+export function ruleAt(segs, pos) {
+  let left = pos;
+  for (let i = 0; i < segs.length; i++) {
+    const [s, e] = segs[i];
+    const len = e - s;
+    /* landing exactly where a stretch ends is landing at the start of the
+       break: the time belongs on the far side of it, not on the edge */
+    if (left < len || i === segs.length - 1) return Math.min(e, s + left);
+    left -= len;
+  }
+  return segs[segs.length - 1][1];
+}
+
 export function ruleTimesFor(rule, dayName) {
   const w = (rule.days || {})[dayName];
   if (!Array.isArray(w) || !w[0]) return [];
   const from = ruleMinutes(w[0]);
   const to = ruleMinutes(w[1] || w[0]);
   if (from == null || to == null || to < from) return from == null ? [] : [ruleTime(from)];
+  const segs = ruleSegments(rule, from, to);
+  if (!segs.length) return [];                 /* the break covers the whole window */
   const want = ruleSlotCount(rule);
   if (want == null) {                       /* a rule written before the count existed */
     const step = Math.max(5, Math.floor(Number(rule.stepMinutes) || 15));
     const out = [];
-    for (let t = from; t <= to; t += step) out.push(ruleTime(t));
+    const inBreak = (t) => (rule.breaks || []).some((b) => {
+      const bs = ruleMinutes((b || [])[0]), be = ruleMinutes((b || [])[1]);
+      return bs != null && be != null && t >= bs && t < be;
+    });
+    for (let t = from; t <= to; t += step) if (!inBreak(t)) out.push(ruleTime(t));
     return out;
   }
-  if (want === 1 || to === from) return [ruleTime(from)];
-  /* spread them across the window, first on the hour it opens and last on
-     the hour it shuts, rounded to five minutes so the times read well */
-  const gap = Math.max(5, Math.round((to - from) / (want - 1) / 5) * 5);
+  if (want === 1 || to === from) return [ruleTime(segs[0][0])];
+  const total = segs.reduce((n, [a, b]) => n + (b - a), 0);
+  if (!total) return [ruleTime(segs[0][0])];
+  /* spread them across the open time, first when it opens and last when
+     it shuts, rounded to five minutes so the times read well */
   const out = [];
   for (let i = 0; i < want - 1; i++) {
-    const label = ruleTime(Math.min(to, from + i * gap));
+    const pos = Math.round((i * total) / (want - 1) / 5) * 5;
+    const label = ruleTime(ruleAt(segs, Math.min(total, pos)));
     if (!out.includes(label)) out.push(label);     /* a narrow window simply fits fewer */
   }
-  const last = ruleTime(to);
+  const last = ruleTime(segs[segs.length - 1][1]);
   if (!out.includes(last)) out.push(last);         /* the window shuts when the venue said */
   return out;
 }
@@ -757,12 +802,16 @@ export function bookingRuleSummary(rule, opts) {
     open.forEach((d) => { const w = rule.days[d].join('–'); (windows[w] = windows[w] || []).push(RULE_DAY_KO[d]); });
     return `${Object.entries(windows).map(([w, ds]) => `${ds.join('·')}요일 ${w} 도착`).join(' / ') || '가능한 요일 없음'}`
       + `${shut.length ? ` · ${shut.map((d) => RULE_DAY_KO[d]).join('·')}요일 휴무` : ''}`
+      + `${(rule.breaks || []).filter((b) => b && b[0] && b[1])
+          .map((b) => ` · ${b[0]}–${b[1]} 브레이크타임`).join('')}`
       + ` · 하루 ${perTimes}타임${perDay > 1 ? ` · 타임당 ${perDay}팀` : ''} · 예약 가능 ${live.length}일`;
   }
   const windows = {};
   open.forEach((d) => { const w = rule.days[d].join('–'); (windows[w] = windows[w] || []).push(d); });
   const parts = Object.entries(windows).map(([w, ds]) => `${ds.join(', ')} arrive ${w}`);
+  const breaks = (rule.breaks || []).filter((b) => b && b[0] && b[1]);
   return `${parts.join('. ') || 'No days open yet'}.`
+    + `${breaks.length ? ` Closed ${breaks.map((b) => b[0] + '–' + b[1]).join(' and ')}.` : ''}`
     + `${shut.length ? ` Closed ${shut.join(', ')}.` : ''}`
     + ` ${perTimes} time${perTimes === 1 ? '' : 's'} a day`
     + `${perDay > 1 ? `, ${perDay} creators each` : ''}`
@@ -887,6 +936,19 @@ export function bookingAvailabilityCard(cp) {
       </select>
       <button class="btn xs" id="bkBulkApply">Apply</button>
       <span>Opens those days if they are closed. The rest are left alone.</span>
+    </div>
+
+    <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin:0 0 10px;font-size:11.5px;color:var(--text-3)">
+      <strong style="font-size:11.5px;color:var(--text-2)">Breaks</strong>
+      ${(rule.breaks || []).length ? (rule.breaks || []).map((b, i) => `<span class="bk-chip" style="display:inline-flex;align-items:center;gap:5px">
+        no bookings
+        <input type="time" data-bkbreakfrom="${i}" value="${esc(b[0] || '')}"/>
+        – <input type="time" data-bkbreakto="${i}" value="${esc(b[1] || '')}"/>
+        <span class="x" data-bkbreakdel="${i}" title="Remove this break">×</span></span>`).join('')
+        : '<span>None — the venue takes people right through.</span>'}
+      <button class="btn xs" id="bkBreakAdd">+ Add a break</button>
+      <span>A kitchen that shuts between lunch and dinner: the times skip the break and spread over
+        what is left, on every open day.</span>
     </div>
     <div id="bkRuleRows">${RULE_DAYS.map((d) => {
       const w = rule.days[d];
@@ -1340,6 +1402,23 @@ export function wireBookingAvailability(cp) {
     toast(`${done.join(', ')} set to ${from}–${to}`);
     redraw();
   });
+  $('#bkBreakAdd').addEventListener('click', () => {
+    rule.breaks = (rule.breaks || []).concat([['15:00', '17:00']]);
+    redraw();
+  });
+  $$('[data-bkbreakfrom]').forEach((i) => i.addEventListener('change', () => {
+    const b = rule.breaks[+i.dataset.bkbreakfrom];
+    if (b) { b[0] = i.value; redraw(); }
+  }));
+  $$('[data-bkbreakto]').forEach((i) => i.addEventListener('change', () => {
+    const b = rule.breaks[+i.dataset.bkbreakto];
+    if (b) { b[1] = i.value; redraw(); }
+  }));
+  $$('[data-bkbreakdel]').forEach((x) => x.addEventListener('click', () => {
+    rule.breaks = (rule.breaks || []).filter((b, i) => i !== +x.dataset.bkbreakdel);
+    redraw();
+  }));
+
   $$('[data-bkcopyday]').forEach((b) => b.addEventListener('click', () => {
     const src = b.dataset.bkcopyday;
     const w = rule.days[src];

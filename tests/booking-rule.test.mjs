@@ -167,3 +167,101 @@ test('a group edit and the times-per-day count work together', async () => {
   assert.deepEqual(ruleTimesFor(r, 'Sun'), ['18:00', '18:15', '18:30', '18:45', '19:00'],
     'Sunday keeps its own shorter window');
 });
+
+/* A kitchen that shuts between lunch and dinner. The venue is open
+   11:00 to 17:00 and will not seat anybody from 14:00 to 15:00 — the
+   times have to step over that, not stop at it. */
+
+const lunchRule = async (n, breaks, window) => {
+  const r = defaultBookingRule();
+  r.slotsPerDay = n;
+  r.breaks = breaks;
+  ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].forEach((d) => { r.days[d] = (window || ['11:00', '17:00']).slice(); });
+  return r;
+};
+
+test('the open stretches are the window with the break taken out', async () => {
+  const { ruleSegments } = await import('../src/views/booking.js');
+  const r = await lunchRule(3, [['14:00', '15:00']]);
+  assert.deepEqual(ruleSegments(r, 660, 1020), [[660, 840], [900, 1020]]);
+  assert.deepEqual(ruleSegments(defaultBookingRule(), 660, 1020), [[660, 1020]], 'no break, one stretch');
+});
+
+test('a time never lands on the moment the break starts', async () => {
+  const r = await lunchRule(3, [['14:00', '15:00']]);
+  /* 11:00–14:00 is exactly half of the open time, so the middle slot of
+     a 3-slot day falls on the boundary unless it is pushed past it */
+  const r2 = await lunchRule(3, [['14:00', '14:00']]);     /* a zero-length break is no break */
+  assert.deepEqual(ruleTimesFor(r2, 'Tue'), ['11:00', '14:00', '17:00']);
+  assert.ok(!ruleTimesFor(r, 'Tue').includes('14:00'));
+});
+
+test('no time is ever offered inside the break', async () => {
+  for (const n of [2, 3, 4, 5, 6, 8]) {
+    const r = await lunchRule(n, [['14:00', '15:00']]);
+    const times = ruleTimesFor(r, 'Tue');
+    times.forEach((t) => assert.ok(t <= '14:00' || t >= '15:00', n + ' slots put one at ' + t));
+    assert.equal(times.length, n, n + ' slots');
+  }
+});
+
+test('the times spread over what is left, not over the gap', async () => {
+  const r = await lunchRule(4, [['14:00', '15:00']]);
+  assert.deepEqual(ruleTimesFor(r, 'Tue'), ['11:00', '12:40', '15:20', '17:00']);
+});
+
+test('the day still opens when it opens and shuts when it shuts', async () => {
+  const r = await lunchRule(3, [['14:00', '15:00']]);
+  const times = ruleTimesFor(r, 'Tue');
+  assert.equal(times[0], '11:00');
+  assert.equal(times[times.length - 1], '17:00');
+});
+
+test('one booking a day lands before the break, not in it', async () => {
+  const r = await lunchRule(1, [['11:00', '13:00']]);
+  assert.deepEqual(ruleTimesFor(r, 'Tue'), ['13:00'], 'a break at opening moves the single time');
+});
+
+test('two breaks in a day are both respected', async () => {
+  const r = await lunchRule(5, [['13:00', '14:00'], ['15:30', '16:00']]);
+  const times = ruleTimesFor(r, 'Tue');
+  times.forEach((t) => {
+    assert.ok(t <= '13:00' || t >= '14:00', 'lunch: ' + t);
+    assert.ok(t <= '15:30' || t >= '16:00', 'tea: ' + t);
+  });
+  assert.equal(times.length, 5);
+});
+
+test('a break outside the window changes nothing', async () => {
+  const plain = await lunchRule(3, []);
+  const odd = await lunchRule(3, [['06:00', '09:00']]);
+  assert.deepEqual(ruleTimesFor(odd, 'Tue'), ruleTimesFor(plain, 'Tue'));
+});
+
+test('a break that swallows the window leaves that day with no times', async () => {
+  const r = await lunchRule(3, [['10:00', '18:00']]);
+  assert.deepEqual(ruleTimesFor(r, 'Tue'), []);
+});
+
+test('a break is written into the slots that get generated', async () => {
+  const r = await lunchRule(3, [['14:00', '15:00']]);
+  r.from = '2026-11-03'; r.to = '2026-11-03'; r.skipHolidays = false;
+  const rows = bookingRuleSlots(r, { slotMinutes: 60 });
+  assert.deepEqual(rows.map((x) => x.time), ['11:00', '13:30', '17:00']);
+  assert.ok(rows.every((x) => x.date === '2026-11-03'));
+});
+
+test('the sentence names the break', async () => {
+  const r = await lunchRule(3, [['14:00', '15:00']]);
+  r.from = '2026-11-03'; r.to = '2026-11-09';
+  const line = bookingRuleSummary(r, {});
+  assert.match(line, /Closed 14:00–15:00/);
+  assert.match(line, /3 times a day/);
+});
+
+test('an old rule counting in minutes also skips the break', async () => {
+  const r = await lunchRule(3, [['14:00', '15:00']]);
+  delete r.slotsPerDay;
+  r.stepMinutes = 60;
+  assert.deepEqual(ruleTimesFor(r, 'Tue'), ['11:00', '12:00', '13:00', '15:00', '16:00', '17:00']);
+});

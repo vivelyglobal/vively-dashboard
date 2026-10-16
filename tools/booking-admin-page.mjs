@@ -78,6 +78,9 @@ await ctx.addInitScript(([s]) => {
 const p = await ctx.newPage();
 const pageErrors = [];
 p.on('pageerror', (e) => pageErrors.push(e.message));
+/* the reset asks before it clears; the question itself is checked below */
+let lastDialog = '';
+p.on('dialog', async (d) => { lastDialog = d.message(); await d.accept(); });
 
 const CP = JSON.parse(seed).db.campaigns[0].id;
 /* A goto to a URL the browser is already on does not reload, so a hash
@@ -515,6 +518,134 @@ ok('Sunday keeps its own earlier window',
   JSON.stringify(byDate[isoDay(6)]) === '["18:00","18:30","19:00"]', JSON.stringify(byDate[isoDay(6)]));
 ok('each time takes one creator unless told otherwise',
   await p.evaluate(() => BOOKING.slots.every((s) => s.capacity === 1)));
+
+/* ---- starting the dates over --------------------------------------------
+
+   Generating is the "go"; this is the way back. Changing the rule and
+   generating again used to leave the first batch stranded, because the
+   only clear on offer covered the rule's current range. */
+
+const madeDates = Object.keys(byDate).length;
+ok('there are dates to start over from', madeDates === 6);
+
+/* one of them is booked, and a booked day is never swept away */
+const keepSlot = await p.evaluate(async () => {
+  const s = BOOKING.slots.find((x) => x.booked === 0);
+  await fetch('/api/book/' + BOOKING.schedule.publicToken + '/confirm', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slotId: s._id, name: 'Keeper', handle: '@keeper' })
+  });
+  return { id: s._id, date: s.date, time: s.time };
+});
+await p.click('#bkRefresh');
+await p.waitForTimeout(900);
+
+await p.click('[data-bkreset]');
+await p.waitForTimeout(2500);
+ok('it says what will go before it goes',
+  /Reset every date/.test(lastDialog) && /18 times across 6 days/.test(lastDialog),
+  lastDialog.replace(/\n+/g, ' ').slice(0, 110));
+ok('and warns that the booked one is kept', /1 of them hold a booking/.test(lastDialog));
+ok('every unbooked time is cleared', await p.evaluate((keep) =>
+  BOOKING.slots.length === 1 && BOOKING.slots[0]._id === keep.id, keepSlot));
+ok('the booking itself is untouched', await p.evaluate(() =>
+  BOOKING.bookings.length === 1 && BOOKING.bookings[0].guest.handle === '@keeper'));
+ok('the rule is still there to generate from again', await p.evaluate(() =>
+  ruleTimesFor(bookingRuleOf(BOOKING.schedule), 'Tue').length === 3));
+
+/* a changed rule, and a second go over the blank slate */
+await p.fill('#bkSlotsPerDay', '2');
+await p.dispatchEvent('#bkSlotsPerDay', 'change');
+await p.waitForTimeout(500);
+await p.click('#bkGenerate');
+await p.waitForTimeout(2500);
+ok('a changed rule generates cleanly after a reset', await p.evaluate(() => {
+  const byDay = {};
+  BOOKING.slots.forEach((s) => { (byDay[s.date] = byDay[s.date] || []).push(s.time); });
+  return Object.keys(byDay).length === 6;
+}));
+ok('and the kept booking is still on its own time',
+  await p.evaluate((keep) => BOOKING.slots.some((s) => s._id === keep.id)
+    && BOOKING.bookings.length === 1, keepSlot));
+
+/* ---- a break in the middle of the day ----------------------------------
+
+   The venue is open 11:00 to 17:00 and the kitchen shuts from 14:00 to
+   15:00. The times have to step over that, not stop at it. */
+
+await p.click('[data-bkreset]');
+await p.waitForTimeout(2500);
+await p.fill('#bkSlotsPerDay', '4');
+await p.dispatchEvent('#bkSlotsPerDay', 'change');
+await p.fill('#bkBulkFrom', '11:00');
+await p.fill('#bkBulkTo', '17:00');
+await p.selectOption('#bkBulkWho', 'all');
+await p.click('#bkBulkApply');
+await p.waitForTimeout(600);
+ok('four times a day across 11:00–17:00, with no break yet', await p.evaluate(() =>
+  JSON.stringify(ruleTimesFor(bookingRuleOf(BOOKING.schedule), 'Tue'))
+    === '["11:00","13:00","15:00","17:00"]'),
+  await p.evaluate(() => ruleTimesFor(bookingRuleOf(BOOKING.schedule), 'Tue').join(' ')));
+
+await p.click('#bkBreakAdd');
+await p.waitForSelector('[data-bkbreakfrom="0"]', { timeout: 8000 });
+ok('a break can be added', await p.evaluate(() => (bookingRuleOf(BOOKING.schedule).breaks || []).length === 1));
+await p.fill('[data-bkbreakfrom="0"]', '14:00');
+await p.dispatchEvent('[data-bkbreakfrom="0"]', 'change');
+await p.fill('[data-bkbreakto="0"]', '15:00');
+await p.dispatchEvent('[data-bkbreakto="0"]', 'change');
+await p.waitForTimeout(600);
+
+const withBreak = await p.evaluate(() => ruleTimesFor(bookingRuleOf(BOOKING.schedule), 'Tue'));
+ok('no time falls inside the break', withBreak.every((t) => t <= '14:00' || t >= '15:00'), withBreak.join(' '));
+ok('and there are still four of them', withBreak.length === 4, withBreak.join(' '));
+ok('the day still opens at 11:00 and shuts at 17:00',
+  withBreak[0] === '11:00' && withBreak[3] === '17:00', withBreak.join(' '));
+ok('the card says the venue is closed during it',
+  (await p.textContent('#view')).includes('Closed 14:00–15:00'));
+
+await p.click('#bkGenerate');
+await p.waitForTimeout(2500);
+const generated = await p.evaluate(() => {
+  const out = {};
+  BOOKING.slots.filter((s) => s.date >= '2000-01-01').forEach((s) => { (out[s.date] = out[s.date] || []).push(s.time); });
+  Object.values(out).forEach((v) => v.sort());
+  return out;
+});
+ok('what is generated keeps the break out of the real slots',
+  Object.values(generated).every((times) => times.every((t) => t <= '14:00' || t >= '15:00')),
+  JSON.stringify(Object.values(generated)[0]));
+ok('every day of the week is open now that the rule says so',
+  Object.keys(generated).length === 7, Object.keys(generated).length + ' days');
+
+/* the break comes off again */
+await p.click('[data-bkbreakdel="0"]');
+await p.waitForTimeout(600);
+ok('removing the break puts the middle times back', await p.evaluate(() =>
+  (bookingRuleOf(BOOKING.schedule).breaks || []).length === 0
+  && ruleTimesFor(bookingRuleOf(BOOKING.schedule), 'Tue').includes('15:00')));
+
+/* back to a blank slate, three a day, and the week the way the checks
+   below expect to find it — Monday shut, the weekend on its own hours */
+await p.click('[data-bkreset]');
+await p.waitForTimeout(2500);
+await p.fill('#bkSlotsPerDay', '3');
+await p.dispatchEvent('#bkSlotsPerDay', 'change');
+await p.waitForTimeout(400);
+await p.uncheck('[data-bkday="Mon"]');
+await p.waitForTimeout(400);
+for (const [d, w] of [['Sat', ['18:30', '19:30']], ['Sun', ['18:00', '19:00']]]) {
+  await p.fill(`[data-bkfrom="${d}"]`, w[0]);
+  await p.dispatchEvent(`[data-bkfrom="${d}"]`, 'change');
+  await p.waitForTimeout(250);
+  await p.fill(`[data-bkto="${d}"]`, w[1]);
+  await p.dispatchEvent(`[data-bkto="${d}"]`, 'change');
+  await p.waitForTimeout(250);
+}
+ok('the week is back where the next checks expect it', await p.evaluate(() => {
+  const r = bookingRuleOf(BOOKING.schedule);
+  return r.days.Mon === null && r.days.Sat[0] === '18:30' && r.days.Sun[0] === '18:00';
+}));
 
 /* ---- setting several days at once -------------------------------------- */
 
