@@ -13717,7 +13717,8 @@ function bookingBoard(mount, cp) {
       <div class="card-head"><h3>Dates in detail</h3>
         <span style="font-size:12px;color:var(--text-3)">change one day without touching the rule</span>
         <div class="sp"></div>
-        <button class="btn sm" id="bkAddDate">+ Add a date by hand</button></div>
+        <button class="btn sm" id="bkAddDate">+ Add a date by hand</button>
+        <button class="btn sm" data-bkreset="1" ${BOOKING.slots.length ? '' : 'disabled'}>Reset all dates</button></div>
       ${dates.length ? `<div class="tbl-wrap" style="margin-top:10px"><table class="tbl"><thead><tr>
         <th>Date</th><th>Slots</th><th>Seats</th><th>Booked</th><th></th></tr></thead><tbody>
         ${dates.map((d) => {
@@ -14415,9 +14416,11 @@ function bookingAvailabilityCard(cp) {
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn primary" id="bkGenerate" ${toAdd ? '' : 'disabled'}>Generate ${toAdd || ''} time${toAdd === 1 ? '' : 's'}</button>
-          <button class="btn" id="bkClear">Clear unbooked days in range</button>
+          <button class="btn" data-bkreset="1" ${BOOKING.slots.length ? '' : 'disabled'}>Reset all dates</button>
         </div>
-        <p class="card-sub" style="margin-top:8px">Generating never touches a day somebody has already booked.</p>
+        <p class="card-sub" style="margin-top:8px">Generating adds to what is there; it never touches a day somebody
+          has already booked. Reset clears every date so you can change the rule above and generate again —
+          booked days are kept, and the rule itself is not lost.</p>
       </div>
     </div>
   </div>`;
@@ -14851,15 +14854,33 @@ function wireBookingAvailability(cp) {
     } catch (err) { toast(err.message); btn.disabled = false; btn.textContent = 'Generate'; }
   });
 
-  $('#bkClear').addEventListener('click', async () => {
-    if (!window.confirm(`Remove every unbooked time between ${rule.from} and ${rule.to}? Booked days are kept.`)) return;
+  /* Back to a blank sheet of dates, whatever range they were made in.
+     The old button cleared only what was inside the rule's own From/To,
+     so changing the dates and generating again left the first batch
+     stranded with no way back but deleting each day by hand. The rule is
+     left exactly as it is: resetting is for generating again. */
+  $$('[data-bkreset]').forEach((b) => b.addEventListener('click', async () => {
+    const all = BOOKING.slots;
+    if (!all.length) { toast('There are no dates to reset'); return; }
+    const dates = [...new Set(all.map((x) => x.date))].sort();
+    const booked = all.filter((x) => (x.booked || 0) > 0);
+    const ask = `Reset every date?\n\n${all.length} time${all.length === 1 ? '' : 's'} across `
+      + `${dates.length} day${dates.length === 1 ? '' : 's'} (${dates[0]} to ${dates[dates.length - 1]}) are removed.`
+      + (booked.length
+        ? `\n\n${booked.length} of them hold a booking and are kept. Cancel those bookings first for a clean slate.`
+        : '')
+      + '\n\nThe weekly rule above is kept, so you can change it and generate again.';
+    if (!window.confirm(ask)) return;
+    b.disabled = true; b.textContent = 'Resetting…';
     try {
-      const r = await bookingCall('/api/booking/slots/clear', { scheduleId: sc._id, from: rule.from, to: rule.to });
+      const r = await bookingCall('/api/booking/slots/clear',
+        { scheduleId: sc._id, from: dates[0], to: dates[dates.length - 1] });
       await loadBooking(cp.id, true);
-      toast(`${r.removed} removed${r.kept.length ? `, ${r.kept.length} kept because they are booked` : ''}`);
+      toast(`${r.removed} time${r.removed === 1 ? '' : 's'} cleared`
+        + (r.kept.length ? ` · ${r.kept.length} kept because they are booked` : ' · a blank slate'));
       render();
-    } catch (err) { toast(err.message); }
-  });
+    } catch (err) { toast(err.message); b.disabled = false; b.textContent = 'Reset all dates'; }
+  }));
 }
 
 function wireBookingShare(cp) {

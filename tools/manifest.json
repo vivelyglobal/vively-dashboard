@@ -857,7 +857,7 @@
   "ranges": [
    [
     13482,
-    14917
+    14938
    ]
   ],
   "imports": [
@@ -871,14 +871,14 @@
    "import { copyTable, copyText, downloadFile, flagMark, statCard, toCsv } from '../ui/html.js';",
    "import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';"
   ],
-  "sha256": "82dfa600b281aca47e261ce337debe3de407d20286dfa0e74b12f772cf2f0345"
+  "sha256": "2f4e4e4e7ad9b0e89c7d4ff37d6ca440dbcf27d766d4dbedcdab42cfd3b23157"
  },
  {
   "file": "sync/sheetMetrics.js",
   "ranges": [
    [
-    14921,
-    15635
+    14942,
+    15656
    ]
   ],
   "imports": [
