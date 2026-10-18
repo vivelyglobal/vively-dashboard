@@ -14255,6 +14255,16 @@ function bookingRuleSlots(rule, opts) {
   return rows;
 }
 
+/* What pressing the button would actually create: the rule's slots,
+   minus every date and time already on the board, minus anything in the
+   past. Nothing here removes a slot — extending a period must never cost
+   somebody a booking they already hold. */
+function ruleSlotsToAdd(rule, opts, slots, today) {
+  const have = new Set((slots || []).map((s) => s.date + ' ' + s.time));
+  return bookingRuleSlots(rule, opts)
+    .filter((s) => (!today || s.date >= today) && !have.has(s.date + ' ' + s.time));
+}
+
 /* The sentence a person would say, in the language the creator reads. */
 function bookingRuleSummary(rule, opts) {
   const o = opts || {};
@@ -14351,9 +14361,11 @@ function bookingAvailabilityCard(cp) {
   const days = expandBookingRule(rule, { holidays: holidayList(), closedDates: sc.closedDates || [] });
   const live = days.filter((d) => d.open);
   const times = live.reduce((n, d) => n + d.times.length, 0);
-  const existing = new Set(BOOKING.slots.map((s) => s.date + ' ' + s.time));
-  const toAdd = bookingRuleSlots(rule, { holidays: holidayList(), closedDates: sc.closedDates || [], slotMinutes: sc.slotMinutes })
-    .filter((s) => !existing.has(s.date + ' ' + s.time)).length;
+  const ruleOpts = { holidays: holidayList(), closedDates: sc.closedDates || [], slotMinutes: sc.slotMinutes };
+  const adding = ruleSlotsToAdd(rule, ruleOpts, BOOKING.slots, iso(TODAY));
+  const toAdd = adding.length;
+  const haveDates = [...new Set(BOOKING.slots.map((s) => s.date))].sort();
+  const newDays = new Set(adding.filter((s) => !haveDates.includes(s.date)).map((s) => s.date)).size;
   const dayCap = Math.max(0, Math.floor(Number(sc.maxPerDay) || 0));
   const bulkWindow = ruleFirstWindow(rule);
 
@@ -14439,12 +14451,26 @@ function bookingAvailabilityCard(cp) {
     }).join('')}</div>
 
     <div class="divider"></div>
+    <div class="lbl">Booking period</div>
+    <p class="card-sub" style="margin:4px 0 8px">${haveDates.length
+      ? `Dates run <strong style="color:var(--text-2)">${esc(haveDates[0])} → ${esc(haveDates[haveDates.length - 1])}</strong>
+         right now (${BOOKING.slots.length} time${BOOKING.slots.length === 1 ? '' : 's'}). Push the To date out and
+         apply: the new days are added and everything already there — dates, times and the bookings on them —
+         is left exactly as it is.`
+      : 'Set the stretch of dates this rule covers, then apply it to create them.'}</p>
     <div class="grid g3" style="gap:10px">
       <div class="field"><label>From</label><input type="date" id="bkFrom" value="${esc(rule.from)}"/></div>
       <div class="field"><label>To</label><input type="date" id="bkTo" value="${esc(rule.to)}"/></div>
       <div class="field"><label>Public holidays</label>
         <select id="bkSkipHol"><option value="skip" ${rule.skipHolidays !== false ? 'selected' : ''}>Skip them</option>
           <option value="keep" ${rule.skipHolidays === false ? 'selected' : ''}>Open as usual</option></select></div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+      <button class="btn sm primary" id="bkApplyPeriod" ${toAdd ? '' : 'disabled'}>${
+        haveDates.length ? 'Apply period' : 'Create these dates'}${toAdd ? ` — add ${toAdd} time${toAdd === 1 ? '' : 's'}` : ''}</button>
+      <span style="font-size:11.5px;color:var(--text-3)">${toAdd
+        ? `${newDays ? `${newDays} new day${newDays === 1 ? '' : 's'}. ` : ''}Nothing already created is changed or removed.`
+        : 'Every day in this period already has its times — change the dates or the rule to add more.'}</span>
     </div>
 
     <div class="lbl" style="margin-top:10px">Holidays and one-off closures</div>
@@ -14472,7 +14498,8 @@ function bookingAvailabilityCard(cp) {
         <div class="note" style="margin:0 0 10px">${esc(bookingRuleSummary(rule, { holidays: holidayList(), closedDates: sc.closedDates || [] }))}</div>
         <div style="font-size:12px;color:var(--text-3);margin-bottom:10px">
           ${live.length} day${live.length === 1 ? '' : 's'} · ${times} time${times === 1 ? '' : 's'} ·
-          ${toAdd ? `<strong style="color:var(--text-2)">${toAdd} new</strong>` : 'nothing new to add'}
+          ${toAdd ? `<strong style="color:var(--text-2)">${toAdd} new</strong>${
+            newDays ? ` on ${newDays} new day${newDays === 1 ? '' : 's'}` : ''}` : 'nothing new to add'}
           ${dayCap ? `<br/>Capped at ${dayCap} team${dayCap === 1 ? '' : 's'} a day —
             at most <strong style="color:var(--text-2)">${live.length * dayCap}</strong> visits over the whole range.` : ''}
         </div>
@@ -14915,11 +14942,25 @@ function wireBookingAvailability(cp) {
     persist(); redraw();
   }));
 
-  $('#bkGenerate').addEventListener('click', async () => {
-    const rows = bookingRuleSlots(rule, opts());
-    if (!rows.length) { toast('Nothing to generate — no day in that range is open'); return; }
-    const btn = $('#bkGenerate');
-    btn.disabled = true; btn.textContent = 'Generating…';
+  /* Generating and extending the period are the same act: work out what
+     is missing and add only that. Pressing it with a later To date is
+     how a period grows, and nothing that exists is touched — the server
+     skips a date and time it already holds, and deletes nothing. */
+  const runGenerate = async (btn) => {
+    const all = bookingRuleSlots(rule, opts());
+    const today = iso(TODAY);
+    const rows = ruleSlotsToAdd(rule, opts(), BOOKING.slots, today);
+    const past = all.filter((x) => x.date < today).length;
+    if (!rows.length) {
+      toast(all.length
+        ? (past ? 'Every day in that period is already past' : 'Every time in that period is already there')
+        : 'Nothing to generate — no day in that period is open');
+      return;
+    }
+    const had = new Set(BOOKING.slots.map((x) => x.date));
+    const newDays = new Set(rows.filter((x) => !had.has(x.date)).map((x) => x.date)).size;
+    const was = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Working…';
     try {
       const r = await bookingCall('/api/booking/slots/bulk', { scheduleId: sc._id, slots: rows });
       /* The rule is kept so the screen can show it back and regenerate.
@@ -14928,10 +14969,16 @@ function wireBookingAvailability(cp) {
          venue name, the visit length and the party size on every
          Generate. */
       await patchSchedule(cp, { rule });
-      toast(`${r.created} time${r.created === 1 ? '' : 's'} added${r.skipped ? `, ${r.skipped} already there` : ''}`);
+      toast(`${r.created} time${r.created === 1 ? '' : 's'} added`
+        + `${newDays ? ` on ${newDays} new day${newDays === 1 ? '' : 's'}` : ''}`
+        + `${r.skipped ? ` · ${r.skipped} already there, untouched` : ''}`
+        + `${past ? ` · ${past} in the past skipped` : ''}`);
       render();
-    } catch (err) { toast(err.message); btn.disabled = false; btn.textContent = 'Generate'; }
-  });
+    } catch (err) { toast(err.message); btn.disabled = false; btn.textContent = was; }
+  };
+  $('#bkGenerate').addEventListener('click', (e) => runGenerate(e.currentTarget));
+  const applyPeriod = $('#bkApplyPeriod');
+  if (applyPeriod) applyPeriod.addEventListener('click', (e) => runGenerate(e.currentTarget));
 
   /* Back to a blank sheet of dates, whatever range they were made in.
      The old button cleared only what was inside the rule's own From/To,

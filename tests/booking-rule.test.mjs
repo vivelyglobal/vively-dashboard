@@ -265,3 +265,81 @@ test('an old rule counting in minutes also skips the break', async () => {
   r.stepMinutes = 60;
   assert.deepEqual(ruleTimesFor(r, 'Tue'), ['11:00', '12:00', '13:00', '15:00', '16:00', '17:00']);
 });
+
+/* Extending the period. The links are already out and some creators
+   have booked; pushing the end date out must add the new days and leave
+   every existing date, time and booking exactly where it is. */
+
+const weekRule = (from, to) => {
+  const r = defaultBookingRule();
+  r.slotsPerDay = 1;
+  r.skipHolidays = false;
+  r.from = from; r.to = to;
+  return r;
+};
+const asSlots = (rows) => rows.map((r, i) => ({ _id: 's' + i, date: r.date, time: r.time, capacity: 1, booked: 0 }));
+
+test('a fresh period offers every day in it', async () => {
+  const { ruleSlotsToAdd } = await import('../src/views/booking.js');
+  const r = weekRule('2026-11-03', '2026-11-07');          /* Tue–Sat */
+  const add = ruleSlotsToAdd(r, {}, [], '2026-11-01');
+  assert.deepEqual(add.map((x) => x.date), ['2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06', '2026-11-07']);
+});
+
+test('pushing the end date out adds only the days past the old end', async () => {
+  const { ruleSlotsToAdd } = await import('../src/views/booking.js');
+  const first = weekRule('2026-11-03', '2026-11-07');
+  const made = asSlots(bookingRuleSlots(first, {}));
+  const longer = weekRule('2026-11-03', '2026-11-12');
+  const add = ruleSlotsToAdd(longer, {}, made, '2026-11-01');
+  assert.deepEqual(add.map((x) => x.date),
+    ['2026-11-08', '2026-11-10', '2026-11-11', '2026-11-12'], 'Monday the 9th stays closed');
+  assert.ok(add.every((x) => x.date > '2026-11-07'), 'nothing inside the old period is remade');
+});
+
+test('extending proposes no change at all to what already exists', async () => {
+  const { ruleSlotsToAdd } = await import('../src/views/booking.js');
+  const first = weekRule('2026-11-03', '2026-11-07');
+  const made = asSlots(bookingRuleSlots(first, {}));
+  const longer = weekRule('2026-11-03', '2026-11-12');
+  const add = ruleSlotsToAdd(longer, {}, made, '2026-11-01');
+  const kept = new Set(made.map((s) => s.date + ' ' + s.time));
+  assert.ok(add.every((x) => !kept.has(x.date + ' ' + x.time)),
+    'a slot already on the board is never in the list to create');
+  assert.equal(made.length, 5, 'and the existing ones are still all there');
+});
+
+test('pulling the end date back in removes nothing — it just adds nothing', async () => {
+  const { ruleSlotsToAdd } = await import('../src/views/booking.js');
+  const made = asSlots(bookingRuleSlots(weekRule('2026-11-03', '2026-11-12'), {}));
+  const shorter = weekRule('2026-11-03', '2026-11-05');
+  assert.deepEqual(ruleSlotsToAdd(shorter, {}, made, '2026-11-01'), [],
+    'a shorter period is not a delete');
+  assert.equal(made.length, 9);
+});
+
+test('a period that starts in the past adds only what is still to come', async () => {
+  const { ruleSlotsToAdd } = await import('../src/views/booking.js');
+  const r = weekRule('2026-11-03', '2026-11-07');
+  const add = ruleSlotsToAdd(r, {}, [], '2026-11-05');
+  assert.deepEqual(add.map((x) => x.date), ['2026-11-05', '2026-11-06', '2026-11-07']);
+});
+
+test('moving the start earlier backfills the days in front', async () => {
+  const { ruleSlotsToAdd } = await import('../src/views/booking.js');
+  const made = asSlots(bookingRuleSlots(weekRule('2026-11-05', '2026-11-07'), {}));
+  const wider = weekRule('2026-11-03', '2026-11-07');
+  assert.deepEqual(ruleSlotsToAdd(wider, {}, made, '2026-11-01').map((x) => x.date),
+    ['2026-11-03', '2026-11-04']);
+});
+
+test('a changed rule fills the gaps it opens without disturbing the rest', async () => {
+  const { ruleSlotsToAdd } = await import('../src/views/booking.js');
+  const one = weekRule('2026-11-03', '2026-11-05');
+  const made = asSlots(bookingRuleSlots(one, {}));         /* one time a day */
+  const three = weekRule('2026-11-03', '2026-11-05');
+  three.slotsPerDay = 3;
+  const add = ruleSlotsToAdd(three, {}, made, '2026-11-01');
+  assert.equal(add.length, 6, 'two more on each of the three days');
+  assert.ok(add.every((x) => x.time !== '18:30'), 'the time already created is not proposed again');
+});

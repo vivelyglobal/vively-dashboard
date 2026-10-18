@@ -519,14 +519,86 @@ ok('Sunday keeps its own earlier window',
 ok('each time takes one creator unless told otherwise',
   await p.evaluate(() => BOOKING.slots.every((s) => s.capacity === 1)));
 
+/* ---- extending the period after the links are out -----------------------
+
+   The links are shared and somebody has booked. Pushing the end date out
+   has to add the new days and leave every existing date and booking
+   alone — this is the case that used to need deleting and starting over. */
+
+const spanBefore = await p.evaluate(() => {
+  const d = [...new Set(BOOKING.slots.map((s) => s.date))].sort();
+  return { first: d[0], last: d[d.length - 1], days: d.length, times: BOOKING.slots.length };
+});
+ok('the card states the period the dates actually cover',
+  (await p.textContent('#view')).includes(spanBefore.first + ' → ' + spanBefore.last),
+  spanBefore.first + ' → ' + spanBefore.last);
+
+/* a creator books inside the existing period */
+const heldBefore = await p.evaluate(async () => {
+  const s = BOOKING.slots.find((x) => x.booked === 0);
+  await fetch('/api/book/' + BOOKING.schedule.publicToken + '/confirm', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slotId: s._id, name: 'Holder', handle: '@holder' })
+  });
+  return { id: s._id, date: s.date, time: s.time };
+});
+await p.click('#bkRefresh');
+await p.waitForTimeout(900);
+
+const newEnd = await p.evaluate((last) =>
+  new Date(new Date(last + 'T00:00:00Z').getTime() + 7 * 86400000).toISOString().slice(0, 10), spanBefore.last);
+await p.fill('#bkTo', newEnd);
+await p.dispatchEvent('#bkTo', 'change');
+await p.waitForTimeout(600);
+ok('the button offers to add the new days, not to remake the old ones',
+  /Apply period — add \d+ times?/.test(await p.textContent('#bkApplyPeriod')),
+  await p.textContent('#bkApplyPeriod'));
+ok('and says how many days are new', /new day/.test(await p.textContent('#view')));
+
+await p.click('#bkApplyPeriod');
+await p.waitForTimeout(2500);
+const spanAfter = await p.evaluate(() => {
+  const d = [...new Set(BOOKING.slots.map((s) => s.date))].sort();
+  return { first: d[0], last: d[d.length - 1], days: d.length, times: BOOKING.slots.length };
+});
+ok('the period now reaches the new end date', spanAfter.last === newEnd, spanAfter.last + ' vs ' + newEnd);
+ok('it starts where it always did', spanAfter.first === spanBefore.first);
+ok('every day that existed is still there', spanAfter.days > spanBefore.days
+  && spanAfter.times > spanBefore.times, JSON.stringify(spanBefore) + ' → ' + JSON.stringify(spanAfter));
+ok('the booked slot is untouched, with its booking still on it', await p.evaluate((held) => {
+  const s = BOOKING.slots.find((x) => x._id === held.id);
+  return !!s && s.date === held.date && s.time === held.time && s.booked === 1
+    && BOOKING.bookings.some((b) => b.guest.handle === '@holder');
+}, heldBefore));
+ok('and nothing inside the old period was duplicated', await p.evaluate(() => {
+  const seen = new Set();
+  return BOOKING.slots.every((s) => {
+    const k = s.date + ' ' + s.time;
+    if (seen.has(k)) return false;
+    seen.add(k); return true;
+  });
+}));
+
+/* pressing it again with the same period adds nothing */
+await p.waitForTimeout(400);
+ok('with nothing left to add, the button says so and is disabled',
+  (await p.getAttribute('#bkApplyPeriod', 'disabled')) !== null
+  && (await p.textContent('#view')).includes('already has its times'));
+
+/* and pulling the end back in deletes nothing */
+await p.fill('#bkTo', spanBefore.last);
+await p.dispatchEvent('#bkTo', 'change');
+await p.waitForTimeout(600);
+ok('a shorter period is not a delete — the later dates stay until reset',
+  await p.evaluate((n) => [...new Set(BOOKING.slots.map((s) => s.date))].length === n, spanAfter.days));
+
 /* ---- starting the dates over --------------------------------------------
 
    Generating is the "go"; this is the way back. Changing the rule and
    generating again used to leave the first batch stranded, because the
    only clear on offer covered the rule's current range. */
 
-const madeDates = Object.keys(byDate).length;
-ok('there are dates to start over from', madeDates === 6);
+ok('there are dates to start over from', await p.evaluate(() => BOOKING.slots.length > 0));
 
 /* one of them is booked, and a booked day is never swept away */
 const keepSlot = await p.evaluate(async () => {
@@ -540,16 +612,28 @@ const keepSlot = await p.evaluate(async () => {
 await p.click('#bkRefresh');
 await p.waitForTimeout(900);
 
+/* whatever the board holds at this point is what the reset must report */
+const before = await p.evaluate(() => ({
+  times: BOOKING.slots.length,
+  days: new Set(BOOKING.slots.map((s) => s.date)).size,
+  held: BOOKING.slots.filter((s) => (s.booked || 0) > 0).map((s) => s._id),
+  bookings: BOOKING.bookings.length
+}));
+
 await p.click('[data-bkreset]');
 await p.waitForTimeout(2500);
 ok('it says what will go before it goes',
-  /Reset every date/.test(lastDialog) && /18 times across 6 days/.test(lastDialog),
+  /Reset every date/.test(lastDialog)
+  && lastDialog.includes(`${before.times} times across ${before.days} days`),
   lastDialog.replace(/\n+/g, ' ').slice(0, 110));
-ok('and warns that the booked one is kept', /1 of them hold a booking/.test(lastDialog));
-ok('every unbooked time is cleared', await p.evaluate((keep) =>
-  BOOKING.slots.length === 1 && BOOKING.slots[0]._id === keep.id, keepSlot));
-ok('the booking itself is untouched', await p.evaluate(() =>
-  BOOKING.bookings.length === 1 && BOOKING.bookings[0].guest.handle === '@keeper'));
+ok('and warns that the booked ones are kept',
+  lastDialog.includes(`${before.held.length} of them hold a booking`), String(before.held.length));
+ok('every unbooked time is cleared, and only those', await p.evaluate((b) =>
+  BOOKING.slots.length === b.held.length
+  && BOOKING.slots.every((s) => b.held.includes(s._id)), before));
+ok('the bookings themselves are untouched', await p.evaluate((b) =>
+  BOOKING.bookings.length === b.bookings
+  && BOOKING.bookings.some((x) => x.guest.handle === '@keeper'), before));
 ok('the rule is still there to generate from again', await p.evaluate(() =>
   ruleTimesFor(bookingRuleOf(BOOKING.schedule), 'Tue').length === 3));
 
@@ -564,9 +648,9 @@ ok('a changed rule generates cleanly after a reset', await p.evaluate(() => {
   BOOKING.slots.forEach((s) => { (byDay[s.date] = byDay[s.date] || []).push(s.time); });
   return Object.keys(byDay).length === 6;
 }));
-ok('and the kept booking is still on its own time',
-  await p.evaluate((keep) => BOOKING.slots.some((s) => s._id === keep.id)
-    && BOOKING.bookings.length === 1, keepSlot));
+ok('and the kept bookings are still on their own times',
+  await p.evaluate((b) => b.held.every((id) => BOOKING.slots.some((s) => s._id === id))
+    && BOOKING.bookings.length === b.bookings, before));
 
 /* ---- a break in the middle of the day ----------------------------------
 
