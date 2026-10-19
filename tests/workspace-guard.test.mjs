@@ -178,7 +178,7 @@ test('the projection never adds, removes or reorders participants', () => {
 test('a payload with no participants array is left alone rather than crashed on', () => {
   for (const junk of [null, undefined, {}, { participants: null }, { participants: 'nope' }]) {
     const out = B.applyBookingSlots(junk, [bookingFor('pt_1')]);
-    assert.deepEqual(out, { corrected: [], linked: 0 });
+    assert.deepEqual(out, { corrected: [], cleared: [], linked: 0 });
   }
 });
 

@@ -129,15 +129,41 @@ await step('a refused load does not arm the autosave either', async () => {
 
 /* ---- and the cases that must keep working ---------------------------- */
 
-await step('a browser with its own copy still saves on close', async () => {
-  /* the load is refused, but this browser restored a real workspace of
-     its own — that work is worth keeping and must still go back */
+await step('a browser running on nothing but its own copy does not write on close', async () => {
+  /* This used to post, forced, on the reasoning that local work is worth
+     keeping. It is — but a tab that never read the server has no idea how
+     old its copy is, and forcing it over whatever two other people saved
+     in the meantime is how a partner link made in another browser
+     disappeared. The work is kept where it already is: in this browser's
+     local copy, which the next successful load reconciles. (With a
+     refused load there is no session either, so the post could only have
+     been refused anyway.) */
   const { ctx, p, posts } = await session({ local: true, loadStatus: 401 });
   const n = await counts(p);
   if (!n.campaigns) throw new Error('the local copy did not restore, so this proves nothing');
   await closeTab(p);
-  if (!posts.length) throw new Error('a real local workspace was not written back');
-  if (!posts[0].db.campaigns.length) throw new Error('it posted an empty db');
+  if (posts.length) throw new Error('it wrote back from a session that never read the server: '
+    + JSON.stringify(posts[0]).slice(0, 120));
+  await ctx.close();
+});
+
+await step('and the work it was holding is still in that browser', async () => {
+  const { ctx, p } = await session({ local: true, loadStatus: 401 });
+  const stored = await p.evaluate(() => {
+    const raw = localStorage.getItem('vively-workspace-v1');
+    return raw ? (JSON.parse(raw).db.campaigns || []).length : 0;
+  });
+  if (!stored) throw new Error('nothing kept locally — this is where the work would actually be lost');
+  await ctx.close();
+});
+
+await step('a session that did read the server still saves on close', async () => {
+  const { ctx, p, posts } = await session({ local: true, loadStatus: 200 });
+  if (!await touch(p)) throw new Error('nothing to change, so this proves nothing');
+  await closeTab(p);
+  if (!posts.length) throw new Error('a normal session did not write back on close');
+  if (!posts[posts.length - 1].db.campaigns.length) throw new Error('it posted an empty db');
+  if (posts.some((x) => x.force)) throw new Error('the closing save forced past the revision check');
   await ctx.close();
 });
 

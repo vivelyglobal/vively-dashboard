@@ -687,9 +687,29 @@ app.get("/api/workspace", requireStaff(async (req, res) => {
     const col = await getWorkspaceCollection();
     const doc = await col.findOne({ _id: WORKSPACE_ID });
     if (!doc) return res.json({ ok: true, data: null });
+
+    /* The same projection the save path applies, applied on the way out
+       as well. A booking owns the time it booked, and the stored
+       workspace only learns about a move the next time somebody's save
+       goes through — so a staff move, or a creator rebooking, was
+       invisible on a reload until then: the roster, the visit calendar
+       and the day sheet all kept showing the old time. Projecting here
+       makes every load tell the truth whoever saved last. Read-only: the
+       next save writes it down. */
+    let bookingFixes = null;
+    if (bookingApi && doc.db) {
+      try {
+        const applied = bookingStore.applyBookingSlots(doc.db, await bookingApi.liveBookings());
+        if (applied.corrected.length || applied.cleared.length || applied.linked) bookingFixes = applied;
+      } catch (err) {
+        console.error("Booking projection skipped on this load:", err.message);
+      }
+    }
+
     return res.json({
       ok: true,
-      data: { db: doc.db, settings: doc.settings || {}, savedAt: doc.savedAt, revision: doc.revision || 0 }
+      data: { db: doc.db, settings: doc.settings || {}, savedAt: doc.savedAt, revision: doc.revision || 0 },
+      bookings: bookingFixes
     });
   } catch (err) {
     console.error("GET /api/workspace failed:", err.message);
@@ -779,7 +799,7 @@ app.post("/api/workspace", requireStaff(async (req, res) => {
       try {
         const live = await bookingApi.liveBookings();
         const applied = bookingStore.applyBookingSlots(db, live);
-        if (applied.corrected.length || applied.linked) bookingFixes = applied;
+        if (applied.corrected.length || applied.cleared.length || applied.linked) bookingFixes = applied;
       } catch (err) {
         /* a booking lookup that fails must not cost somebody their save */
         console.error("Booking projection skipped on this save:", err.message);

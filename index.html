@@ -1490,6 +1490,27 @@ function setContentUrl(p, cr, url) {
 /* The saved shape: participants without their content, and one
    socialContent array beside them. Called by every write path so the
    local copy and the server copy are the same shape. */
+/* Settings used to come back one key at a time, so everything else in
+   them — the hand-maintained holiday list above all — was dropped on load
+   and then written away by the next save. Whatever the server holds is
+   what this browser gets back. */
+function applyStoredSettings(settings) {
+  if (!settings || typeof settings !== 'object') return;
+  Object.keys(settings).forEach((k) => { SETTINGS[k] = settings[k]; });
+}
+
+/* Bank details leave the dashboard in exactly one direction: to the
+   server. Every file a person can end up holding goes through this. */
+function stripPayout(db) {
+  return Object.assign({}, db, {
+    creators: (db.creators || []).map((c) => {
+      if (!c.payout) return c;
+      const { payout, ...rest } = c;
+      return rest;
+    })
+  });
+}
+
 function dbPayload() {
   return {
     creators: DB.creators,
@@ -1608,6 +1629,31 @@ function toastAfterSave(what, r) {
   toast(r && r.ok && r.reason !== 'unchanged' ? what + ' — saved' : what + ' — ' + saveOutcomeText(r));
 }
 
+/* Corrections the server made to confirmed visit times, applied to the
+   copy on screen. `corrected` is [{ participantId, was, now }]. */
+function adoptBookingFixes(fixes) {
+  if (!fixes) return 0;
+  let n = 0;
+  const find = (id) => DB.participants.find((x) => x && String(x.id) === String(id));
+  (Array.isArray(fixes.corrected) ? fixes.corrected : []).forEach((fix) => {
+    const p = find(fix.participantId);
+    if (!p || !fix.now) return;
+    if (p.confirmedVisitAt !== fix.now) { p.confirmedVisitAt = fix.now; n++; }
+  });
+  /* A cancelled booking stops projecting: the row drops back to the time
+     they asked for, and must never carry the cancelled one as confirmed. */
+  (Array.isArray(fixes.cleared) ? fixes.cleared : []).forEach((fix) => {
+    const p = find(fix.participantId);
+    if (!p) return;
+    if (p.confirmedVisitAt || p.bookingId) {
+      delete p.confirmedVisitAt;
+      delete p.bookingId;
+      n++;
+    }
+  });
+  return n;
+}
+
 function workspacePayload() { return dbPayload(); }
 
 /* The server can now say no, and there are two different noes: 401 is
@@ -1656,7 +1702,8 @@ async function serverLoad() {
     DB.creators.forEach((c) => (byCreator[c.id] = c));
     DB.campaigns.forEach((c) => (byCampaign[c.id] = c));
     linkSocialContent();
-    if (settings && typeof settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = settings.hideBlocked;
+    applyStoredSettings(settings);
+    adoptBookingFixes(json.bookings);
     SERVER.revision = revision || 0;
     SERVER.at = savedAt ? new Date(savedAt) : null;
     SERVER.status = 'idle'; SERVER.error = null;
@@ -1707,7 +1754,7 @@ async function serverSaveNow(opts) {
   if (workspaceIsEmpty() && opts.intent !== RESET_INTENT) {
     SERVER.status = 'error';
     SERVER.error = 'Nothing is loaded, so nothing was saved. Reload the page to fetch the workspace.';
-    notifyStatus();
+    updateSaveBadge();
     return { ok: false, reason: 'empty', error: SERVER.error };
   }
 
@@ -1745,14 +1792,30 @@ async function serverSaveNow(opts) {
     const out = await res.json().catch(() => ({}));
     if (res.status === 409) {
       SERVER.status = 'conflict';
-      SERVER.error = `Saved from another browser at ${out.savedAt ? new Date(out.savedAt).toLocaleString() : 'a later time'}. Click Save again to overwrite it, or reload this page to get their version.`;
-      SERVER.revision = out.revision != null ? out.revision : SERVER.revision;
+      SERVER.error = `Saved from another browser at ${out.savedAt ? new Date(out.savedAt).toLocaleString() : 'a later time'}. Reload this page to get their version, or click Save to overwrite it.`;
+      /* The server's new revision is deliberately NOT adopted here.
+         Taking it would make this tab look up to date while its copy of
+         the workspace is still the old one, and the next autosave — which
+         render() schedules on any click, with nobody deciding anything —
+         would sail through the revision check and overwrite whatever the
+         other person just saved. That is how partner links, holidays and
+         roster edits were disappearing. Leaving the revision behind keeps
+         every automatic save refused until a person reloads or explicitly
+         chooses to overwrite, which is what the Save button's confirm is
+         for. */
+      SERVER.conflictRevision = out.revision != null ? out.revision : null;
       const r = { ok: false, reason: 'conflict', error: SERVER.error };
       if (!opts.silent) toast('Someone else saved more recently — click Save again to overwrite');
       else reportSaveTrouble(r);
       return r;
     }
     if (!res.ok) throw new Error(out.error || ('Server responded ' + res.status));
+    /* The server re-applies every live booking onto the payload on the
+       way in, and says what it corrected. Taking those corrections here
+       is what stops this page displaying a time the server has already
+       overruled — and a booking moved from another browser arrives this
+       way with no reload at all. */
+    adoptBookingFixes(out.bookings);
     SERVER.configured = true;
     SERVER.revision = out.revision;
     SERVER.at = new Date(out.savedAt);
@@ -1782,19 +1845,24 @@ function scheduleServerSave() {
 
 /* last-ditch save when the tab is actually closing — fetch() can get
    cancelled mid-flight on unload, sendBeacon is built for exactly this */
-/* Deliberately the last thing that runs before the tab goes. It posts
-   with force:true, which skips the revision check — so it must only
-   fire when this session has something real to write. */
+/* Deliberately the last thing that runs before the tab goes, and
+   deliberately NOT forced. It used to post force:true, which skips the
+   revision check: closing a tab that had been open a while then wrote its
+   stale copy over whatever anybody else had saved in the meantime, which
+   is how a partner link made in another browser disappeared on somebody
+   else's reload. A closing tab that loses the race is the right outcome —
+   the work is still in this browser's local copy, and reloading brings
+   the server's version back. */
 function flushServerSaveBeacon() {
   try {
     if (!navigator.sendBeacon) return;
-    /* Layer 2. Either the server copy loaded, or this browser restored
-       a valid one of its own. Neither means we are looking at an empty
-       shell because the load failed, and closing that tab must not
-       save over anybody. */
-    if (!SERVER.loadedOk && !localLoadedOk) return;
+    /* Layer 2. Only a session that actually read the server copy may
+       write one back. A tab running on nothing but a restored local copy
+       has no idea how old it is, and closing it must not save over
+       anybody. */
+    if (!SERVER.loadedOk) return;
     if (workspaceIsEmpty()) return;
-    const body = JSON.stringify({ db: workspacePayload(), settings: SETTINGS, revision: SERVER.revision, force: true });
+    const body = JSON.stringify({ db: workspacePayload(), settings: SETTINGS, revision: SERVER.revision });
     navigator.sendBeacon('/api/workspace', new Blob([body], { type: 'application/json' }));
   } catch (e) { /* best effort only */ }
 }
@@ -1823,7 +1891,7 @@ function loadPersisted() {
     DB.creators.forEach((c) => (byCreator[c.id] = c));
     DB.campaigns.forEach((c) => (byCampaign[c.id] = c));
     linkSocialContent();
-    if (saved.settings && typeof saved.settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = saved.settings.hideBlocked;
+    applyStoredSettings(saved.settings);
     persistState.at = saved.savedAt ? new Date(saved.savedAt) : null;
     persistState.bytes = raw.length;
     /* a real workspace came back out of this browser's storage, so this
@@ -1836,6 +1904,9 @@ function loadPersisted() {
 function clearPersisted() {
   try { localStorage.removeItem(STORE_KEY); } catch (e) { /* nothing to clear */ }
   DB.creators.length = 0; DB.campaigns.length = 0; DB.participants.length = 0;
+  /* the other three were left behind, which meant a "cleared" browser
+     still held the partner links and the content library */
+  DB.appointments.length = 0; DB.partnerLinks.length = 0; DB.socialContent.length = 0;
   Object.keys(byCreator).forEach((k) => delete byCreator[k]);
   Object.keys(byCampaign).forEach((k) => delete byCampaign[k]);
   persistState.at = null; persistState.bytes = 0; persistState.error = null;
@@ -3667,16 +3738,6 @@ function maskAccount(v) {
 
 /* the workspace with every payout removed — what leaves this browser
    for the Sheet, for an export, or for the partner page */
-function stripPayout(db) {
-  return Object.assign({}, db, {
-    creators: (db.creators || []).map((c) => {
-      if (!c.payout) return c;
-      const { payout, ...rest } = c;
-      return rest;
-    })
-  });
-}
-
 /* one place that writes a content URL, whether it came from Notion, a
    spreadsheet, or someone typing it into the drawer */
 function showParticipant(pid) {
@@ -3727,9 +3788,12 @@ function showParticipant(pid) {
       ? `<div class="note" style="margin:-4px 0 14px;font-size:12px">
           <strong>${esc(p.confirmedVisitAt || '—')}</strong> — booked by the creator.
           ${p.visitAt && p.visitAt !== p.confirmedVisitAt ? `They originally asked for ${esc(p.visitAt)}.` : ''}
-          <br>Change or cancel it on the campaign's <strong>Booking</strong> tab; editing it here would be undone
-          by the booking itself on the next save.
-          <br><button class="btn xs" id="pdToBooking" type="button" style="margin-top:6px">Open the Booking tab</button>
+          <br>The booking owns this time, so an edit typed here would be undone by it. Moving it is the way to
+          change it, and a move is an override: it holds even if the new time is full.
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px">
+            <button class="btn xs primary" id="pdMoveBooking" type="button">Move this booking</button>
+            <button class="btn xs" id="pdToBooking" type="button">Open the Booking tab</button>
+          </div>
         </div>`
       : `<div class="grid g2" style="gap:10px">
       <div class="field"><label>Confirmed visit — date</label>
@@ -3841,6 +3905,24 @@ function showParticipant(pid) {
   if (toBooking) toBooking.addEventListener('click', () => {
     closeDrawer();
     location.hash = '#/campaigns/' + p.campaignId + '/booking';
+  });
+  /* the override, from the row somebody is actually looking at */
+  const moveBooking = $('#pdMoveBooking');
+  if (moveBooking) moveBooking.addEventListener('click', async () => {
+    const cp = byCampaign[p.campaignId];
+    if (!cp) return;
+    moveBooking.disabled = true; moveBooking.textContent = 'Loading…';
+    try {
+      await loadBooking(p.campaignId, true);
+      if (BOOKING.error) throw new Error(BOOKING.error);
+      const bk = (BOOKING.bookings || []).find((b) => b._id === p.bookingId)
+        || (BOOKING.bookings || []).find((b) => String(b.participantId) === String(p.id));
+      if (!bk) throw new Error('That booking is no longer there — reload the Booking tab.');
+      openStaffMove(cp, bk._id);
+    } catch (err) {
+      toast(err.message);
+      moveBooking.disabled = false; moveBooking.textContent = 'Move this booking';
+    }
   });
   const inviteBtn = $('#pdInvite');
   if (inviteBtn) inviteBtn.addEventListener('click', () => {
@@ -10197,8 +10279,11 @@ function renderSettings(view, item) {
       toast(`Merged ${r.mergedCreators} duplicate record${r.mergedCreators === 1 ? '' : 's'} into ${r.groups} creator${r.groups === 1 ? '' : 's'}`);
       persist(true); render();
     });
+    /* stripPayout, because a file in someone's Downloads folder is the
+       widest exposure there is — and this one gets emailed around. The
+       server keeps the bank details; a backup restores everything else. */
     $('#setExportAll').addEventListener('click', () => downloadFile(
-      JSON.stringify({ savedAt: new Date().toISOString(), db: DB, settings: SETTINGS }, null, 2),
+      JSON.stringify({ savedAt: new Date().toISOString(), db: stripPayout(DB), settings: SETTINGS }, null, 2),
       `vively-workspace-${iso(new Date())}.json`, 'application/json'));
     $('#setImport').addEventListener('change', importCreatorsCsv);
     $('#setRestore').addEventListener('change', restoreBackup);
@@ -10675,7 +10760,7 @@ async function restoreBackup(e) {
     /* a backup taken before the split still has content on the rows;
        linking adopts it rather than losing every video in the file */
     linkSocialContent();
-    if (saved.settings && typeof saved.settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = saved.settings.hideBlocked;
+    applyStoredSettings(saved.settings);
     persist(true);
     toast(`Restored ${DB.campaigns.length} campaigns and ${DB.creators.length} creators`);
     render();
@@ -11179,7 +11264,9 @@ function settingsPartners(view) {
     DB.partnerLinks.push({ partner: b.dataset.make, token: newPartnerToken(), createdAt: new Date().toISOString(), revokedAt: null });
     /* the link only works once the server has the token, so save immediately
        rather than waiting for the debounce */
-    serverSave({ silent: true }).then(() => toast('Link created — copy it once it says Saved'));
+    /* the toast used to fire on a refused save too, so a link the server
+       never stored still read as created and got sent to the venue */
+    serverSave({ silent: true }).then((r) => toastAfterSave('Link created', r));
     render();
   }));
 
@@ -11193,9 +11280,8 @@ function settingsPartners(view) {
     if (!link) return;
     if (!confirm(`Turn off ${b.dataset.revoke}'s link? Anyone holding it stops being able to open the page.`)) return;
     link.revokedAt = new Date().toISOString();
-    serverSave({ silent: true });
+    serverSave({ silent: true }).then((r) => toastAfterSave('Link revoked', r));
     render();
-    toast('Link revoked');
   }));
 
   $$('[data-goto]').forEach((b) => b.addEventListener('click', () => showParticipant(b.dataset.goto)));
@@ -13491,6 +13577,43 @@ function wireHome(reg) {
 const BOOKING = { campaignId: null, schedule: null, slots: [], bookings: [], invites: [],
                   at: null, error: null, loading: false, openDates: {} };
 
+/* The booking collections own the confirmed time; every other part of
+   the dashboard reads it off the participant as confirmedVisitAt. The
+   server projects one onto the other on the way in and out, but an open
+   page has to do it too — otherwise a staff move updates the Booking tab
+   and the roster, the visit calendar, the planner and the day sheet all
+   carry on showing the time the creator first picked, and the next save
+   posts that old time back. Returns what it changed so a caller can say
+   so out loud. */
+function applyBookingTimesLocally(campaignId) {
+  const changed = [];
+  const live = new Map();
+  (BOOKING.bookings || []).forEach((b) => {
+    if (b && b.participantId && b.status !== 'cancelled') live.set(String(b.participantId), b);
+  });
+  DB.participants.forEach((p) => {
+    if (!p || !p.id) return;
+    if (campaignId && p.campaignId !== campaignId) return;
+    const b = live.get(String(p.id));
+    if (b) {
+      const slot = joinSlot(b.date, b.time);
+      if (!slot) return;
+      if (p.confirmedVisitAt !== slot || p.bookingId !== b._id) {
+        changed.push({ id: p.id, was: p.confirmedVisitAt || '', now: slot });
+        p.confirmedVisitAt = slot;
+        p.bookingId = b._id;
+      }
+    } else if (p.bookingId) {
+      /* the booking behind this row is gone — cancelled, or the campaign's
+         booking was deleted — so the row falls back to the requested time */
+      changed.push({ id: p.id, was: p.confirmedVisitAt || '', now: '' });
+      delete p.confirmedVisitAt;
+      delete p.bookingId;
+    }
+  });
+  return changed;
+}
+
 async function loadBooking(campaignId, force) {
   /* an override is for one sitting on one campaign, never a setting */
   if (BOOKING.campaignId !== campaignId) { BOOKING.inviteScope = SAFE_SCOPE; BOOKING.inviteAdvanced = false; }
@@ -13511,6 +13634,11 @@ async function loadBooking(campaignId, force) {
     BOOKING.error = err.message;
   }
   BOOKING.loading = false;
+  /* whatever the bookings now say is what the rest of the page shows */
+  if (!BOOKING.error) {
+    const moved = applyBookingTimesLocally(campaignId);
+    if (moved.length) persist();
+  }
   return BOOKING;
 }
 
@@ -14013,35 +14141,66 @@ function openStaffMove(cp, bookingId) {
   const sc = BOOKING.schedule;
   const closed = new Set(sc.closedDates || []);
   const rows = BOOKING.slots.slice().sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+  /* Two different limits, and they are not the same thing: a slot's
+     seats, and how many teams the venue will take that day. A time can
+     be wide open on a day that is already full. */
+  const dayCap = Math.max(0, Math.floor(Number(sc.maxPerDay) || 0));
+  const dayUsed = {};
+  (BOOKING.bookings || []).forEach((b) => {
+    if (b && b.status !== 'cancelled') dayUsed[b.date] = (dayUsed[b.date] || 0) + 1;
+  });
 
   openDrawer(`Move — ${esc(bk.date)} ${esc(bk.time)}`, `
     <p class="card-sub">Currently <strong>${esc(bk.date)} ${esc(bk.time)}</strong>${bk.partySize > 1 ? `, ${bk.partySize} people` : ''}.
       The creator is not told automatically — there are no notifications yet.</p>
+    ${dayCap ? `<div class="note" style="margin:10px 0 0">The daily limit is <strong>${dayCap} team${dayCap === 1 ? '' : 's'}
+      a day</strong>. A day already at its limit is marked, and moving onto one needs a second yes — it is allowed,
+      and recorded as an override.</div>` : ''}
     <div class="tbl-wrap" style="margin-top:12px"><table class="tbl"><thead><tr>
-      <th>Date</th><th>Time</th><th>Free</th><th></th></tr></thead><tbody>
+      <th>Date</th><th>Time</th><th>Free</th>${dayCap ? '<th>That day</th>' : ''}<th></th></tr></thead><tbody>
       ${rows.map((s) => {
         const free = Math.max(0, s.capacity - s.booked);
         const unavailable = closed.has(s.date) || s.status !== 'open';
         const here = s._id === bk.slotId;
+        /* moving inside the day it already occupies changes no day's count */
+        const sameDay = s.date === bk.date;
+        const used = dayUsed[s.date] || 0;
+        const dayFull = !!dayCap && !sameDay && used >= dayCap;
+        const label = dayFull ? 'Over the daily limit' : (free ? 'Move here' : 'Over capacity');
         return `<tr${here ? ' style="opacity:.5"' : ''}>
           <td>${esc(s.date)}${closed.has(s.date) ? ' <span class="pill grey">blocked</span>' : ''}</td>
           <td>${esc(s.time)}</td>
           <td>${free ? free : '<span style="color:var(--amber)">full</span>'}</td>
+          ${dayCap ? `<td>${used}/${dayCap}${dayFull ? ' <span class="pill orange">day full</span>' : ''}</td>` : ''}
           <td style="text-align:right">${here ? '<span style="color:var(--text-3)">current</span>'
-            : `<button class="btn xs" data-moveto="${esc(s._id)}" data-free="${free}"${unavailable ? ' disabled' : ''}>${free ? 'Move here' : 'Over capacity'}</button>`}</td>
+            : `<button class="btn xs" data-moveto="${esc(s._id)}" data-free="${free}" data-dayfull="${dayFull ? 1 : 0}"
+                data-dayused="${used}"${unavailable ? ' disabled' : ''}>${label}</button>`}</td>
         </tr>`;
       }).join('')}
     </tbody></table></div>`);
 
   $$('[data-moveto]').forEach((b) => b.addEventListener('click', async () => {
     const over = +b.dataset.free === 0;
-    if (over && !window.confirm('That slot is full. Book over capacity anyway?')) return;
+    const overDaily = b.dataset.dayfull === '1';
+    if (over && !overDaily && !window.confirm('That slot is full. Book over capacity anyway?')) return;
+    /* its own question, in its own words: this one is the daily limit,
+       not the seats, and it is the warning that was missing */
+    if (overDaily && !window.confirm(`That day already has ${b.dataset.dayused} of ${dayCap} booking`
+      + `${+b.dataset.dayused === 1 ? '' : 's'} — the daily limit. Go over the daily limit anyway?\n\n`
+      + 'It will be recorded on the booking as a staff override.')) return;
     try {
       await bookingCall('/api/booking/booking/' + bk._id + '/move',
-        { slotId: b.dataset.moveto, overCapacity: over });
+        { slotId: b.dataset.moveto, overCapacity: over, overDaily });
       closeDrawer();
+      /* loadBooking re-projects the new time onto the roster row, so the
+         calendar, the planner and the day sheet move with it rather than
+         holding the time the creator first picked */
       await loadBooking(cp.id, true);
-      toast(over ? 'Moved — over capacity, recorded as a staff decision' : 'Moved');
+      const now = (BOOKING.bookings || []).find((x) => x._id === bk._id);
+      const when = now ? `${now.date} ${now.time}` : 'the new time';
+      const why = overDaily ? ' — over the daily limit, recorded as a staff override'
+        : (over ? ' — over capacity, recorded as a staff decision' : '');
+      toast(`Moved to ${when}${why}`);
       render();
     } catch (err) { toast(err.message); }
   }));
@@ -16477,6 +16636,12 @@ function showAccessDenied() {
 
 async function signOut() {
   try { await fetch('/api/logout', { method: 'POST' }); } catch (e) { /* clear locally anyway */ }
+  /* Signing out has to take the workspace off this machine, not just hide
+     it. The lock is CSS, so a copy left in local storage is readable by
+     anyone who opens the browser's own tools — and that copy holds every
+     creator's address and bank details. The server keeps the only copy
+     that matters; signing back in fetches it again. */
+  clearPersisted();
   authState.user = null;
   saveAuthUser();
   refreshAuthButtons();

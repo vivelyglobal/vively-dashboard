@@ -195,6 +195,27 @@ export function setContentUrl(p, cr, url) {
 /* The saved shape: participants without their content, and one
    socialContent array beside them. Called by every write path so the
    local copy and the server copy are the same shape. */
+/* Settings used to come back one key at a time, so everything else in
+   them — the hand-maintained holiday list above all — was dropped on load
+   and then written away by the next save. Whatever the server holds is
+   what this browser gets back. */
+export function applyStoredSettings(settings) {
+  if (!settings || typeof settings !== 'object') return;
+  Object.keys(settings).forEach((k) => { SETTINGS[k] = settings[k]; });
+}
+
+/* Bank details leave the dashboard in exactly one direction: to the
+   server. Every file a person can end up holding goes through this. */
+export function stripPayout(db) {
+  return Object.assign({}, db, {
+    creators: (db.creators || []).map((c) => {
+      if (!c.payout) return c;
+      const { payout, ...rest } = c;
+      return rest;
+    })
+  });
+}
+
 export function dbPayload() {
   return {
     creators: DB.creators,
@@ -313,6 +334,31 @@ export function toastAfterSave(what, r) {
   toast(r && r.ok && r.reason !== 'unchanged' ? what + ' — saved' : what + ' — ' + saveOutcomeText(r));
 }
 
+/* Corrections the server made to confirmed visit times, applied to the
+   copy on screen. `corrected` is [{ participantId, was, now }]. */
+export function adoptBookingFixes(fixes) {
+  if (!fixes) return 0;
+  let n = 0;
+  const find = (id) => DB.participants.find((x) => x && String(x.id) === String(id));
+  (Array.isArray(fixes.corrected) ? fixes.corrected : []).forEach((fix) => {
+    const p = find(fix.participantId);
+    if (!p || !fix.now) return;
+    if (p.confirmedVisitAt !== fix.now) { p.confirmedVisitAt = fix.now; n++; }
+  });
+  /* A cancelled booking stops projecting: the row drops back to the time
+     they asked for, and must never carry the cancelled one as confirmed. */
+  (Array.isArray(fixes.cleared) ? fixes.cleared : []).forEach((fix) => {
+    const p = find(fix.participantId);
+    if (!p) return;
+    if (p.confirmedVisitAt || p.bookingId) {
+      delete p.confirmedVisitAt;
+      delete p.bookingId;
+      n++;
+    }
+  });
+  return n;
+}
+
 export function workspacePayload() { return dbPayload(); }
 
 /* The server can now say no, and there are two different noes: 401 is
@@ -361,7 +407,8 @@ export async function serverLoad() {
     DB.creators.forEach((c) => (byCreator[c.id] = c));
     DB.campaigns.forEach((c) => (byCampaign[c.id] = c));
     linkSocialContent();
-    if (settings && typeof settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = settings.hideBlocked;
+    applyStoredSettings(settings);
+    adoptBookingFixes(json.bookings);
     SERVER.revision = revision || 0;
     SERVER.at = savedAt ? new Date(savedAt) : null;
     SERVER.status = 'idle'; SERVER.error = null;
@@ -450,14 +497,30 @@ export async function serverSaveNow(opts) {
     const out = await res.json().catch(() => ({}));
     if (res.status === 409) {
       SERVER.status = 'conflict';
-      SERVER.error = `Saved from another browser at ${out.savedAt ? new Date(out.savedAt).toLocaleString() : 'a later time'}. Click Save again to overwrite it, or reload this page to get their version.`;
-      SERVER.revision = out.revision != null ? out.revision : SERVER.revision;
+      SERVER.error = `Saved from another browser at ${out.savedAt ? new Date(out.savedAt).toLocaleString() : 'a later time'}. Reload this page to get their version, or click Save to overwrite it.`;
+      /* The server's new revision is deliberately NOT adopted here.
+         Taking it would make this tab look up to date while its copy of
+         the workspace is still the old one, and the next autosave — which
+         render() schedules on any click, with nobody deciding anything —
+         would sail through the revision check and overwrite whatever the
+         other person just saved. That is how partner links, holidays and
+         roster edits were disappearing. Leaving the revision behind keeps
+         every automatic save refused until a person reloads or explicitly
+         chooses to overwrite, which is what the Save button's confirm is
+         for. */
+      SERVER.conflictRevision = out.revision != null ? out.revision : null;
       const r = { ok: false, reason: 'conflict', error: SERVER.error };
       if (!opts.silent) toast('Someone else saved more recently — click Save again to overwrite');
       else reportSaveTrouble(r);
       return r;
     }
     if (!res.ok) throw new Error(out.error || ('Server responded ' + res.status));
+    /* The server re-applies every live booking onto the payload on the
+       way in, and says what it corrected. Taking those corrections here
+       is what stops this page displaying a time the server has already
+       overruled — and a booking moved from another browser arrives this
+       way with no reload at all. */
+    adoptBookingFixes(out.bookings);
     SERVER.configured = true;
     SERVER.revision = out.revision;
     SERVER.at = new Date(out.savedAt);
@@ -487,19 +550,24 @@ export function scheduleServerSave() {
 
 /* last-ditch save when the tab is actually closing — fetch() can get
    cancelled mid-flight on unload, sendBeacon is built for exactly this */
-/* Deliberately the last thing that runs before the tab goes. It posts
-   with force:true, which skips the revision check — so it must only
-   fire when this session has something real to write. */
+/* Deliberately the last thing that runs before the tab goes, and
+   deliberately NOT forced. It used to post force:true, which skips the
+   revision check: closing a tab that had been open a while then wrote its
+   stale copy over whatever anybody else had saved in the meantime, which
+   is how a partner link made in another browser disappeared on somebody
+   else's reload. A closing tab that loses the race is the right outcome —
+   the work is still in this browser's local copy, and reloading brings
+   the server's version back. */
 export function flushServerSaveBeacon() {
   try {
     if (!navigator.sendBeacon) return;
-    /* Layer 2. Either the server copy loaded, or this browser restored
-       a valid one of its own. Neither means we are looking at an empty
-       shell because the load failed, and closing that tab must not
-       save over anybody. */
-    if (!SERVER.loadedOk && !localLoadedOk) return;
+    /* Layer 2. Only a session that actually read the server copy may
+       write one back. A tab running on nothing but a restored local copy
+       has no idea how old it is, and closing it must not save over
+       anybody. */
+    if (!SERVER.loadedOk) return;
     if (workspaceIsEmpty()) return;
-    const body = JSON.stringify({ db: workspacePayload(), settings: SETTINGS, revision: SERVER.revision, force: true });
+    const body = JSON.stringify({ db: workspacePayload(), settings: SETTINGS, revision: SERVER.revision });
     navigator.sendBeacon('/api/workspace', new Blob([body], { type: 'application/json' }));
   } catch (e) { /* best effort only */ }
 }
@@ -528,7 +596,7 @@ export function loadPersisted() {
     DB.creators.forEach((c) => (byCreator[c.id] = c));
     DB.campaigns.forEach((c) => (byCampaign[c.id] = c));
     linkSocialContent();
-    if (saved.settings && typeof saved.settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = saved.settings.hideBlocked;
+    applyStoredSettings(saved.settings);
     persistState.at = saved.savedAt ? new Date(saved.savedAt) : null;
     persistState.bytes = raw.length;
     /* a real workspace came back out of this browser's storage, so this
@@ -541,6 +609,9 @@ export function loadPersisted() {
 export function clearPersisted() {
   try { localStorage.removeItem(STORE_KEY); } catch (e) { /* nothing to clear */ }
   DB.creators.length = 0; DB.campaigns.length = 0; DB.participants.length = 0;
+  /* the other three were left behind, which meant a "cleared" browser
+     still held the partner links and the content library */
+  DB.appointments.length = 0; DB.partnerLinks.length = 0; DB.socialContent.length = 0;
   Object.keys(byCreator).forEach((k) => delete byCreator[k]);
   Object.keys(byCampaign).forEach((k) => delete byCampaign[k]);
   persistState.at = null; persistState.bytes = 0; persistState.error = null;

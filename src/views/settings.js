@@ -2,7 +2,7 @@ import { STATUS_MAP, TEMPLATES } from '../import/excel.js';
 import { iso } from '../lib/dates.js';
 import { num } from '../lib/format.js';
 import { duplicateCreatorGroups, mergeDuplicateCreators } from '../model/creators.js';
-import { DB, byCampaign, byCreator, clearPersisted, linkSocialContent, notify, persist, persistState, serverSave, toastAfterSave } from '../model/db.js';
+import { DB, applyStoredSettings, byCampaign, byCreator, clearPersisted, linkSocialContent, notify, persist, persistState, serverSave, stripPayout, toastAfterSave } from '../model/db.js';
 import { SETTINGS } from '../model/settings.js';
 import { SOURCES, newId, tierOf } from '../model/vocab.js';
 import { SM, SM_CONTENT_DEFAULT_MAP, SM_CONTENT_FIELDS, commitSheetMetrics, discoverSheetTabs, dryRunSheetMetrics, fetchSheetTab, saveSheetMetricsConfig, smHeaderIndex, smInfluencerKind, smSuggestCampaign } from '../sync/sheetMetrics.js';
@@ -102,8 +102,11 @@ export function renderSettings(view, item) {
       toast(`Merged ${r.mergedCreators} duplicate record${r.mergedCreators === 1 ? '' : 's'} into ${r.groups} creator${r.groups === 1 ? '' : 's'}`);
       persist(true); notify();
     });
+    /* stripPayout, because a file in someone's Downloads folder is the
+       widest exposure there is — and this one gets emailed around. The
+       server keeps the bank details; a backup restores everything else. */
     $('#setExportAll').addEventListener('click', () => downloadFile(
-      JSON.stringify({ savedAt: new Date().toISOString(), db: DB, settings: SETTINGS }, null, 2),
+      JSON.stringify({ savedAt: new Date().toISOString(), db: stripPayout(DB), settings: SETTINGS }, null, 2),
       `vively-workspace-${iso(new Date())}.json`, 'application/json'));
     $('#setImport').addEventListener('change', importCreatorsCsv);
     $('#setRestore').addEventListener('change', restoreBackup);
@@ -580,7 +583,7 @@ export async function restoreBackup(e) {
     /* a backup taken before the split still has content on the rows;
        linking adopts it rather than losing every video in the file */
     linkSocialContent();
-    if (saved.settings && typeof saved.settings.hideBlocked === 'boolean') SETTINGS.hideBlocked = saved.settings.hideBlocked;
+    applyStoredSettings(saved.settings);
     persist(true);
     toast(`Restored ${DB.campaigns.length} campaigns and ${DB.creators.length} creators`);
     notify();

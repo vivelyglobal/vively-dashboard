@@ -1,4 +1,4 @@
-import { parseVisitSlot } from '../import/notion.js';
+import { joinSlot, parseVisitSlot } from '../import/notion.js';
 import { DAY, TODAY, dLabel, iso } from '../lib/dates.js';
 import { DB, byCreator, notify, persist, serverSave } from '../model/db.js';
 import { SETTINGS, isBlocked } from '../model/settings.js';
@@ -20,6 +20,43 @@ import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';
 export const BOOKING = { campaignId: null, schedule: null, slots: [], bookings: [], invites: [],
                   at: null, error: null, loading: false, openDates: {} };
 
+/* The booking collections own the confirmed time; every other part of
+   the dashboard reads it off the participant as confirmedVisitAt. The
+   server projects one onto the other on the way in and out, but an open
+   page has to do it too — otherwise a staff move updates the Booking tab
+   and the roster, the visit calendar, the planner and the day sheet all
+   carry on showing the time the creator first picked, and the next save
+   posts that old time back. Returns what it changed so a caller can say
+   so out loud. */
+export function applyBookingTimesLocally(campaignId) {
+  const changed = [];
+  const live = new Map();
+  (BOOKING.bookings || []).forEach((b) => {
+    if (b && b.participantId && b.status !== 'cancelled') live.set(String(b.participantId), b);
+  });
+  DB.participants.forEach((p) => {
+    if (!p || !p.id) return;
+    if (campaignId && p.campaignId !== campaignId) return;
+    const b = live.get(String(p.id));
+    if (b) {
+      const slot = joinSlot(b.date, b.time);
+      if (!slot) return;
+      if (p.confirmedVisitAt !== slot || p.bookingId !== b._id) {
+        changed.push({ id: p.id, was: p.confirmedVisitAt || '', now: slot });
+        p.confirmedVisitAt = slot;
+        p.bookingId = b._id;
+      }
+    } else if (p.bookingId) {
+      /* the booking behind this row is gone — cancelled, or the campaign's
+         booking was deleted — so the row falls back to the requested time */
+      changed.push({ id: p.id, was: p.confirmedVisitAt || '', now: '' });
+      delete p.confirmedVisitAt;
+      delete p.bookingId;
+    }
+  });
+  return changed;
+}
+
 export async function loadBooking(campaignId, force) {
   /* an override is for one sitting on one campaign, never a setting */
   if (BOOKING.campaignId !== campaignId) { BOOKING.inviteScope = SAFE_SCOPE; BOOKING.inviteAdvanced = false; }
@@ -40,6 +77,11 @@ export async function loadBooking(campaignId, force) {
     BOOKING.error = err.message;
   }
   BOOKING.loading = false;
+  /* whatever the bookings now say is what the rest of the page shows */
+  if (!BOOKING.error) {
+    const moved = applyBookingTimesLocally(campaignId);
+    if (moved.length) persist();
+  }
   return BOOKING;
 }
 
@@ -542,35 +584,66 @@ export function openStaffMove(cp, bookingId) {
   const sc = BOOKING.schedule;
   const closed = new Set(sc.closedDates || []);
   const rows = BOOKING.slots.slice().sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+  /* Two different limits, and they are not the same thing: a slot's
+     seats, and how many teams the venue will take that day. A time can
+     be wide open on a day that is already full. */
+  const dayCap = Math.max(0, Math.floor(Number(sc.maxPerDay) || 0));
+  const dayUsed = {};
+  (BOOKING.bookings || []).forEach((b) => {
+    if (b && b.status !== 'cancelled') dayUsed[b.date] = (dayUsed[b.date] || 0) + 1;
+  });
 
   openDrawer(`Move — ${esc(bk.date)} ${esc(bk.time)}`, `
     <p class="card-sub">Currently <strong>${esc(bk.date)} ${esc(bk.time)}</strong>${bk.partySize > 1 ? `, ${bk.partySize} people` : ''}.
       The creator is not told automatically — there are no notifications yet.</p>
+    ${dayCap ? `<div class="note" style="margin:10px 0 0">The daily limit is <strong>${dayCap} team${dayCap === 1 ? '' : 's'}
+      a day</strong>. A day already at its limit is marked, and moving onto one needs a second yes — it is allowed,
+      and recorded as an override.</div>` : ''}
     <div class="tbl-wrap" style="margin-top:12px"><table class="tbl"><thead><tr>
-      <th>Date</th><th>Time</th><th>Free</th><th></th></tr></thead><tbody>
+      <th>Date</th><th>Time</th><th>Free</th>${dayCap ? '<th>That day</th>' : ''}<th></th></tr></thead><tbody>
       ${rows.map((s) => {
         const free = Math.max(0, s.capacity - s.booked);
         const unavailable = closed.has(s.date) || s.status !== 'open';
         const here = s._id === bk.slotId;
+        /* moving inside the day it already occupies changes no day's count */
+        const sameDay = s.date === bk.date;
+        const used = dayUsed[s.date] || 0;
+        const dayFull = !!dayCap && !sameDay && used >= dayCap;
+        const label = dayFull ? 'Over the daily limit' : (free ? 'Move here' : 'Over capacity');
         return `<tr${here ? ' style="opacity:.5"' : ''}>
           <td>${esc(s.date)}${closed.has(s.date) ? ' <span class="pill grey">blocked</span>' : ''}</td>
           <td>${esc(s.time)}</td>
           <td>${free ? free : '<span style="color:var(--amber)">full</span>'}</td>
+          ${dayCap ? `<td>${used}/${dayCap}${dayFull ? ' <span class="pill orange">day full</span>' : ''}</td>` : ''}
           <td style="text-align:right">${here ? '<span style="color:var(--text-3)">current</span>'
-            : `<button class="btn xs" data-moveto="${esc(s._id)}" data-free="${free}"${unavailable ? ' disabled' : ''}>${free ? 'Move here' : 'Over capacity'}</button>`}</td>
+            : `<button class="btn xs" data-moveto="${esc(s._id)}" data-free="${free}" data-dayfull="${dayFull ? 1 : 0}"
+                data-dayused="${used}"${unavailable ? ' disabled' : ''}>${label}</button>`}</td>
         </tr>`;
       }).join('')}
     </tbody></table></div>`);
 
   $$('[data-moveto]').forEach((b) => b.addEventListener('click', async () => {
     const over = +b.dataset.free === 0;
-    if (over && !window.confirm('That slot is full. Book over capacity anyway?')) return;
+    const overDaily = b.dataset.dayfull === '1';
+    if (over && !overDaily && !window.confirm('That slot is full. Book over capacity anyway?')) return;
+    /* its own question, in its own words: this one is the daily limit,
+       not the seats, and it is the warning that was missing */
+    if (overDaily && !window.confirm(`That day already has ${b.dataset.dayused} of ${dayCap} booking`
+      + `${+b.dataset.dayused === 1 ? '' : 's'} — the daily limit. Go over the daily limit anyway?\n\n`
+      + 'It will be recorded on the booking as a staff override.')) return;
     try {
       await bookingCall('/api/booking/booking/' + bk._id + '/move',
-        { slotId: b.dataset.moveto, overCapacity: over });
+        { slotId: b.dataset.moveto, overCapacity: over, overDaily });
       closeDrawer();
+      /* loadBooking re-projects the new time onto the roster row, so the
+         calendar, the planner and the day sheet move with it rather than
+         holding the time the creator first picked */
       await loadBooking(cp.id, true);
-      toast(over ? 'Moved — over capacity, recorded as a staff decision' : 'Moved');
+      const now = (BOOKING.bookings || []).find((x) => x._id === bk._id);
+      const when = now ? `${now.date} ${now.time}` : 'the new time';
+      const why = overDaily ? ' — over the daily limit, recorded as a staff override'
+        : (over ? ' — over capacity, recorded as a staff decision' : '');
+      toast(`Moved to ${when}${why}`);
       notify();
     } catch (err) { toast(err.message); }
   }));

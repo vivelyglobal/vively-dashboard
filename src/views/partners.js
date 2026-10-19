@@ -1,5 +1,5 @@
 import { num } from '../lib/format.js';
-import { DB, byCreator, notify, serverSave } from '../model/db.js';
+import { DB, byCreator, notify, serverSave, toastAfterSave } from '../model/db.js';
 import { STAGES } from '../model/vocab.js';
 import { STAGE_TO_NOTION, WRITEBACK, saveWriteback } from '../sync/notionWriteback.js';
 import { partnerStatus, partnersInUse } from '../sync/partner.js';
@@ -154,7 +154,9 @@ export function settingsPartners(view) {
     DB.partnerLinks.push({ partner: b.dataset.make, token: newPartnerToken(), createdAt: new Date().toISOString(), revokedAt: null });
     /* the link only works once the server has the token, so save immediately
        rather than waiting for the debounce */
-    serverSave({ silent: true }).then(() => toast('Link created — copy it once it says Saved'));
+    /* the toast used to fire on a refused save too, so a link the server
+       never stored still read as created and got sent to the venue */
+    serverSave({ silent: true }).then((r) => toastAfterSave('Link created', r));
     notify();
   }));
 
@@ -168,9 +170,8 @@ export function settingsPartners(view) {
     if (!link) return;
     if (!confirm(`Turn off ${b.dataset.revoke}'s link? Anyone holding it stops being able to open the page.`)) return;
     link.revokedAt = new Date().toISOString();
-    serverSave({ silent: true });
+    serverSave({ silent: true }).then((r) => toastAfterSave('Link revoked', r));
     notify();
-    toast('Link revoked');
   }));
 
   $$('[data-goto]').forEach((b) => b.addEventListener('click', () => showParticipant(b.dataset.goto)));

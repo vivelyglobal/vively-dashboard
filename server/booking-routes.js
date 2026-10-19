@@ -747,6 +747,29 @@ function mountBookingRoutes(app, deps) {
       const previousSlotId = bk.slotId;
       const seats = bk.partySize;
 
+      /* The day cap is a separate limit from the slot's seats, and until
+         now the staff move only saw the seats: moving somebody into an
+         empty time on a day already at its cap went through in silence.
+         A person may still do it — this is the override the dashboard is
+         for — but they have to be told, and it is written down. Moving
+         within the same day never trips it: the day's count is unchanged. */
+      const schedule = await (await schedules()).findOne({ _id: bk.scheduleId });
+      const dayCap = Math.max(0, Math.floor(Number((schedule || {}).maxPerDay) || 0));
+      const overDaily = !!(req.body || {}).overDaily;
+      let dayCount = 0;
+      if (dayCap && next.date !== bk.date) {
+        dayCount = (await bkCol.find({ scheduleId: bk.scheduleId, date: next.date, status: "confirmed" })
+          .toArray()).length;
+        if (dayCount >= dayCap && !overDaily) {
+          return res.status(409).json({
+            error: `${next.date} already has ${dayCount} booking${dayCount === 1 ? "" : "s"}, and the limit is `
+              + `${dayCap} a day. Moving this one there goes over the daily limit.`,
+            code: "day_full", dayCount, maxPerDay: dayCap
+          });
+        }
+      }
+      const breaksDayCap = !!(dayCap && next.date !== bk.date && dayCount >= dayCap);
+
       /* the same claim the creator's move makes; only the fallback differs */
       const plan = B.claimPlan(next._id, seats);
       let claimed = await sl.findOneAndUpdate(plan.filter, plan.update, { returnDocument: "after" });
@@ -767,10 +790,14 @@ function mountBookingRoutes(app, deps) {
         const done = await bkCol.updateOne(
           { _id: bk._id, status: "confirmed", slotId: previousSlotId },
           { $set: { slotId: next._id, date: next.date, time: next.time, startsAt: next.startsAt,
-                    source: "staff", overCapacity: over && !claimed, updatedAt: new Date() },
+                    source: "staff", overCapacity: over && !claimed,
+                    overDailyLimit: breaksDayCap, updatedAt: new Date() },
             $push: { history: { at: new Date(), action: "moved", by: "staff",
                      from: bk.date + " " + bk.time, to: next.date + " " + next.time,
-                     overCapacity: over && !claimed } } }
+                     overCapacity: over && !claimed,
+                     overDailyLimit: breaksDayCap,
+                     dayLimit: breaksDayCap ? dayCap : undefined,
+                     dayCountBefore: breaksDayCap ? dayCount : undefined } } }
         );
         if (!done.modifiedCount) throw new Error("booking changed underneath the move");
       } catch (err) {
@@ -781,7 +808,8 @@ function mountBookingRoutes(app, deps) {
 
       const release = B.releasePlan(previousSlotId, seats);
       await sl.updateOne(release.filter, release.update);
-      return res.json({ ok: true, overCapacity: over && !claimed });
+      return res.json({ ok: true, overCapacity: over && !claimed,
+        overDailyLimit: breaksDayCap, maxPerDay: dayCap || 0, dayCount: breaksDayCap ? dayCount + 1 : undefined });
     } catch (err) {
       console.error("POST /api/booking/booking/move failed:", err.message);
       return res.status(502).json({ error: "Could not move that booking." });

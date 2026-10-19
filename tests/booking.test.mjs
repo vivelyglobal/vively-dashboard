@@ -230,3 +230,64 @@ test('a hand-typed confirmed time is left alone when no booking claims it', () =
   B.applyBookingSlots(db, [booked()]);
   assert.equal(db.participants[0].confirmedVisitAt, '2026-09-20 11:00');
 });
+
+/* A cancelled booking must stop being a confirmed visit. The time they
+   asked for stays on file as visitAt — the requested time — and is never
+   promoted back into a confirmed booking by anything here. */
+
+test('a cancelled booking clears the confirmed time it had put on the row', () => {
+  const db = { participants: [
+    { id: 'pt_1', campaignId: 'cp_1', visitAt: '2026-09-14 12:00',
+      confirmedVisitAt: '2026-09-14 13:00', bookingId: 'bk_1' }
+  ] };
+  /* bk_1 is not in the live set any more; somebody else's booking is */
+  const out = B.applyBookingSlots(db, [booked({ _id: 'bk_9', participantId: 'pt_other' })]);
+  const row = db.participants[0];
+  assert.equal(row.confirmedVisitAt, undefined, 'the cancelled time is gone');
+  assert.equal(row.bookingId, undefined, 'and so is the link to the booking');
+  assert.equal(row.visitAt, '2026-09-14 12:00', 'the requested time is untouched');
+  assert.deepEqual(out.cleared, [{ participantId: 'pt_1', was: '2026-09-14 13:00' }]);
+});
+
+test('the requested time is never written back as a confirmed one', () => {
+  const db = { participants: [
+    { id: 'pt_1', campaignId: 'cp_1', visitAt: '2026-09-14 12:00',
+      confirmedVisitAt: '2026-09-14 13:00', bookingId: 'bk_1' }
+  ] };
+  B.applyBookingSlots(db, [booked({ _id: 'bk_9', participantId: 'pt_other' })]);
+  const row = db.participants[0];
+  assert.ok(!row.confirmedVisitAt, 'not the cancelled booking');
+  assert.notEqual(row.confirmedVisitAt, row.visitAt, 'and not the request promoted in its place');
+});
+
+test('a row that never had a booking is not touched by the clearing', () => {
+  const db = { participants: [
+    { id: 'pt_1', campaignId: 'cp_1', visitAt: '2026-09-14 12:00', confirmedVisitAt: '2026-09-20 18:00' }
+  ] };
+  const before = JSON.stringify(db.participants[0]);
+  const out = B.applyBookingSlots(db, [booked({ _id: 'bk_9', participantId: 'pt_other' })]);
+  assert.equal(JSON.stringify(db.participants[0]), before,
+    'a time somebody set by hand is theirs, not a stale projection');
+  assert.equal(out.cleared.length, 0);
+});
+
+test('a live booking is not cleared by the presence of other bookings', () => {
+  const db = { participants: [
+    { id: 'pt_1', campaignId: 'cp_1', confirmedVisitAt: '2026-09-14 13:00', bookingId: 'bk_1' }
+  ] };
+  const out = B.applyBookingSlots(db, [booked(), booked({ _id: 'bk_9', participantId: 'pt_other' })]);
+  assert.equal(db.participants[0].confirmedVisitAt, '2026-09-14 13:00');
+  assert.equal(db.participants[0].bookingId, 'bk_1');
+  assert.equal(out.cleared.length, 0);
+});
+
+test('a cancelled booking in the list does not keep the row alive', () => {
+  const db = { participants: [
+    { id: 'pt_1', campaignId: 'cp_1', confirmedVisitAt: '2026-09-14 13:00', bookingId: 'bk_1' }
+  ] };
+  /* the caller filters to confirmed, but a lax caller must not break it:
+     a cancelled bk_1 arriving in the list is still not a live booking */
+  const out = B.applyBookingSlots(db, [booked({ status: 'cancelled' }), booked({ _id: 'bk_9', participantId: 'pt_other' })]);
+  assert.equal(db.participants[0].confirmedVisitAt, undefined);
+  assert.equal(out.cleared.length, 1);
+});

@@ -4,7 +4,7 @@ import { campaignsSharingNotionDb, joinSlot, notionLinkedCampaigns, openNotionMa
 import { DAY, TODAY, addDays, dLabel, iso } from '../lib/dates.js';
 import { engagementsOf, kmb, money2, num, pct, won, wonK } from '../lib/format.js';
 import { recomputeCreatorStats } from '../model/creators.js';
-import { DB, byCampaign, byCreator, detachContent, notify, persist, serverSave, setContentUrl, toastAfterSave } from '../model/db.js';
+import { DB, byCampaign, byCreator, detachContent, notify, persist, serverSave, setContentUrl, stripPayout, toastAfterSave } from '../model/db.js';
 import { duplicateIdBanner, wireDuplicateIdBanner } from '../model/duplicates.js';
 import { SETTINGS, isBlocked, selectable } from '../model/settings.js';
 import { campaignStats, dailySeries, liveOf, partsOf, viralScore } from '../model/stats.js';
@@ -15,7 +15,7 @@ import { syncStageToNotion } from '../sync/notionWriteback.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { FLAGS, avatarHtml, copyText, daysAgo, downloadFile, emptyState, flagMark, flagPill, flagRowClass, flaggedOnRoster, stagePill, statCard, statusPill, tierPill, toCsv, whoHtml } from '../ui/html.js';
 import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';
-import { bookingTab, inviteParticipantToBook } from './booking.js';
+import { BOOKING, bookingTab, inviteParticipantToBook, loadBooking, openStaffMove } from './booking.js';
 import { campaignCalendarTab, renderCampaignCalendar, upcomingVisitsStrip } from './calendarView.js';
 import { openImportWizard } from './excelImport.js';
 import { briefTab, messagesTab } from './messages.js';
@@ -701,16 +701,6 @@ export function maskAccount(v) {
 
 /* the workspace with every payout removed — what leaves this browser
    for the Sheet, for an export, or for the partner page */
-export function stripPayout(db) {
-  return Object.assign({}, db, {
-    creators: (db.creators || []).map((c) => {
-      if (!c.payout) return c;
-      const { payout, ...rest } = c;
-      return rest;
-    })
-  });
-}
-
 /* one place that writes a content URL, whether it came from Notion, a
    spreadsheet, or someone typing it into the drawer */
 export function showParticipant(pid) {
@@ -761,9 +751,12 @@ export function showParticipant(pid) {
       ? `<div class="note" style="margin:-4px 0 14px;font-size:12px">
           <strong>${esc(p.confirmedVisitAt || '—')}</strong> — booked by the creator.
           ${p.visitAt && p.visitAt !== p.confirmedVisitAt ? `They originally asked for ${esc(p.visitAt)}.` : ''}
-          <br>Change or cancel it on the campaign's <strong>Booking</strong> tab; editing it here would be undone
-          by the booking itself on the next save.
-          <br><button class="btn xs" id="pdToBooking" type="button" style="margin-top:6px">Open the Booking tab</button>
+          <br>The booking owns this time, so an edit typed here would be undone by it. Moving it is the way to
+          change it, and a move is an override: it holds even if the new time is full.
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px">
+            <button class="btn xs primary" id="pdMoveBooking" type="button">Move this booking</button>
+            <button class="btn xs" id="pdToBooking" type="button">Open the Booking tab</button>
+          </div>
         </div>`
       : `<div class="grid g2" style="gap:10px">
       <div class="field"><label>Confirmed visit — date</label>
@@ -875,6 +868,24 @@ export function showParticipant(pid) {
   if (toBooking) toBooking.addEventListener('click', () => {
     closeDrawer();
     location.hash = '#/campaigns/' + p.campaignId + '/booking';
+  });
+  /* the override, from the row somebody is actually looking at */
+  const moveBooking = $('#pdMoveBooking');
+  if (moveBooking) moveBooking.addEventListener('click', async () => {
+    const cp = byCampaign[p.campaignId];
+    if (!cp) return;
+    moveBooking.disabled = true; moveBooking.textContent = 'Loading…';
+    try {
+      await loadBooking(p.campaignId, true);
+      if (BOOKING.error) throw new Error(BOOKING.error);
+      const bk = (BOOKING.bookings || []).find((b) => b._id === p.bookingId)
+        || (BOOKING.bookings || []).find((b) => String(b.participantId) === String(p.id));
+      if (!bk) throw new Error('That booking is no longer there — reload the Booking tab.');
+      openStaffMove(cp, bk._id);
+    } catch (err) {
+      toast(err.message);
+      moveBooking.disabled = false; moveBooking.textContent = 'Move this booking';
+    }
   });
   const inviteBtn = $('#pdInvite');
   if (inviteBtn) inviteBtn.addEventListener('click', () => {

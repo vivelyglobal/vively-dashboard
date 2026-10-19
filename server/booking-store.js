@@ -225,21 +225,37 @@ function validateSlot(input) {
    what moved under it instead of leaving it showing a time that is no
    longer true. */
 function applyBookingSlots(db, bookings) {
-  const out = { corrected: [], linked: 0 };
+  const out = { corrected: [], cleared: [], linked: 0 };
   const list = Array.isArray(bookings) ? bookings : [];
   if (!db || !Array.isArray(db.participants) || !list.length) return out;
 
   const live = new Map();
+  const liveIds = new Set();
   list.forEach((b) => {
     if (!b || b.status !== 'confirmed' || !b.participantId) return;
     live.set(String(b.participantId), b);
+    liveIds.add(String(b._id));
   });
-  if (!live.size) return out;
 
   db.participants.forEach((p) => {
     if (!p || !p.id) return;
     const b = live.get(String(p.id));
-    if (!b) return;
+
+    if (!b) {
+      /* A row pointing at a booking that is no longer confirmed — the
+         creator or staff cancelled it. The caller hands us every live
+         booking there is, so a bookingId missing from that set is gone,
+         and the row has to stop claiming a confirmed visit: otherwise
+         the cancelled time keeps showing up on the calendar, the day
+         sheet and the partner page. It falls back to visitAt, the time
+         they asked for, which is left exactly as it is. */
+      if (p.bookingId && !liveIds.has(String(p.bookingId))) {
+        out.cleared.push({ participantId: p.id, was: p.confirmedVisitAt || '' });
+        delete p.confirmedVisitAt;
+        delete p.bookingId;
+      }
+      return;
+    }
 
     const slot = slotToVisitAt(b.date, b.time);
     if (!slot) return;

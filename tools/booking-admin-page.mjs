@@ -798,6 +798,240 @@ ok('dropping it back to one a day is one edit, not fifteen', await p.evaluate(()
   && ruleTimesFor(bookingRuleOf(BOOKING.schedule), 'Sun').length === 1));
 ok('and the card says so', (await p.textContent('#view')).includes('1 time a day'));
 
+/* ---- a staff move has to reach the rest of the dashboard ---------------
+
+   The reported bug: move a creator's booking, press save, see no change —
+   and after a refresh the time the creator originally creatorPicked is back. The
+   booking collections had the move; the roster row did not, because
+   confirmedVisitAt was only re-projected when a workspace save happened
+   to go through, and nothing on the page adopted it. */
+
+await go('campaigns/' + CP + '/booking');
+await p.waitForSelector('#bkGenerate', { timeout: 8000 });
+
+/* this campaign was reset further up, so it needs dates and a link again */
+await p.click('#bkGenerate');
+await p.waitForTimeout(2500);
+ok('there are times to book before this starts', await p.evaluate(() => BOOKING.slots.length > 2),
+  await p.evaluate(() => String(BOOKING.slots.length)));
+
+/* a creator picks a time of their own choosing, through their own link */
+const creatorPicked = await p.evaluate(async (cpId) => {
+  const part = DB.participants.find((x) => x.campaignId === cpId
+    && STAGE_IDX[x.stage] >= STAGE_IDX.confirmed && x.stage !== 'dropped');
+  const made = await (await fetch('/api/booking/invite', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ campaignId: cpId, participantId: part.id, creatorId: part.creatorId,
+      handle: (byCreator[part.creatorId] || {}).handle, name: part.fullName })
+  })).json();
+  const slot = BOOKING.slots.filter((s) => s.booked === 0).sort((a, b) =>
+    (a.date + a.time).localeCompare(b.date + b.time))[0];
+  const r = await fetch('/api/book/' + made.invite._id + '/confirm', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slotId: slot._id })
+  });
+  return { ok: r.ok, participantId: part.id, date: slot.date, time: slot.time };
+}, CP);
+ok('the creator\'s booking goes through', creatorPicked.ok, JSON.stringify(creatorPicked));
+await p.click('#bkRefresh');
+await p.waitForTimeout(1200);
+ok('the creator\'s own choice lands on the roster row', await p.evaluate((pick) => {
+  const row = DB.participants.find((x) => x.id === pick.participantId);
+  return !!row && row.confirmedVisitAt === pick.date + ' ' + pick.time;
+}, creatorPicked), JSON.stringify(creatorPicked));
+
+/* staff move it somewhere else */
+const staffMovedTo = await p.evaluate(async (pick) => {
+  const bk = BOOKING.bookings.find((b) => String(b.participantId) === String(pick.participantId));
+  /* A different day, and one with no booking on it: this check is about
+     the move reaching the roster, not about the daily limit, and the cap
+     set further up would otherwise make it an override. */
+  const free = (d) => !BOOKING.bookings.some((b) => b.date === d && b.status !== 'cancelled');
+  const target = BOOKING.slots.find((s) => s.date !== bk.date && s.booked === 0 && free(s.date))
+    || BOOKING.slots.find((s) => s._id !== bk.slotId && s.booked === 0);
+  const r = await fetch('/api/booking/booking/' + bk._id + '/move', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slotId: target._id })
+  });
+  return { ok: r.ok, date: target.date, time: target.time };
+}, creatorPicked);
+ok('the move is accepted', staffMovedTo.ok);
+
+await p.click('#bkRefresh');
+await p.waitForTimeout(1200);
+ok('the roster row follows the move, without a reload', await p.evaluate((args) => {
+  const row = DB.participants.find((x) => x.id === args.pick.participantId);
+  return !!row && row.confirmedVisitAt === args.to.date + ' ' + args.to.time;
+}, { pick: creatorPicked, to: staffMovedTo }), staffMovedTo.date + ' ' + staffMovedTo.time);
+
+ok('and the visit calendar shows the new time, not the creator\'s first choice', await (async () => {
+  await go('campaigns/' + CP + '/calendar');
+  const text = await p.textContent('#view');
+  return text.includes(staffMovedTo.time) || !text.includes(creatorPicked.time);
+})());
+
+/* the part that was actually broken: a reload */
+await p.reload({ waitUntil: 'domcontentloaded' });
+await p.waitForTimeout(2000);
+ok('after a refresh the move is still there — this is the bug', await p.evaluate((args) => {
+  const row = DB.participants.find((x) => x.id === args.pick.participantId);
+  return !!row && row.confirmedVisitAt === args.to.date + ' ' + args.to.time;
+}, { pick: creatorPicked, to: staffMovedTo }),
+  await p.evaluate((pick) => {
+    const row = DB.participants.find((x) => x.id === pick.participantId);
+    return row ? String(row.confirmedVisitAt) : 'row gone';
+  }, creatorPicked));
+
+ok('the creator\'s original pick is remembered as what they asked for, not as the booking',
+  await p.evaluate((args) => {
+    const row = DB.participants.find((x) => x.id === args.pick.participantId);
+    return !!row && row.confirmedVisitAt !== args.pick.date + ' ' + args.pick.time;
+  }, { pick: creatorPicked }));
+
+/* and the override is reachable from the roster row itself */
+ok('a booked row offers to move the booking', await (async () => {
+  await go('campaigns/' + CP + '/roster');
+  await p.waitForTimeout(600);
+  const opened = await p.evaluate((pick) => {
+    if (typeof showParticipant !== 'function') return false;
+    showParticipant(pick.participantId);
+    return true;
+  }, creatorPicked);
+  if (!opened) return false;
+  await p.waitForSelector('#drawer.open', { timeout: 8000 });
+  return p.isVisible('#pdMoveBooking');
+})());
+ok('and says plainly that a move is the override', (await p.textContent('#drawer')).includes('override'));
+await p.click('#pdMoveBooking');
+await p.waitForSelector('[data-moveto]', { timeout: 10000 });
+ok('which opens the move list for that booking', (await p.$$('[data-moveto]')).length > 0);
+await p.evaluate(() => closeDrawer());
+await p.waitForTimeout(400);
+
+/* ---- the daily limit is an override on screen, not a silent bypass -----
+
+   The slot's seats and the venue's teams-per-day are different limits,
+   and the move list only ever showed the first. A day at its limit has
+   to be marked, say so in its own words, and be recorded when somebody
+   goes ahead. */
+
+await go('campaigns/' + CP + '/booking');
+await p.waitForSelector('#bkMaxPerDay', { timeout: 8000 });
+ok('the campaign is capped at one team a day for this part',
+  await p.evaluate(() => BOOKING.schedule.maxPerDay === 1), await p.evaluate(() => String(BOOKING.schedule.maxPerDay)));
+
+/* a booking that belongs to a roster row, so the cancel half of this can
+   check what the row ends up holding */
+const capMove = await p.evaluate(async () => {
+  const bk = BOOKING.bookings.find((b) => b.participantId && b.status !== 'cancelled');
+  if (!bk) return { bookingId: null };
+  /* a day of its own, with two times on it: one to fill it to its limit,
+     one to try to move onto afterwards. Made here rather than hunted for,
+     so what this checks does not depend on what the sections above left
+     lying around. */
+  const day = new Date(Date.now() + 120 * 86400000).toISOString().slice(0, 10);
+  const mk = async (time) => (await (await fetch('/api/booking/slot', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scheduleId: BOOKING.schedule._id, date: day, time, capacity: 1 })
+  })).json()).slot;
+  const target = await mk('13:00');
+  const filler = await mk('19:00');
+  if (!target || !filler) return { bookingId: bk._id, participantId: bk.participantId, targetSlot: null };
+  return { bookingId: bk._id, participantId: bk.participantId, fromDay: bk.date,
+    targetSlot: target._id, targetDay: day, targetTime: target.time, fillerSlot: filler._id };
+});
+ok('there is a booked roster row and a day of its own to move onto',
+  !!capMove.bookingId && !!capMove.targetSlot, JSON.stringify(capMove));
+
+/* fill the target day to its limit, so moving there goes over it */
+await p.evaluate(async (args) => {
+  await fetch('/api/book/' + BOOKING.schedule.publicToken + '/confirm', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slotId: args.fillerSlot, name: 'Dayfiller', handle: '@dayfiller' })
+  });
+}, capMove);
+await p.click('#bkRefresh');
+await p.waitForTimeout(1200);
+ok('the target day is now at its limit', await p.evaluate((args) =>
+  BOOKING.bookings.filter((b) => b.date === args.targetDay && b.status !== 'cancelled').length === 1, capMove));
+
+await p.evaluate((args) => openStaffMove(byCampaign[args.cp], args.id), { cp: CP, id: capMove.bookingId });
+await p.waitForSelector('[data-moveto]', { timeout: 8000 });
+ok('the move list states the daily limit', (await p.textContent('#drawer')).includes('daily limit'));
+ok('and marks the day that is already full', (await p.textContent('#drawer')).includes('day full'));
+const targetBtn = await p.$(`[data-moveto="${capMove.targetSlot}"]`);
+ok('the button for that day says it would go over the daily limit',
+  !!targetBtn && (await targetBtn.getAttribute('data-dayfull')) === '1'
+  && /over the daily limit/i.test(await targetBtn.textContent()),
+  targetBtn ? await targetBtn.textContent() : 'no button for that slot');
+
+/* the warning is its own question, in its own words */
+lastDialog = '';
+await targetBtn.click();
+await p.waitForTimeout(2500);
+ok('clicking it asks about the daily limit, not about seats',
+  /daily limit/i.test(lastDialog) && !/slot is full/i.test(lastDialog),
+  lastDialog.replace(/\n+/g, ' ').slice(0, 120));
+ok('and says the override will be recorded', /recorded/i.test(lastDialog));
+ok('the move went through, because a person said so', await p.evaluate((args) => {
+  const bk = BOOKING.bookings.find((b) => b._id === args.bookingId);
+  return !!bk && bk.date === args.targetDay && bk.time === args.targetTime;
+}, capMove), await p.evaluate((args) => {
+  const bk = BOOKING.bookings.find((b) => b._id === args.bookingId);
+  return bk ? bk.date + ' ' + bk.time : 'gone';
+}, capMove));
+ok('and it is on the booking as an override, not a quiet pass', await p.evaluate((args) => {
+  const bk = BOOKING.bookings.find((b) => b._id === args.bookingId);
+  return !!bk && bk.overDailyLimit === true
+    && (bk.history || []).some((h) => h.action === 'moved' && h.overDailyLimit === true);
+}, capMove));
+ok('the roster row followed it there', await p.evaluate((args) => {
+  const row = DB.participants.find((x) => x.id === args.participantId);
+  return !!row && row.confirmedVisitAt === args.targetDay + ' ' + args.targetTime;
+}, capMove));
+
+/* ---- cancelling gives the row back its requested time ----------------- */
+
+const cancelled = await p.evaluate(async (args) => {
+  const row = DB.participants.find((x) => x.id === args.participantId);
+  row.visitAt = row.visitAt || '2026-01-02 18:00';
+  const before = { participantId: args.participantId, confirmed: row.confirmedVisitAt, requested: row.visitAt };
+  await fetch('/api/booking/booking/' + args.bookingId + '/cancel', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason: 'venue asked' })
+  });
+  return before;
+}, capMove);
+ok('the row had a confirmed time from the booking', !!cancelled.confirmed, JSON.stringify(cancelled));
+
+await p.click('#bkRefresh');
+await p.waitForTimeout(1500);
+ok('cancelling clears the confirmed time off the roster row', await p.evaluate((c) => {
+  const row = DB.participants.find((x) => x.id === c.participantId);
+  return !!row && !row.confirmedVisitAt && !row.bookingId;
+}, cancelled), await p.evaluate((c) => {
+  const row = DB.participants.find((x) => x.id === c.participantId);
+  return row ? String(row.confirmedVisitAt) + ' / ' + String(row.bookingId) : 'row gone';
+}, cancelled));
+ok('the time they asked for is still on file as the request', await p.evaluate((c) => {
+  const row = DB.participants.find((x) => x.id === c.participantId);
+  return !!row && row.visitAt === c.requested;
+}, cancelled));
+ok('and the cancelled time is not promoted back into a confirmed one', await p.evaluate((c) => {
+  const row = DB.participants.find((x) => x.id === c.participantId);
+  return !!row && row.confirmedVisitAt !== c.confirmed;
+}, cancelled));
+
+await p.reload({ waitUntil: 'domcontentloaded' });
+await p.waitForTimeout(2000);
+ok('still clear after a reload — the cancelled visit does not come back', await p.evaluate((c) => {
+  const row = DB.participants.find((x) => x.id === c.participantId);
+  return !!row && !row.confirmedVisitAt;
+}, cancelled), await p.evaluate((c) => {
+  const row = DB.participants.find((x) => x.id === c.participantId);
+  return row ? String(row.confirmedVisitAt) : 'row gone';
+}, cancelled));
+
 /* ---- nothing else moved -------------------------------------------------- */
 
 ok('the roster still renders', await (async () => {

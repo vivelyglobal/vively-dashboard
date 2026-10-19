@@ -138,3 +138,83 @@ test('the rich flavour is a real table with a header row, and it escapes', async
   assert.match(html, /<td>A &amp; B &lt;co&gt;<\/td>/);
   assert.ok(!html.includes('<co>'));
 });
+
+/* The booking owns the confirmed time. Everything else on the page reads
+   it off the participant, so the page has to copy it across the moment
+   it knows — or a staff move shows up on the Booking tab and nowhere
+   else, and the next save posts the old time back. */
+
+test('a move projects onto the roster row the page is showing', async () => {
+  const { applyBookingTimesLocally } = await import('../src/views/booking.js');
+  seed();
+  DB.participants.find((x) => x.id === 'p1').confirmedVisitAt = '2026-11-02 11:00';
+  DB.participants.find((x) => x.id === 'p1').bookingId = 'bk1';
+  BOOKING.bookings = [{ _id: 'bk1', participantId: 'p1', date: '2026-11-03', time: '19:30', status: 'confirmed' }];
+  const changed = applyBookingTimesLocally('cp1');
+  const row = DB.participants.find((x) => x.id === 'p1');
+  assert.equal(row.confirmedVisitAt, '2026-11-03 19:30');
+  assert.deepEqual(changed, [{ id: 'p1', was: '2026-11-02 11:00', now: '2026-11-03 19:30' }]);
+});
+
+test('a creator booking for the first time lands on the row too', async () => {
+  const { applyBookingTimesLocally } = await import('../src/views/booking.js');
+  seed();
+  BOOKING.bookings = [{ _id: 'bk9', participantId: 'p2', date: '2026-11-04', time: '18:30', status: 'confirmed' }];
+  applyBookingTimesLocally('cp1');
+  const row = DB.participants.find((x) => x.id === 'p2');
+  assert.equal(row.confirmedVisitAt, '2026-11-04 18:30');
+  assert.equal(row.bookingId, 'bk9');
+});
+
+test('a cancelled booking lets the row fall back to what they asked for', async () => {
+  const { applyBookingTimesLocally } = await import('../src/views/booking.js');
+  seed();
+  const row = DB.participants.find((x) => x.id === 'p1');
+  row.visitAt = '2026-11-01 12:00';
+  row.confirmedVisitAt = '2026-11-02 11:00';
+  row.bookingId = 'bk1';
+  BOOKING.bookings = [{ _id: 'bk1', participantId: 'p1', date: '2026-11-02', time: '11:00', status: 'cancelled' }];
+  applyBookingTimesLocally('cp1');
+  assert.equal(row.confirmedVisitAt, undefined);
+  assert.equal(row.bookingId, undefined);
+  assert.equal(row.visitAt, '2026-11-01 12:00', 'the requested time is still on file');
+});
+
+test('rows on other campaigns are left alone', async () => {
+  const { applyBookingTimesLocally } = await import('../src/views/booking.js');
+  seed();
+  DB.participants.push({ id: 'other', campaignId: 'cp2', creatorId: 'c1', stage: 'confirmed',
+    confirmedVisitAt: '2026-12-01 10:00', bookingId: 'bkX' });
+  applyBookingTimesLocally('cp1');
+  const row = DB.participants.find((x) => x.id === 'other');
+  assert.equal(row.confirmedVisitAt, '2026-12-01 10:00', 'another campaign is not this tab\'s business');
+});
+
+test('nothing to change reports nothing', async () => {
+  const { applyBookingTimesLocally } = await import('../src/views/booking.js');
+  seed();
+  DB.participants.find((x) => x.id === 'p1').confirmedVisitAt = '2026-11-03 19:30';
+  DB.participants.find((x) => x.id === 'p1').bookingId = 'bk1';
+  BOOKING.bookings = [{ _id: 'bk1', participantId: 'p1', date: '2026-11-03', time: '19:30', status: 'confirmed' }];
+  assert.deepEqual(applyBookingTimesLocally('cp1'), []);
+});
+
+test('corrections the server made are taken, not argued with', async () => {
+  const { adoptBookingFixes } = await import('../src/model/db.js');
+  seed();
+  DB.participants.find((x) => x.id === 'p1').confirmedVisitAt = '2026-11-02 11:00';
+  const n = adoptBookingFixes({ corrected: [
+    { participantId: 'p1', was: '2026-11-02 11:00', now: '2026-11-05 20:00' },
+    { participantId: 'nobody', was: '', now: '2026-11-05 20:00' }
+  ] });
+  assert.equal(n, 1);
+  assert.equal(DB.participants.find((x) => x.id === 'p1').confirmedVisitAt, '2026-11-05 20:00');
+});
+
+test('and a response carrying no corrections changes nothing', async () => {
+  const { adoptBookingFixes } = await import('../src/model/db.js');
+  seed();
+  DB.participants.find((x) => x.id === 'p1').confirmedVisitAt = '2026-11-02 11:00';
+  [null, undefined, {}, { corrected: [] }].forEach((x) => assert.equal(adoptBookingFixes(x), 0));
+  assert.equal(DB.participants.find((x) => x.id === 'p1').confirmedVisitAt, '2026-11-02 11:00');
+});

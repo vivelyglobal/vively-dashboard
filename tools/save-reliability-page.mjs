@@ -47,7 +47,7 @@ async function session(opts) {
     localStorage.setItem('vively-auth-user-v1', JSON.stringify({ email: 'k@v.com', name: 'K' }));
   }, [seed]);
 
-  const store = { db: JSON.parse(JSON.stringify(seedObj.db)), revision: 7, posts: 0, gate: null };
+  const store = { db: JSON.parse(JSON.stringify(seedObj.db)), revision: 7, posts: 0, refused: 0, gate: null };
   store.hold = () => { let go; store.gate = new Promise((r) => { go = r; }); return go; };
   const p = await ctx.newPage();
   const toasts = [];
@@ -57,7 +57,7 @@ async function session(opts) {
     const req = route.request();
     if (req.method() === 'GET') {
       return route.fulfill({ status: 200, contentType: 'application/json',
-        body: JSON.stringify({ data: { db: store.db, settings: seedObj.settings || {},
+        body: JSON.stringify({ data: { db: store.db, settings: store.settings || seedObj.settings || {},
           savedAt: new Date().toISOString(), revision: store.revision } }) });
     }
     if (req.method() === 'POST') {
@@ -67,6 +67,23 @@ async function session(opts) {
            refused until somebody decides whose version wins */
         return route.fulfill({ status: 409, contentType: 'application/json',
           body: JSON.stringify({ error: 'conflict', revision: 99, savedAt: new Date().toISOString() }) });
+      }
+      if (opts.realLock) {
+        /* The real server's optimistic lock, which `conflict` above does
+           not model: it refuses only while the client's revision is
+           behind. That difference is why a harness that always said 409
+           could not catch a client that stopped being behind. */
+        let body = {};
+        try { body = JSON.parse(req.postData() || '{}'); } catch (e) { /* treated as stale */ }
+        if (!body.force && body.revision !== store.revision) {
+          store.refused++;
+          return route.fulfill({ status: 409, contentType: 'application/json',
+            body: JSON.stringify({ error: 'conflict', revision: store.revision, savedAt: new Date().toISOString() }) });
+        }
+        if (body.db) { store.db = body.db; store.revision++; }
+        if (body.settings) store.settings = body.settings;
+        return route.fulfill({ status: 200, contentType: 'application/json',
+          body: JSON.stringify({ ok: true, savedAt: new Date().toISOString(), revision: store.revision }) });
       }
       /* `gate` holds a POST open until the test lets it go, which is how
          a second save is made to arrive while the first is still in
@@ -269,6 +286,169 @@ console.log('\n     the Save button\n');
     const reachable = await p.evaluate(() => [...document.querySelectorAll('[data-save-now]')]
       .filter((e) => e.getBoundingClientRect().width > 0).length);
     if (!reachable) throw new Error('nothing to press when a save has failed');
+  });
+
+  await ctx.close();
+}
+
+/* ============ N. the partner link another browser just made ============ */
+console.log('\n     a partner link made in another browser\n');
+{
+  /* The reported bug, end to end. Two people, one document. The stale tab
+     used to take the server's new revision number on a 409 without taking
+     its data, so the very next autosave — armed by any click, nobody
+     deciding anything — passed the lock and wrote the old copy over the
+     new link. The venue's link then 404'd, and both people saw "Saved". */
+  const { ctx, p, store, toasts } = await session({ realLock: true });
+
+  await step('this tab is up to date to begin with', async () => {
+    const rev = await p.evaluate(() => SERVER.revision);
+    if (rev !== 7) throw new Error('revision ' + rev);
+    const n = await p.evaluate(() => DB.partnerLinks.length);
+    if (n !== (store.db.partnerLinks || []).length) throw new Error('links out of step at the start');
+  });
+
+  /* somebody else creates a partner link and saves it */
+  const linkCount = (store.db.partnerLinks || []).length;
+  store.db.partnerLinks = (store.db.partnerLinks || []).concat([{
+    partner: 'SPLABAB', token: 'tok-from-the-other-browser', createdAt: new Date().toISOString(), revokedAt: null
+  }]);
+  store.revision = 8;
+
+  await step('the first autosave from this tab is refused, and says so', async () => {
+    const before = toasts.length;
+    await p.evaluate(() => { DB.campaigns[0].note = 'mine ' + Date.now(); persist(true); });
+    await p.waitForTimeout(3200);
+    const said = toasts.slice(before).join(' | ');
+    if (!/more recently/i.test(said)) throw new Error('never said: ' + said);
+    if (store.refused !== 1) throw new Error('refusals: ' + store.refused);
+  });
+
+  await step('it does not quietly become up to date — the revision stays behind', async () => {
+    const rev = await p.evaluate(() => SERVER.revision);
+    if (rev !== 7) throw new Error('adopted the server revision: ' + rev);
+  });
+
+  await step('so the next autosave is refused too, instead of overwriting', async () => {
+    await p.evaluate(() => { DB.campaigns[0].note = 'mine again ' + Date.now(); persist(true); });
+    await p.waitForTimeout(3200);
+    if (store.refused < 2) throw new Error('the second save was accepted — refusals: ' + store.refused);
+  });
+
+  await step('the other browser\'s partner link is still on the server', async () => {
+    const links = store.db.partnerLinks || [];
+    if (links.length !== linkCount + 1) throw new Error(links.length + ' links, expected ' + (linkCount + 1));
+    if (!links.some((l) => l.token === 'tok-from-the-other-browser')) throw new Error('the new link is gone');
+  });
+
+  await step('and the save state still says it needs attention, not Saved', async () => {
+    const t = await p.evaluate(() => {
+      const e = document.getElementById('saveBadge');
+      return { cls: e.className, tip: e.title, status: SERVER.status };
+    });
+    if (t.status !== 'conflict') throw new Error('status: ' + t.status);
+    if (!/warn/.test(t.cls)) throw new Error('badge not warning: ' + t.cls);
+  });
+
+  await step('reloading brings their link into this tab', async () => {
+    await p.reload({ waitUntil: 'domcontentloaded' });
+    await p.waitForTimeout(1900);
+    const seen = await p.evaluate(() => DB.partnerLinks.map((l) => l.token));
+    if (!seen.includes('tok-from-the-other-browser')) throw new Error('not loaded: ' + seen.join(','));
+    const rev = await p.evaluate(() => SERVER.revision);
+    if (rev !== 8) throw new Error('revision after reload: ' + rev);
+  });
+
+  await step('and from there a normal save is accepted again', async () => {
+    await p.evaluate(() => { DB.campaigns[0].note = 'after reload ' + Date.now(); persist(true); });
+    await p.waitForTimeout(3200);
+    if (store.revision !== 9) throw new Error('revision: ' + store.revision);
+    if (!(store.db.partnerLinks || []).some((l) => l.token === 'tok-from-the-other-browser')) {
+      throw new Error('saving after the reload dropped their link');
+    }
+  });
+
+  await ctx.close();
+}
+
+/* ============ N+1. settings survive the round trip ============ */
+console.log('\n     the holiday list\n');
+{
+  /* Only hideBlocked was read back out of the stored settings, so the
+     hand-maintained holiday list was dropped on load and then written
+     away by the next save. One person, no conflict needed. */
+  const { ctx, p, store } = await session({ realLock: true });
+
+  await step('a holiday added here reaches the server', async () => {
+    await p.evaluate(() => {
+      SETTINGS.holidays = [{ d: '2026-12-25', n: 'Christmas' }];
+      DB.campaigns[0].note = 'touch ' + Date.now();
+      persist(true);
+    });
+    await p.waitForTimeout(3200);
+    const hol = (store.settings || {}).holidays || [];
+    if (!hol.some((h) => h.d === '2026-12-25')) throw new Error('not saved: ' + JSON.stringify(store.settings));
+  });
+
+  await step('and is still there after a reload, instead of being dropped', async () => {
+    await p.reload({ waitUntil: 'domcontentloaded' });
+    await p.waitForTimeout(1900);
+    const hol = await p.evaluate(() => (SETTINGS.holidays || []).map((h) => h.d));
+    if (!hol.includes('2026-12-25')) throw new Error('lost on load: ' + hol.join(','));
+  });
+
+  await step('the next save keeps it rather than writing it away', async () => {
+    await p.evaluate(() => { DB.campaigns[0].note = 'again ' + Date.now(); persist(true); });
+    await p.waitForTimeout(3200);
+    const hol = (store.settings || {}).holidays || [];
+    if (!hol.some((h) => h.d === '2026-12-25')) throw new Error('written away: ' + JSON.stringify(store.settings));
+  });
+
+  await ctx.close();
+}
+
+/* ============ N+2. what leaves the dashboard ============ */
+console.log('\n     the backup file and signing out\n');
+{
+  const { ctx, p } = await session({ realLock: true });
+
+  await step('a creator with bank details is what we are protecting', async () => {
+    const n = await p.evaluate(() => {
+      DB.creators[0].payout = { bank: 'KB', name: 'Real Name', number: '1234-5678-9012' };
+      return DB.creators.filter((c) => c.payout && c.payout.number).length;
+    });
+    if (!n) throw new Error('no payout to strip');
+  });
+
+  await step('the backup a person downloads carries no account number', async () => {
+    await p.evaluate(() => { location.hash = '#/settings/sources'; });
+    await p.waitForTimeout(900);
+    const [dl] = await Promise.all([
+      p.waitForEvent('download'),
+      p.click('#setExportAll')
+    ]);
+    const path = await dl.path();
+    const text = await fs.promises.readFile(path, 'utf8');
+    if (text.includes('1234-5678-9012')) throw new Error('the account number is in the file');
+    if (/"payout"/.test(text)) throw new Error('payout objects are in the file');
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed.db.creators) || !parsed.db.creators.length) throw new Error('the backup is empty');
+    if (!parsed.db.creators[0].handle) throw new Error('it stripped more than the payout');
+  });
+
+  await step('signing out takes the workspace off this machine', async () => {
+    const before = await p.evaluate(() => (localStorage.getItem('vively-workspace-v1') || '').length);
+    if (!before) throw new Error('nothing was stored to begin with');
+    await p.evaluate(() => signOut());
+    await p.waitForTimeout(700);
+    const after = await p.evaluate(() => ({
+      stored: localStorage.getItem('vively-workspace-v1'),
+      creators: DB.creators.length, campaigns: DB.campaigns.length, links: DB.partnerLinks.length,
+      locked: document.body.classList.contains('auth-locked')
+    }));
+    if (after.stored !== null) throw new Error('the local copy is still there: ' + after.stored.length + ' bytes');
+    if (after.creators || after.campaigns || after.links) throw new Error('still in memory: ' + JSON.stringify(after));
+    if (!after.locked) throw new Error('the page did not lock');
   });
 
   await ctx.close();

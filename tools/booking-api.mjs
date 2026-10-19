@@ -527,6 +527,109 @@ ok('running it again adds nothing and says so', again.status === 200
 ok('and the day still holds three times, not six',
   (await col('booking_slots').find({ scheduleId, date: bulkDay(0) }).toArray()).length === 3);
 
+/* ---- a staff move is an override, not a bypass -------------------------
+
+   The day cap bound the creator's own paths from the start. The staff
+   move only ever looked at the slot's seats, so moving somebody into an
+   empty time on a day already at its limit went through in silence. */
+
+const ovSch = (await call('/api/booking/schedule', { body: {
+  campaignId: 'cp_ov', venueName: 'One a night', timezone: 'Asia/Seoul', slotMinutes: 90, maxPerDay: 1
+} })).body.schedule;
+const ovId = ovSch._id, ovTok = ovSch.publicToken;
+const ovA = new Date(Date.now() + 100 * 86400000).toISOString().slice(0, 10);
+const ovB = new Date(Date.now() + 101 * 86400000).toISOString().slice(0, 10);
+const ovSlot = async (date, time) =>
+  (await call('/api/booking/slot', { body: { scheduleId: ovId, date, time, capacity: 1 } })).body.slot;
+const aEarly = await ovSlot(ovA, '12:00');
+const aMid = await ovSlot(ovA, '16:00');
+const aLate = await ovSlot(ovA, '20:00');
+const bOnly = await ovSlot(ovB, '12:00');
+const ovBook = (slot, who) => call('/api/book/' + ovTok + '/confirm',
+  { body: { slotId: slot._id, name: who, handle: '@' + who } });
+
+ok('day A takes its one booking', (await ovBook(aEarly, 'ovfirstteam')).status === 200);
+const movingBk = await col('campaign_bookings').findOne({ 'guest.handleNorm': 'ovfirstteam' });
+ok('day B takes its one booking too', (await ovBook(bOnly, 'ovsecondteam')).status === 200);
+const bBk = await col('campaign_bookings').findOne({ 'guest.handleNorm': 'ovsecondteam' });
+
+/* the case that used to pass in silence: an empty time on a full day */
+const silent = await call('/api/booking/booking/' + bBk._id + '/move', { body: { slotId: aLate._id } });
+ok('a staff move onto a day at its limit is refused rather than silently allowed',
+  silent.status === 409 && silent.body.code === 'day_full', JSON.stringify(silent.body).slice(0, 120));
+ok('and the refusal says what the limit is and what the day already holds',
+  silent.body.maxPerDay === 1 && silent.body.dayCount === 1
+  && /daily limit/i.test(silent.body.error || ''), JSON.stringify(silent.body).slice(0, 160));
+ok('nothing moved', await (async () => {
+  const row = await col('campaign_bookings').findOne({ _id: bBk._id });
+  return row.date === ovB && row.slotId === bOnly._id;
+})());
+ok('and the seat it tried for is not left claimed',
+  (await col('booking_slots').findOne({ _id: aLate._id })).booked === 0);
+
+/* asked for plainly, it goes through — and is written down */
+const forced = await call('/api/booking/booking/' + bBk._id + '/move',
+  { body: { slotId: aLate._id, overDaily: true } });
+ok('an explicit override is allowed', forced.status === 200 && forced.body.overDailyLimit === true,
+  JSON.stringify(forced.body));
+ok('the booking records that it went over the daily limit', await (async () => {
+  const row = await col('campaign_bookings').findOne({ _id: bBk._id });
+  return row.date === ovA && row.time === '20:00' && row.overDailyLimit === true;
+})());
+ok('and its history says so, with the limit and the count it passed', await (async () => {
+  const row = await col('campaign_bookings').findOne({ _id: bBk._id });
+  const h = (row.history || []).filter((x) => x.action === 'moved').pop();
+  return !!h && h.by === 'staff' && h.overDailyLimit === true && h.dayLimit === 1 && h.dayCountBefore === 1;
+})());
+ok('the day now holds two, which is the override being real', await (async () => {
+  const rows = await col('campaign_bookings').find({ scheduleId: ovId, date: ovA, status: 'confirmed' }).toArray();
+  return rows.length === 2;
+})());
+ok('the creator page still refuses a third on that day', await (async () => {
+  const r = await ovBook(aEarly, 'ovthirdteam');
+  return r.status === 409;
+})());
+
+/* a move inside the same day is not an override and never asks — even
+   on a day that is now over its cap */
+const ovSameDay = await call('/api/booking/booking/' + movingBk._id + '/move', { body: { slotId: aMid._id } });
+ok('moving within the day it already holds is not treated as an override',
+  ovSameDay.status === 200 && ovSameDay.body.overDailyLimit === false, JSON.stringify(ovSameDay.body));
+ok('and it really moved, to the new time on the same day', await (async () => {
+  const row = await col('campaign_bookings').findOne({ _id: movingBk._id });
+  return row.date === ovA && row.time === '16:00';
+})());
+ok('and it is not recorded as one', await (async () => {
+  const row = await col('campaign_bookings').findOne({ _id: movingBk._id });
+  return row.overDailyLimit === false;
+})());
+
+/* ---- a cancelled booking stops being a confirmed visit ---------------- */
+
+const cancelMe = await col('campaign_bookings').findOne({ _id: bBk._id });
+const wsAfterCancel = { participants: [
+  { id: 'pt_ov', campaignId: 'cp_ov', visitAt: '2026-01-02 18:00',
+    confirmedVisitAt: cancelMe.date + ' ' + cancelMe.time, bookingId: cancelMe._id }
+] };
+await call('/api/booking/booking/' + cancelMe._id + '/cancel', { body: { reason: 'venue asked' } });
+ok('cancelling a booking takes it out of the live set', await (async () => {
+  const row = await col('campaign_bookings').findOne({ _id: cancelMe._id });
+  return row.status === 'cancelled';
+})());
+ok('and the projection then clears the confirmed time rather than keeping it', await (async () => {
+  const live = (await col('campaign_bookings').find({ status: 'confirmed' }).toArray())
+    .filter((b) => b.participantId);
+  const store = require('../server/booking-store.js');
+  const out = store.applyBookingSlots(wsAfterCancel, live.concat([{
+    _id: 'other', participantId: 'someone-else', date: ovA, time: '12:00', status: 'confirmed'
+  }]));
+  const row = wsAfterCancel.participants[0];
+  return row.confirmedVisitAt === undefined && row.bookingId === undefined
+    && out.cleared.some((c) => c.participantId === 'pt_ov');
+})());
+ok('the time they asked for is left exactly as it was',
+  wsAfterCancel.participants[0].visitAt === '2026-01-02 18:00');
+
 /* ---- two things a day cap must not do ----------------------------------
 
    Both are about bookings that already exist. A cap is a limit on how
