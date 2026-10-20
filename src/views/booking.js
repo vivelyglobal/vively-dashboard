@@ -720,7 +720,20 @@ export const ruleMinutes = (t) => {
   return m ? +m[1] * 60 + +m[2] : null;
 };
 export const ruleTime = (n) => String(Math.floor(n / 60)).padStart(2, '0') + ':' + String(n % 60).padStart(2, '0');
-export const ruleDayName = (d) => RULE_DAYS[(d.getDay() + 6) % 7];
+/* A day in the rule is a calendar day, not an instant. iso() formats in
+   UTC, so the day has to be built and read in UTC as well — building it
+   at local midnight (what parseVisitSlot does) and then printing it with
+   iso() shifts every date by one in any zone ahead of UTC. In Korea that
+   put Sunday's single arrival time on Saturday's date, gave Sunday
+   Monday's two times, and made Thursday vanish because the true Thursday
+   was being asked about Friday's rule. */
+export const ruleDate = (s) => {
+  const m = String(s || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  const d = new Date(m[1] + '-' + m[2] + '-' + m[3] + 'T00:00:00Z');
+  return isNaN(d) ? null : d;
+};
+export const ruleDayName = (d) => RULE_DAYS[(d.getUTCDay() + 6) % 7];
 
 /* How many times a day the venue will take, which is the number most
    venues actually say out loud — "one table a night", "three sittings".
@@ -820,7 +833,7 @@ export function expandBookingRule(rule, opts) {
   const o = opts || {};
   const holidays = new Map((o.holidays || []).map((h) => [h.d, h.n || 'Holiday']));
   const closed = new Set(o.closedDates || []);
-  const from = parseVisitSlot(rule.from), to = parseVisitSlot(rule.to);
+  const from = ruleDate(rule.from), to = ruleDate(rule.to);
   const out = [];
   if (!from || !to || to < from) return out;
   if ((to - from) / DAY > 180) return out;          /* half a year is a typo, not a plan */

@@ -6,7 +6,7 @@ import './helpers/browser-shim.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultBookingRule, ruleSlotCount, ruleTimesFor, ruleWithSlotCount,
-  bookingRuleSlots, bookingRuleSummary } from '../src/views/booking.js';
+  bookingRuleSlots, bookingRuleSummary, expandBookingRule } from '../src/views/booking.js';
 
 const ruleWith = (n, window) => {
   const r = defaultBookingRule();
@@ -342,4 +342,78 @@ test('a changed rule fills the gaps it opens without disturbing the rest', async
   const add = ruleSlotsToAdd(three, {}, made, '2026-11-01');
   assert.equal(add.length, 6, 'two more on each of the three days');
   assert.ok(add.every((x) => x.time !== '18:30'), 'the time already created is not proposed again');
+});
+
+/* The weekday a date falls on, in a timezone that is not UTC.
+
+   A day in the rule is a calendar day, not an instant. The expansion
+   used to build the range at *local* midnight and then print it with
+   iso(), which formats in UTC — so in Korea (UTC+9) every date came out
+   one day earlier than the weekday it had been matched against. Sunday's
+   single arrival time landed on Saturday's date, Sunday got Monday's two
+   times, and Thursday disappeared because the real Thursday was being
+   asked about Friday's rule. */
+
+const koreanVenue = () => {
+  const r = defaultBookingRule();
+  r.slotsPerDay = 2;
+  r.skipHolidays = false;
+  r.days = { Mon: ['20:30', '21:30'], Tue: ['20:30', '21:30'], Wed: ['20:30', '21:30'],
+    Thu: ['20:30', '21:30'], Fri: null, Sat: null, Sun: ['17:00', '17:00'] };
+  r.from = '2026-10-25';            /* a Sunday */
+  r.to = '2026-10-31';              /* the Saturday after it */
+  return r;
+};
+
+test('every generated date gets the weekday rule that date actually falls on', () => {
+  const days = expandBookingRule(koreanVenue(), {});
+  const seen = {};
+  days.forEach((d) => { seen[d.date] = d.dayName; });
+  assert.deepEqual(seen, {
+    '2026-10-25': 'Sun', '2026-10-26': 'Mon', '2026-10-27': 'Tue', '2026-10-28': 'Wed',
+    '2026-10-29': 'Thu', '2026-10-30': 'Fri', '2026-10-31': 'Sat'
+  });
+});
+
+test('Sunday gets its one arrival time and the weekdays get their two', () => {
+  const rows = bookingRuleSlots(koreanVenue(), { slotMinutes: 90 });
+  const byDate = {};
+  rows.forEach((x) => { (byDate[x.date] = byDate[x.date] || []).push(x.time); });
+  assert.deepEqual(byDate, {
+    '2026-10-25': ['17:00'],
+    '2026-10-26': ['20:30', '21:30'],
+    '2026-10-27': ['20:30', '21:30'],
+    '2026-10-28': ['20:30', '21:30'],
+    '2026-10-29': ['20:30', '21:30']
+  });
+});
+
+test('Thursday is generated and Friday and Saturday are not', () => {
+  const dates = bookingRuleSlots(koreanVenue(), {}).map((x) => x.date);
+  assert.ok(dates.includes('2026-10-29'), 'Thursday is open in the rule, so it has times');
+  assert.ok(!dates.includes('2026-10-30'), 'Friday is closed');
+  assert.ok(!dates.includes('2026-10-31'), 'Saturday is closed');
+});
+
+test('the range includes both ends, and starts on the From date itself', () => {
+  const days = expandBookingRule(koreanVenue(), {});
+  assert.equal(days[0].date, '2026-10-25', 'not the day before');
+  assert.equal(days[days.length - 1].date, '2026-10-31');
+  assert.equal(days.length, 7);
+});
+
+test('a holiday lands on the date it is written as', () => {
+  const r = koreanVenue();
+  r.skipHolidays = true;
+  const days = expandBookingRule(r, { holidays: [{ d: '2026-10-28', n: 'Test holiday' }] });
+  const wed = days.find((d) => d.date === '2026-10-28');
+  assert.equal(wed.holiday, 'Test holiday');
+  assert.equal(wed.open, false);
+  assert.equal(days.find((d) => d.date === '2026-10-27').open, true, 'and not on the day before it');
+});
+
+test('a one-off closure lands on its own date too', () => {
+  const days = expandBookingRule(koreanVenue(), { closedDates: ['2026-10-26'] });
+  assert.equal(days.find((d) => d.date === '2026-10-26').why, 'blocked');
+  assert.equal(days.find((d) => d.date === '2026-10-25').open, true);
 });

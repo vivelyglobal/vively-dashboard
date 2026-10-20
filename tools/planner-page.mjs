@@ -155,6 +155,46 @@ ok('confirming books the visit', (await stage('plw4')) === 'confirmed'
 ok('and the calendar jumps to that day',
   (await p.$$eval('#plCalCard strong[title]', (els) => els.map((e) => e.getAttribute('title')))).includes(day(2)));
 
+/* ---- a row the creator booked themselves -------------------------------
+
+   The planner's Move drawer wrote confirmedVisitAt by hand. For a booked
+   row the booking owns that field and puts it straight back, so from the
+   planner the change looked like it simply did not happen. The drawer
+   now offers the move instead, which is the real override. */
+
+await p.evaluate(() => {
+  const row = DB.participants.find((x) => x.id === 'plw4');
+  row.bookingId = 'bk_from_the_creator';
+  row.confirmedVisitAt = row.confirmedVisitAt || '2026-11-03 19:30';
+  render();
+});
+await p.waitForTimeout(400);
+/* the confirmed list's own Move button, which is where this is reached */
+await p.click('[data-plconfirm="plw4"]');
+await p.waitForSelector('#drawer.open', { timeout: 5000 });
+ok('a booked row is not offered a date to type over',
+  !(await p.$('#pcDate')) && !(await p.$('#pcTime')));
+ok('it says the booking owns the time', (await p.textContent('#drawer')).includes('booked by the creator'));
+ok('and offers the move, which is the override', await p.isVisible('#pcMoveBooking'));
+ok('cancelling is pointed at the Booking tab rather than done by hand',
+  (await p.textContent('#drawer')).includes('cancel the booking'));
+
+const keptTime = await field('plw4', 'confirmedVisitAt');
+await p.fill('#pcHead', '4');
+await p.click('#pcGo');
+await p.waitForTimeout(600);
+ok('saving still takes the headcount, which is the row\'s own',
+  (await field('plw4', 'headcount')) === '4');
+ok('and leaves the booking\'s time exactly as it was',
+  (await field('plw4', 'confirmedVisitAt')) === keptTime, String(keptTime));
+
+await p.evaluate(() => {
+  const row = DB.participants.find((x) => x.id === 'plw4');
+  delete row.bookingId;
+  render();
+});
+await p.waitForTimeout(400);
+
 /* ---- the day, and who turned up ---- */
 await p.click(`[data-plday="${day(1)}"]`); await p.waitForTimeout(600);
 const agenda = await text('#plCalCard');

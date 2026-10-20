@@ -7,7 +7,7 @@ import { partsOf } from '../model/stats.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { copyText, flagMark, flagRowClass, statCard } from '../ui/html.js';
 import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';
-import { BOOKING, loadBooking } from './booking.js';
+import { BOOKING, loadBooking, openStaffMove } from './booking.js';
 import { flaggedRosterBanner, moveStage, showParticipant } from './campaigns.js';
 
 /* ============================================================
@@ -669,35 +669,74 @@ export function openPlannerConfirm(cp, pid) {
     ${cr.flag === 'blocked' ? `<div class="flag-note"><span class="flag-mark blocked" style="margin-left:0">⊘</span>
       <span><strong>This creator is blacklisted.</strong> ${esc(cr.flagReason || 'No reason recorded.')}</span></div>` : ''}
     ${asked.date ? `<p class="card-sub">They asked for <strong>${esc(asked.date)}${asked.time ? ' ' + esc(asked.time) : ''}</strong>.</p>` : ''}
-    <div class="grid g2" style="gap:10px;margin-top:10px">
+    ${p.bookingId
+      /* A booked row's time belongs to the booking. Two date inputs here
+         would take the edit, show it, and have it put straight back by
+         the booking on the next load — which is exactly what made this
+         drawer look broken from the planner. The move is the override,
+         and it is the same one the Booking tab uses. */
+      ? `<div class="note" style="margin:10px 0">
+          <strong>${esc(p.confirmedVisitAt || '—')}</strong> — booked by the creator through their link.
+          <br>Change it with a move, which holds even if the new time is full. Typing a time here would be
+          undone by the booking itself.
+          <br><button class="btn xs primary" id="pcMoveBooking" type="button" style="margin-top:7px">Move this booking</button>
+        </div>`
+      : `<div class="grid g2" style="gap:10px;margin-top:10px">
       <div class="field"><label>Visit date</label><input type="date" id="pcDate" value="${esc(now.date || asked.date || '')}"/></div>
       <div class="field"><label>Time</label><input type="time" id="pcTime" value="${esc(now.time || asked.time || '')}"/></div>
-    </div>
+    </div>`}
     <div class="field"><label>People coming</label><input type="number" min="1" max="20" id="pcHead" value="${esc(String(Number(p.headcount) || 1))}"/></div>
     <div id="pcWarn"></div>
     <div style="display:flex;gap:8px;margin-top:10px">
-      <button class="btn primary" id="pcGo">${p.stage === 'confirmed' ? 'Save the date' : 'Confirm and book'}</button>
-      <button class="btn" id="pcNoDate">${p.stage === 'confirmed' ? 'Clear the date' : 'Confirm without a date'}</button>
-    </div>`);
+      <button class="btn primary" id="pcGo">${p.bookingId ? 'Save' : (p.stage === 'confirmed' ? 'Save the date' : 'Confirm and book')}</button>
+      ${p.bookingId ? '' : `<button class="btn" id="pcNoDate">${p.stage === 'confirmed' ? 'Clear the date' : 'Confirm without a date'}</button>`}
+    </div>
+    ${p.bookingId ? `<p class="card-sub" style="margin-top:7px">To call the visit off entirely, cancel the booking
+      on the campaign's Booking tab — that releases the seat and clears the date here.</p>` : ''}`);
 
   const warn = () => {
-    const d = $('#pcDate').value;
+    const el = $('#pcDate');
+    const d = el ? el.value : '';
     const already = taken[d] || 0;
     $('#pcWarn').innerHTML = d && already
       ? `<p class="card-sub" style="margin-top:8px">${already} ${already === 1 ? 'person is' : 'people are'} already booked that day.</p>` : '';
   };
-  $('#pcDate').addEventListener('change', warn); warn();
+  if ($('#pcDate')) { $('#pcDate').addEventListener('change', warn); warn(); }
+
+  /* the same override the roster drawer offers, from the planner */
+  const pcMove = $('#pcMoveBooking');
+  if (pcMove) pcMove.addEventListener('click', async () => {
+    pcMove.disabled = true; pcMove.textContent = 'Loading…';
+    try {
+      await loadBooking(cp.id, true);
+      if (BOOKING.error) throw new Error(BOOKING.error);
+      const bk = (BOOKING.bookings || []).find((b) => b._id === p.bookingId)
+        || (BOOKING.bookings || []).find((b) => String(b.participantId) === String(p.id));
+      if (!bk) throw new Error('That booking is no longer there — open the Booking tab.');
+      openStaffMove(cp, bk._id);
+    } catch (err) {
+      toast(err.message);
+      pcMove.disabled = false; pcMove.textContent = 'Move this booking';
+    }
+  });
 
   $('#pcGo').addEventListener('click', () => {
+    p.headcount = String(Math.max(1, Number($('#pcHead').value) || 1));
+    if (p.bookingId) {
+      /* headcount is the row's own; the time is the booking's */
+      PLANNER.sel.delete(p.id);
+      closeDrawer(); toast('Saved — the time comes from the booking'); notify();
+      return;
+    }
     const d = $('#pcDate').value, t = $('#pcTime').value;
     if (!d) { toast('Pick a date, or use “without a date”'); return; }
-    p.headcount = String(Math.max(1, Number($('#pcHead').value) || 1));
     p.confirmedVisitAt = joinSlot(d, t);
     if (p.stage !== 'confirmed' && !PLANNER_CONFIRMED.includes(p.stage)) moveStage(p, 'confirmed');
     PLANNER.day = d; PLANNER.sel.delete(p.id);
     closeDrawer(); toast(`${(byCreator[p.creatorId] || {}).handle || 'Booked'} — ${d}${t ? ' ' + t : ''}`); notify();
   });
-  $('#pcNoDate').addEventListener('click', () => {
+  const noDate = $('#pcNoDate');
+  if (noDate) noDate.addEventListener('click', () => {
     if (p.stage === 'confirmed' || PLANNER_CONFIRMED.includes(p.stage)) p.confirmedVisitAt = '';
     else moveStage(p, 'confirmed');
     PLANNER.sel.delete(p.id);
