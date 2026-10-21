@@ -187,6 +187,89 @@ ok('the import was saved to the workspace', !!saved && (saved.db.creators || [])
 ok('the new blacklisted creator is marked on the creators page',
   (await viewText()).includes('import_two') && (await p.$$('.flag-mark.blocked')).length >= 1);
 
+/* ============== the parcel, on a seeding campaign ==============
+
+   A seeding campaign's equivalent of a booking. The stage already said
+   "Shipped"; what nobody could answer was which courier, what number,
+   and whether it arrived. */
+
+const SEED_CP = await p.evaluate(() => {
+  const cp = DB.campaigns.find((c) => !/visit/i.test(String(c.kind || '')));
+  if (!cp) return null;
+  const part = DB.participants.find((x) => x.campaignId === cp.id
+    && STAGE_IDX[x.stage] >= STAGE_IDX.confirmed && x.stage !== 'dropped');
+  return part ? { cp: cp.id, kind: cp.kind, pid: part.id } : { cp: cp.id, kind: cp.kind, pid: null };
+});
+ok('the seed has a campaign that ships product', !!SEED_CP && !!SEED_CP.pid, JSON.stringify(SEED_CP));
+
+await go('campaigns/' + SEED_CP.cp + '/roster');
+ok('the roster header counts the parcels, not just the people',
+  (await viewText()).includes('product:'), (await viewText()).slice(0, 140));
+
+await p.evaluate((pid) => showParticipant(pid), SEED_CP.pid);
+await p.waitForSelector('#drawer.open', { timeout: 5000 });
+ok('a confirmed row has somewhere to put the courier and the number',
+  await p.isVisible('#pdCarrier') && await p.isVisible('#pdTracking')
+  && await p.isVisible('#pdShippedAt') && await p.isVisible('#pdDeliveredAt'));
+ok('and says plainly that nothing has gone out yet',
+  (await p.textContent('#drawer')).includes('Not sent'));
+
+await p.fill('#pdCarrier', 'CJ대한통운');
+await p.fill('#pdTracking', '1234567890');
+await p.fill('#pdShippedAt', '2026-10-21');
+await p.click('#pdSave');
+await p.waitForTimeout(900);
+ok('the tracking number is kept on the row', await p.evaluate((pid) => {
+  const row = DB.participants.find((x) => x.id === pid);
+  return !!row && row.shipment && row.shipment.carrier === 'CJ대한통운'
+    && row.shipment.tracking === '1234567890' && row.shippedAt === '2026-10-21';
+}, SEED_CP.pid));
+ok('and sending it moves the row to Shipped on its own', await p.evaluate((pid) => {
+  const row = DB.participants.find((x) => x.id === pid);
+  return !!row && STAGE_IDX[row.stage] >= STAGE_IDX.shipped;
+}, SEED_CP.pid));
+/* both ways of looking at the roster have to say it */
+await p.click('#boardSeg button[data-m="board"]');
+await p.waitForTimeout(500);
+ok('the board card shows where the parcel is, with the courier and number',
+  (await viewText()).includes('Sent 2026-10-21 · CJ대한통운 1234567890'), (await viewText()).slice(-260));
+await p.click('#boardSeg button[data-m="table"]');
+await p.waitForTimeout(500);
+ok('and the table has a Product column saying the same thing',
+  (await viewText()).includes('Product') && (await viewText()).includes('Sent'));
+await p.click('#boardSeg button[data-m="board"]');
+await p.waitForTimeout(400);
+
+/* it arrives */
+await p.evaluate((pid) => showParticipant(pid), SEED_CP.pid);
+await p.waitForSelector('#pdDeliveredAt', { timeout: 5000 });
+await p.fill('#pdDeliveredAt', '2026-10-24');
+await p.click('#pdSave');
+await p.waitForTimeout(900);
+ok('an arrival date is kept too', await p.evaluate((pid) =>
+  (DB.participants.find((x) => x.id === pid) || {}).shipment.deliveredAt === '2026-10-24', SEED_CP.pid));
+await p.click('#boardSeg button[data-m="board"]');
+await p.waitForTimeout(500);
+ok('and the roster says Delivered rather than Sent',
+  (await viewText()).includes('Delivered 2026-10-24'), (await viewText()).slice(-200));
+
+/* a visit campaign has no parcel to track */
+const VISIT_CP = await p.evaluate(() => {
+  const cp = DB.campaigns.find((c) => /visit/i.test(String(c.kind || '')));
+  const part = cp && DB.participants.find((x) => x.campaignId === cp.id
+    && STAGE_IDX[x.stage] >= STAGE_IDX.confirmed && x.stage !== 'dropped');
+  return cp && part ? { cp: cp.id, pid: part.id } : null;
+});
+if (VISIT_CP) {
+  await go('campaigns/' + VISIT_CP.cp + '/roster');
+  ok('a visit campaign is not asked about parcels', !(await viewText()).includes('product:'));
+  await p.evaluate((pid) => showParticipant(pid), VISIT_CP.pid);
+  await p.waitForSelector('#drawer.open', { timeout: 5000 });
+  ok('and its drawer offers no courier field', !(await p.$('#pdCarrier')));
+  await p.evaluate(() => closeDrawer());
+  await p.waitForTimeout(300);
+}
+
 ok('no page errors', pageErrors.length === 0, pageErrors.slice(0, 2).join(' | '));
 await b.close(); srv.close();
 console.log(errs.length ? '\n' + errs.length + ' FAILED' : '\nall creator flag and import checks passed');

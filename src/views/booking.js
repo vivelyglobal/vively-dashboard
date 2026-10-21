@@ -1253,9 +1253,13 @@ export function bookingShareCard(cp) {
     `Hi! Here's your booking link for the ${sc.venueName || cp.brand} visit: ${bookingUrl(sc.publicToken)}`,
     `Pick any date and time that suits you — ${span}.`,
     sc.noteForCreator ? sc.noteForCreator : '',
-    (sc.mode || 'request') === 'request'
-      ? "We'll confirm your time within 24 hours."
-      : 'Your pick is booked straight away.'
+    /* Every booking is instant: the creator's page confirms the time on
+       the spot and the slot is claimed there and then. The schedule still
+       carries a `mode` field from an earlier design, but nothing reads it
+       — so this line is not allowed to branch on it. Branching on a
+       setting that does nothing is how the suggested message came to
+       promise a 24-hour confirmation that never existed. */
+    'Whatever you pick is booked on the spot — no waiting for us to confirm.'
   ].filter(Boolean).join('\n');
 
   return `<div class="card" style="margin-bottom:14px">

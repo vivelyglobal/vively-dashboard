@@ -449,6 +449,57 @@ export function deleteCampaign(id) {
 }
 
 /* --------------------------- roster / pipeline --------------------------- */
+/* ---- getting the product to the creator ----
+
+   A seeding campaign's equivalent of a booking: the parcel. The stage
+   already says "Shipped", and shippedAt already records the day, but a
+   stage cannot answer "which courier, what number, did it arrive" — so
+   the brand asks and nobody can say. This keeps the answer on the row
+   that the question is about, and leaves the stage as the one source of
+   where somebody is in the campaign.
+
+   A store-visit campaign ships nothing; booking covers that one. */
+export function campaignShips(cp) { return !!cp && !/visit/i.test(String(cp.kind || '')); }
+
+/* Rows that are far enough along to be waiting for a parcel. Anyone
+   before confirmed is not owed one, and a dropped row never is. */
+export function shippableParts(cpId) {
+  return partsOf(cpId).filter((p) => p.stage !== 'dropped' && STAGE_IDX[p.stage] >= STAGE_IDX.confirmed);
+}
+
+export function shipmentState(p) {
+  const sh = (p && p.shipment) || {};
+  if (sh.deliveredAt) return { id: 'delivered', label: 'Delivered', at: sh.deliveredAt, pill: 'green' };
+  if (p && p.shippedAt) return { id: 'sent', label: 'Sent', at: p.shippedAt, pill: 'yellow' };
+  return { id: 'waiting', label: 'Not sent', at: '', pill: 'grey' };
+}
+
+/* How long a parcel has been in the air with nothing back. Ten days is
+   the same patience the roster already applies to a shipped row with no
+   draft, so the two numbers do not disagree. */
+export function shipmentLate(p) {
+  const st = shipmentState(p);
+  return st.id === 'sent' && (TODAY - new Date(st.at)) / DAY > 10;
+}
+
+export function shipmentSummary(cpId) {
+  const rows = shippableParts(cpId);
+  const out = { total: rows.length, waiting: 0, sent: 0, delivered: 0, late: 0 };
+  rows.forEach((p) => {
+    out[shipmentState(p).id === 'waiting' ? 'waiting' : shipmentState(p).id]++;
+    if (shipmentLate(p)) out.late++;
+  });
+  return out;
+}
+
+export function shipmentLine(p) {
+  const st = shipmentState(p);
+  const sh = p.shipment || {};
+  const who = [sh.carrier, sh.tracking].filter(Boolean).join(' ');
+  return st.id === 'waiting' ? 'Not sent'
+    : `${st.label} ${st.at}${who ? ' · ' + who : ''}`;
+}
+
 export function rosterTab(mount, cp) {
   const ps = partsOf(cp.id);
   mount.innerHTML = `
@@ -459,6 +510,13 @@ export function rosterTab(mount, cp) {
       </div>
       <div class="sp"></div>
       <span style="font-size:12px;color:var(--text-3)">${ps.length} sourced · drag cards between columns</span>
+      ${campaignShips(cp) ? (() => {
+        const sh = shipmentSummary(cp.id);
+        return sh.total ? `<span style="font-size:12px;color:var(--text-3)">· product:
+          <strong style="color:var(--text-2)">${sh.sent + sh.delivered}/${sh.total}</strong> sent${
+          sh.delivered ? `, ${sh.delivered} delivered` : ''}${
+          sh.late ? ` · <span style="color:var(--amber)">${sh.late} out over 10 days</span>` : ''}</span>` : '';
+      })() : ''}
       <button class="btn sm" id="rosterCsv">Export roster</button>
       <button class="btn sm" id="rosterMetrics" title="Update views / likes / comments / shares from a spreadsheet">Update metrics</button>
       <button class="btn sm" id="notionSync" title="${cp.notionSyncedAt ? 'Last synced ' + new Date(cp.notionSyncedAt).toLocaleString() : "Pull submissions from this campaign's Notion form"}">Sync from Notion</button>
@@ -509,6 +567,9 @@ export function renderBoard(mount, cp) {
           ${whoHtml(cr)}
           <div class="kb-meta"><span>ER ${cr.er}%</span><span>${esc(cr.country)}</span>${p.fee ? `<span>${wonK(p.fee)}</span>` : ''}</div>
           ${visitSlotOf(p) ? `<div style="font-size:11px;color:var(--text-2);margin-top:5px">🗓 ${esc(visitSlotOf(p))}${p.confirmedVisitAt ? ' <span style="color:var(--text-3)">confirmed</span>' : ''}${visitMismatchMark(p)}</div>` : ''}
+          ${campaignShips(cp) && STAGE_IDX[p.stage] >= STAGE_IDX.confirmed && p.stage !== 'dropped'
+            ? `<div style="font-size:11px;margin-top:5px;color:${shipmentState(p).id === 'waiting' ? 'var(--text-3)' : 'var(--text-2)'}">
+                📦 ${esc(shipmentLine(p))}${shipmentLate(p) ? ' <span class="pill amber">no word</span>' : ''}</div>` : ''}
           ${p.dropReason ? `<div style="font-size:11px;color:var(--text-3);margin-top:5px">${esc(p.dropReason)}</div>` : ''}
           ${p.content && p.content.views ? `<div style="font-size:11px;color:var(--text-2);margin-top:5px">${kmb(p.content.views)} views${p.content.metricsAt ? ` <span style="color:var(--text-3)">as of ${esc(String(p.content.metricsAt).slice(0, 10))}</span>` : ''}</div>` : ''}
         </div>`;
@@ -552,7 +613,8 @@ export function renderRosterTable(mount, cp) {
   const ps = partsOf(cp.id);
   mount.innerHTML = `<div class="card" style="padding:0"><div class="tbl-wrap" style="max-height:56vh;overflow-y:auto"><table class="tbl">
     <thead><tr><th>Creator</th><th>Source</th><th class="num">Followers</th><th class="num">ER</th><th>Stage</th>
-      <th>Visit</th><th>Contacted</th><th>Confirmed</th><th class="num">Fee</th><th class="num">Views</th><th></th></tr></thead>
+      <th>Visit</th>${campaignShips(cp) ? '<th>Product</th>' : ''}<th>Contacted</th><th>Confirmed</th>
+      <th class="num">Fee</th><th class="num">Views</th><th></th></tr></thead>
     <tbody>${ps.map((p) => {
       const cr = byCreator[p.creatorId];
       return `<tr class="${flagRowClass(cr)}">
@@ -563,6 +625,11 @@ export function renderRosterTable(mount, cp) {
           ${STAGES.map((st) => `<option value="${st.id}" ${p.stage === st.id ? 'selected' : ''}>${st.label}</option>`).join('')}
         </select></td>
         <td style="white-space:nowrap">${visitSlotOf(p) ? esc(visitSlotOf(p)) + visitMismatchMark(p) : '<span style="color:var(--text-3)">—</span>'}</td>
+        ${campaignShips(cp) ? `<td style="white-space:nowrap">${
+          STAGE_IDX[p.stage] >= STAGE_IDX.confirmed && p.stage !== 'dropped'
+            ? `<span class="pill ${shipmentState(p).pill}">${esc(shipmentState(p).label)}</span>${
+                shipmentLate(p) ? ' <span class="pill amber">no word</span>' : ''}`
+            : '<span style="color:var(--text-3)">—</span>'}</td>` : ''}
         <td>${daysAgo(p.contactedAt)}</td><td>${daysAgo(p.confirmedAt)}</td>
         <td class="num">${p.fee ? wonK(p.fee) : '—'}</td>
         <td class="num">${p.content && p.content.views ? num(p.content.views) : '—'}</td>
@@ -771,6 +838,28 @@ export function showParticipant(pid) {
       ${p.confirmedVisitAt ? `<br><button class="btn xs" id="pdVisitClear" type="button" style="margin-top:6px">Clear the confirmed time</button>` : ''}
       <br><button class="btn xs" id="pdInvite" type="button" style="margin-top:6px">Invite to book</button>
     </div>`}
+    ${campaignShips(cp) && STAGE_IDX[p.stage] >= STAGE_IDX.confirmed && p.stage !== 'dropped' ? (() => {
+      const sh = p.shipment || {};
+      const st = shipmentState(p);
+      return `<div class="lbl">Product</div>
+      <div class="note ${shipmentLate(p) ? 'warn' : ''}" style="margin:6px 0 10px;font-size:12px">
+        <strong>${esc(st.label)}${st.at ? ' · ' + esc(st.at) : ''}</strong>
+        ${shipmentLate(p) ? ' — out more than 10 days with nothing back.' : ''}
+        ${cp.shipBy ? `<br>Sent by ${esc(cp.shipBy)}.` : ''}
+      </div>
+      <div class="grid g2" style="gap:10px">
+        <div class="field"><label>Courier</label>
+          <input type="text" id="pdCarrier" value="${esc(sh.carrier || '')}" placeholder="CJ대한통운, DHL…"/></div>
+        <div class="field"><label>Tracking number</label>
+          <input type="text" id="pdTracking" value="${esc(sh.tracking || '')}"/></div>
+        <div class="field"><label>Sent on</label>
+          <input type="date" id="pdShippedAt" value="${esc(p.shippedAt || '')}"/></div>
+        <div class="field"><label>Arrived on</label>
+          <input type="date" id="pdDeliveredAt" value="${esc(sh.deliveredAt || '')}"/></div>
+      </div>
+      <p class="card-sub" style="margin:-4px 0 14px">A sent date moves the row to Shipped on its own. An arrival
+        date with no sent date takes the same day as both.</p>`;
+    })() : ''}
     <div class="field"><label>Campaign</label>
       <select id="pdCampaign">${DB.campaigns.map((c) =>
         `<option value="${esc(c.id)}" ${c.id === p.campaignId ? 'selected' : ''}>${esc(c.brand)} — ${esc(c.name)}</option>`).join('')}</select>
@@ -898,6 +987,25 @@ export function showParticipant(pid) {
     p.remark = $('#pdRemark').value.trim();
     p.headcount = $('#pdHeadcount').value.trim();
     cr.gender = $('#pdGender').value;
+
+    /* The parcel. Kept on the row the question is about, and allowed to
+       move the stage forward the same way the stage already sets
+       shippedAt — so the board and the tracking number cannot disagree
+       about whether the product went out. */
+    if ($('#pdCarrier')) {
+      const carrier = $('#pdCarrier').value.trim();
+      const tracking = $('#pdTracking').value.trim();
+      let sent = $('#pdShippedAt').value;
+      const arrived = $('#pdDeliveredAt').value;
+      if (arrived && !sent) sent = arrived;      /* it cannot arrive without leaving */
+      const ship = Object.assign({}, p.shipment);
+      if (carrier) ship.carrier = carrier; else delete ship.carrier;
+      if (tracking) ship.tracking = tracking; else delete ship.tracking;
+      if (arrived) ship.deliveredAt = arrived; else delete ship.deliveredAt;
+      if (Object.keys(ship).length) p.shipment = ship; else delete p.shipment;
+      if (sent) p.shippedAt = sent; else delete p.shippedAt;
+      if (sent && STAGE_IDX[p.stage] < STAGE_IDX.shipped && p.stage !== 'dropped') moveStage(p, 'shipped');
+    }
 
     /* The confirmed slot is only ever set here, and the sync never writes
        it, so it survives every later import. Storing '' rather than

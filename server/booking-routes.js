@@ -286,6 +286,122 @@ function mountBookingRoutes(app, deps) {
     }
   }));
 
+  /* ---- the desk: every campaign's bookings in one window -------------
+
+     The booking tab answers "what is happening on this campaign". With
+     three restaurants running at once nobody can answer "what is
+     happening today" without opening three tabs and holding the clashes
+     in their head. This is that question, asked once.
+
+     Deliberately per schedule rather than one sweep of every collection:
+     the number of schedules is the number of campaigns, the window is
+     capped, and nothing here loads the workspace document — the partner
+     route's habit of pulling 862KB per hit is the thing not to copy.
+
+     Times are Korea time throughout. A slot is already wall-clock at the
+     venue, and every venue is in Seoul, so the desk reads the dates and
+     times as written and does no conversion at all. */
+  const DESK_MAX_DAYS = 31;
+  const KST_OFFSET_MIN = 9 * 60;
+
+  function kstToday() {
+    return new Date(Date.now() + KST_OFFSET_MIN * 60000).toISOString().slice(0, 10);
+  }
+  const addDaysIso = (d, n) =>
+    new Date(new Date(d + "T00:00:00Z").getTime() + n * 86400000).toISOString().slice(0, 10);
+
+  function deskWindow(q) {
+    const from = B.normDate((q || {}).from) || kstToday();
+    const to = B.normDate((q || {}).to) || addDaysIso(from, 6);
+    if (to < from) return { error: "The window ends before it starts." };
+    const days = Math.round((new Date(to + "T00:00:00Z") - new Date(from + "T00:00:00Z")) / 86400000) + 1;
+    if (days > DESK_MAX_DAYS) {
+      return { error: `That is ${days} days. The desk shows at most ${DESK_MAX_DAYS} at a time.` };
+    }
+    return { from, to, days };
+  }
+
+  /* Everything the desk draws, for one window. */
+  async function deskData(win) {
+    const scheds = await (await schedules()).find({}).toArray();
+    const sl = await slots(), bk = await bookings(), inv = await invites();
+    const out = { schedules: [], slots: [], bookings: [], invites: [] };
+    const inWin = (d) => d >= win.from && d <= win.to;
+
+    for (const sc of scheds) {
+      out.schedules.push({
+        _id: sc._id, campaignId: sc.campaignId, venueName: sc.venueName || "",
+        status: sc.status || "open", mode: sc.mode || "request",
+        maxPerDay: sc.maxPerDay || 0, maxPartySize: sc.maxPartySize || 1,
+        slotMinutes: sc.slotMinutes || 90, deadlineHours: sc.deadlineHours || 0,
+        closedDates: sc.closedDates || [], rule: sc.rule || null, publicToken: sc.publicToken
+      });
+      (await sl.find({ scheduleId: sc._id }).toArray())
+        .filter((x) => inWin(x.date))
+        .forEach((x) => out.slots.push({
+          _id: x._id, scheduleId: x.scheduleId, date: x.date, time: x.time,
+          capacity: x.capacity || 0, booked: x.booked || 0, status: x.status || "open", note: x.note || ""
+        }));
+      (await bk.find({ scheduleId: sc._id, status: "confirmed" }).toArray())
+        .filter((x) => inWin(x.date))
+        .forEach((x) => out.bookings.push({
+          _id: x._id, scheduleId: x.scheduleId, campaignId: x.campaignId, slotId: x.slotId,
+          participantId: x.participantId || null, creatorId: x.creatorId || null,
+          date: x.date, time: x.time, partySize: x.partySize || 1,
+          guest: { name: (x.guest || {}).name || "", handle: (x.guest || {}).handle || "" },
+          source: x.source || "", overCapacity: !!x.overCapacity, overDailyLimit: !!x.overDailyLimit,
+          updatedAt: x.updatedAt || x.bookedAt || null
+        }));
+      /* a link that was sent and never used is the chase list that fills
+         the grid, so the desk needs the invites as well as the bookings */
+      (await inv.find({ scheduleId: sc._id, revokedAt: null }).toArray())
+        .forEach((x) => out.invites.push({
+          _id: x._id, scheduleId: x.scheduleId, campaignId: x.campaignId,
+          participantId: x.participantId || null, creatorId: x.creatorId || null,
+          handle: x.handle || "", name: x.name || "", createdAt: x.createdAt || null
+        }));
+    }
+    return out;
+  }
+
+  app.get("/api/booking/desk", requireStaff(async (req, res) => {
+    if (needsDb(res)) return;
+    const win = deskWindow(req.query);
+    if (win.error) return res.status(400).json({ error: win.error });
+    try {
+      const data = await deskData(win);
+      return res.json({ ok: true, from: win.from, to: win.to, today: kstToday(), ...data });
+    } catch (err) {
+      console.error("GET /api/booking/desk failed:", err.message);
+      return res.status(502).json({ error: "Could not reach the database." });
+    }
+  }));
+
+  /* The cheap half of the same question, for the poll. Three people and
+     a creator booking from their phone all change this page, so it has
+     to notice — but noticing must not cost what drawing costs. */
+  app.get("/api/booking/desk/meta", requireStaff(async (req, res) => {
+    if (needsDb(res)) return;
+    const win = deskWindow(req.query);
+    if (win.error) return res.status(400).json({ error: win.error });
+    try {
+      const data = await deskData(win);
+      let last = "";
+      data.bookings.forEach((b) => {
+        const at = b.updatedAt ? new Date(b.updatedAt).toISOString() : "";
+        if (at > last) last = at;
+      });
+      /* counts and the newest change together: a move that keeps the
+         count the same still moves lastChange, and a cancel that moves
+         nothing still moves the count */
+      return res.json({ ok: true, from: win.from, to: win.to,
+        slots: data.slots.length, bookings: data.bookings.length, lastChange: last });
+    } catch (err) {
+      console.error("GET /api/booking/desk/meta failed:", err.message);
+      return res.status(502).json({ error: "Could not reach the database." });
+    }
+  }));
+
   /* ---- staff: slots -------------------------------------------------- */
 
   app.post("/api/booking/slot", requireStaff(async (req, res) => {
@@ -793,6 +909,9 @@ function mountBookingRoutes(app, deps) {
                     source: "staff", overCapacity: over && !claimed,
                     overDailyLimit: breaksDayCap, updatedAt: new Date() },
             $push: { history: { at: new Date(), action: "moved", by: "staff",
+                     /* with three people on one desk, "who moved this?" is
+                        the question that gets asked; the session knows */
+                     byEmail: (req.session || {}).email || "",
                      from: bk.date + " " + bk.time, to: next.date + " " + next.time,
                      overCapacity: over && !claimed,
                      overDailyLimit: breaksDayCap,

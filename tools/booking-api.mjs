@@ -744,6 +744,88 @@ ok('and staff can still cancel one by hand, which is the way back down', await (
   return r.status === 200 && left.length === 2;
 })());
 
+/* ---- the desk: every campaign in one window ---------------------------- */
+
+const deskDay = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+const deskGet = (qs) => call('/api/booking/desk' + (qs || ''));
+
+const desk0 = await deskGet();
+ok('the desk answers with a default window of its own', desk0.status === 200
+  && !!desk0.body.from && !!desk0.body.to && !!desk0.body.today, JSON.stringify(desk0.body).slice(0, 90));
+ok('it is a week, not a day and not a year', await (async () => {
+  const d = (new Date(desk0.body.to + 'T00:00:00Z') - new Date(desk0.body.from + 'T00:00:00Z')) / 86400000;
+  return d === 6;
+})());
+ok('it carries every campaign that has a schedule, not just one',
+  desk0.body.schedules.length >= 2, desk0.body.schedules.length + ' schedules');
+
+const wide = await deskGet('?from=2027-01-01&to=2027-06-01');
+ok('a window wider than a month is refused rather than served',
+  wide.status === 400 && /at most 31/.test(wide.body.error || ''), JSON.stringify(wide.body));
+ok('and a backwards window is refused too',
+  (await deskGet('?from=2027-02-01&to=2027-01-01')).status === 400);
+
+/* a schedule of its own, so the shape can be checked exactly */
+const dSch = (await call('/api/booking/schedule', { body: {
+  campaignId: 'cp_desk', venueName: 'Desk venue', timezone: 'Asia/Seoul', slotMinutes: 90, maxPerDay: 2
+} })).body.schedule;
+const dDay = deskDay(70);
+const dSlotA = (await call('/api/booking/slot', { body: { scheduleId: dSch._id, date: dDay, time: '18:00', capacity: 2 } })).body.slot;
+const dSlotB = (await call('/api/booking/slot', { body: { scheduleId: dSch._id, date: dDay, time: '20:00', capacity: 1 } })).body.slot;
+await call('/api/booking/slot', { body: { scheduleId: dSch._id, date: deskDay(200), time: '18:00', capacity: 1 } });
+await call('/api/book/' + dSch.publicToken + '/confirm',
+  { body: { slotId: dSlotA._id, name: 'Desk Guest', handle: '@deskguest' } });
+const dInv = (await call('/api/booking/invite', { body: {
+  campaignId: 'cp_desk', participantId: 'pt_desk', creatorId: 'cr_desk', handle: '@invited', name: 'Invited'
+} })).body.invite;
+
+const win = await deskGet(`?from=${dDay}&to=${dDay}`);
+ok('one day asked for is one day returned', win.status === 200 && win.body.from === dDay && win.body.to === dDay);
+ok('the window really is a window — a slot outside it is left out',
+  win.body.slots.every((x) => x.date === dDay), String(win.body.slots.length));
+ok('the venue comes with the numbers the desk draws', await (async () => {
+  const sc = win.body.schedules.find((x) => x.campaignId === 'cp_desk');
+  return !!sc && sc.venueName === 'Desk venue' && sc.maxPerDay === 2 && Array.isArray(sc.closedDates);
+})());
+ok('both times on the day are there, with seats and how many are taken', await (async () => {
+  const mine = win.body.slots.filter((x) => x.scheduleId === dSch._id).sort((a, b) => a.time.localeCompare(b.time));
+  return mine.length === 2 && mine[0].capacity === 2 && mine[0].booked === 1 && mine[1].booked === 0;
+})());
+ok('the booking is there, with who and how many', await (async () => {
+  const b = win.body.bookings.find((x) => x.scheduleId === dSch._id);
+  return !!b && b.guest.handle === '@deskguest' && b.partySize === 1 && b.time === '18:00';
+})());
+ok('and the invite, so a link sent and never used can be chased',
+  win.body.invites.some((x) => x._id === dInv._id && x.handle === '@invited'));
+ok('no workspace document is dragged in with it',
+  win.body.db === undefined && win.body.participants === undefined);
+
+/* cancelled bookings stop being on the desk */
+const deskBk = await col('campaign_bookings').findOne({ 'guest.handleNorm': 'deskguest' });
+await call('/api/booking/booking/' + deskBk._id + '/cancel', { body: { reason: 'desk test' } });
+ok('a cancelled booking leaves the desk', await (async () => {
+  const again = await deskGet(`?from=${dDay}&to=${dDay}`);
+  return !again.body.bookings.some((x) => x._id === deskBk._id);
+})());
+
+/* the poll */
+const meta1 = await call('/api/booking/desk/meta' + `?from=${dDay}&to=${dDay}`);
+ok('the poll answers with counts rather than the whole desk', meta1.status === 200
+  && typeof meta1.body.slots === 'number' && typeof meta1.body.bookings === 'number'
+  && meta1.body.schedules === undefined, JSON.stringify(meta1.body));
+await call('/api/book/' + dSch.publicToken + '/confirm',
+  { body: { slotId: dSlotB._id, name: 'Second Guest', handle: '@secondguest' } });
+const meta2 = await call('/api/booking/desk/meta' + `?from=${dDay}&to=${dDay}`);
+ok('and it notices a booking made since the last look',
+  meta2.body.bookings === meta1.body.bookings + 1, meta1.body.bookings + ' → ' + meta2.body.bookings);
+ok('a move with no count change still shows as a change', await (async () => {
+  const row = await col('campaign_bookings').findOne({ 'guest.handleNorm': 'secondguest' });
+  const before = (await call('/api/booking/desk/meta' + `?from=${dDay}&to=${dDay}`)).body.lastChange;
+  await call('/api/booking/booking/' + row._id + '/move', { body: { slotId: dSlotA._id } });
+  const after = (await call('/api/booking/desk/meta' + `?from=${dDay}&to=${dDay}`)).body.lastChange;
+  return after >= before && !!after;
+})());
+
 /* ---- wiping a campaign's booking back to a blank slate -------------
 
    Last, because there is nothing left afterwards. */
