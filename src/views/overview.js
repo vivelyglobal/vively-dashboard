@@ -1,16 +1,17 @@
-import { parseHash } from '../app/routes.js';
 import { fitHeight, funnelView, lineChart, splitBar } from '../charts/index.js';
 import { DAY, TODAY, iso } from '../lib/dates.js';
-import { engagementsOf, kmb, money2, num, pct, won, wonK } from '../lib/format.js';
-import { DB, byCampaign, byCreator, notify, setContentUrl } from '../model/db.js';
+import { engagementsOf, erPct, kmb, money2, num, pct, won, wonK } from '../lib/format.js';
+import { DB, byCampaign, byCreator, notify } from '../model/db.js';
+import { isBlocked } from '../model/settings.js';
 import { campaignStats, dailySeries, funnelOf, partsOf, portfolioStats, viralScore } from '../model/stats.js';
-import { STAGE_IDX } from '../model/vocab.js';
+import { CAMPAIGN_STATUS, STAGE_IDX, tierOf } from '../model/vocab.js';
 import { $, $$, esc } from '../ui/dom.js';
-import { copyText, downloadFile, emptyState, flaggedOnRoster, statCard, statusPill, toCsv, whoHtml } from '../ui/html.js';
+import { downloadFile, emptyState, flaggedOnRoster, statCard, statusPill, tierPill, toCsv, whoHtml } from '../ui/html.js';
 import { toast } from '../ui/overlay.js';
-import { maskAccount, moveStage, showParticipant } from './campaigns.js';
-import { DESK, kstToday, loadDesk } from './desk.js';
-import { POSTS_IN, chaseMessage, loadPostsIn, markPaid, payInfo, plannerRow, postedState, reminderMessage, setAttendance, settlePostIn, snoozeToday, todayCounts, todayItems } from './planner.js';
+import { maskAccount, showParticipant } from './campaigns.js';
+import { showCreator } from './creators.js';
+import { DESK, kstToday } from './desk.js';
+import { PLANNER_CONFIRMED, attendanceOf, markPaid, payInfo, plannerRow, postedState } from './planner.js';
 
 /* ============================================================
    VIEW — OVERVIEW  (layer 2 items × layer 3 tabs)
@@ -101,168 +102,270 @@ export function wireRange() {
 }
 
 /* ============================================================
-   VIEW — TODAY
-   The page the dashboard opens on: todayItems(), grouped by how soon,
-   with the action for each one on its own row. Copying a reminder,
-   marking a visit, recording a payment — done here, without opening
-   the campaign it belongs to.
+   VIEW — TODAY (the home page)
+   Not a to-do list: bookings and chasing already live in the Google
+   Sheet and in Instagram DMs. This page answers the two questions the
+   team opens the dashboard for —
+
+     · who is coming in, and when (the next two weeks, day by day)
+     · where the creator list stands: how many of them have been in a
+       campaign, how many campaigns each has done, who has not been used
+       yet, and how that splits across Nano / Micro / Mid / Macro.
+
+   "In a campaign" means confirmed or further along. Sourced, contacted,
+   replied and shortlisted are still a conversation, and dropped is not
+   a participation, so none of them count.
    ============================================================ */
-export const TODAY_VIEW = { deskAsked: false, postsAsked: false };
-export const TODAY_GROUPS = [['now', 'Needs you now'], ['todo', 'To do'], ['soon', 'Coming up']];
-export const TODAY_KIND = { blocked: 'Flag', caution: 'Flag', send_link: 'Booking', nudge_link: 'Booking', remind: 'Visit', attend: 'Visit',
-  chase: 'Content', ship: 'Shipping', review: 'Content', pay: 'Payment', apply: 'Applications', behind: 'Campaign',
-  desk: 'Desk', post_in: 'Post link' };
-export const TODAY_ACT = { open: 'Open', booking: 'Send link', snooze: 'Later', remind: 'Copy reminder', done: 'Done',
-  came: 'Came', noshow: 'No-show', chase: 'Copy chase message', addlink: 'Add post', content: 'Review', paid: 'Mark paid',
-  planner: 'Review', roster: 'Open roster', desk: 'Open Desk', accept: 'Accept', view: 'View', reject: 'Not this' };
-export const TODAY_PRIMARY = new Set(['accept', 'booking', 'remind', 'came', 'chase', 'content', 'paid', 'planner', 'desk', 'open', 'roster']);
+export const TODAY_VIEW = { tier: '', allCamps: false };
+export const TODAY_TIERS = ['nano', 'micro', 'mid', 'macro'];
+export const TODAY_TIER_RANGE = { nano: 'under 15K', micro: '15–60K', mid: '60–250K', macro: '250K+' };
+export const TODAY_TIER_COLOR = { nano: 'var(--text-3)', micro: 'var(--blue)', mid: 'var(--s5)', macro: 'var(--warning)' };
+export const TODAY_HORIZON = 14;
 
 export function ensureTodayStyles() {
   if (document.getElementById('tdCss')) return;
   const s = document.createElement('style');
   s.id = 'tdCss';
   s.textContent = `
-  .td-wrap{max-width:980px}
-  .td-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:18px}
+  .td-wrap{max-width:1080px}
+  .td-head{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:18px}
   .td-head h2{margin:0;font-size:22px;font-weight:650;letter-spacing:-.025em}
   .td-head .d{color:var(--text-3);font-size:13px}
-  .td-head select{width:auto;padding:6px 30px 6px 10px;font-size:12.5px}
-  .td-sum{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:22px}
-  .td-chip{display:flex;align-items:baseline;gap:7px;padding:10px 14px;border-radius:var(--r-lg);
-    background:var(--surface);border:1px solid var(--line);min-width:130px}
-  .td-chip b{font-size:22px;font-weight:650;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
-  .td-chip span{font-size:12.5px;color:var(--text-3)}
-  .td-chip.now b{color:var(--critical)}
-  .td-group{margin-bottom:26px}
-  .td-group h3{font-size:13px;font-weight:600;color:var(--text-2);margin:0 0 8px;display:flex;gap:8px;align-items:center}
-  .td-group h3 .n{color:var(--text-3);font-weight:500}
-  .td-list{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden}
-  .td-row{display:grid;grid-template-columns:8px minmax(0,1fr) auto;gap:12px;align-items:center;padding:12px 14px;
-    border-top:1px solid var(--line)}
-  .td-row:first-child{border-top:0}
-  .td-row .dot{width:8px;height:8px;border-radius:50%;background:var(--text-3)}
-  .td-row.now .dot{background:var(--critical)}
-  .td-row.todo .dot{background:var(--warning)}
-  .td-row.soon .dot{background:var(--blue)}
-  .td-row .t{font-size:13.5px;font-weight:500;min-width:0}
-  .td-row .m{font-size:12px;color:var(--text-3);margin-top:2px;display:flex;gap:6px;flex-wrap:wrap}
-  .td-row .m .k{color:var(--text-2)}
-  .td-row .a{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
-  .td-clear{padding:36px 20px;text-align:center;color:var(--text-3);font-size:14px}
-  .td-clear b{display:block;color:var(--text);font-size:17px;font-weight:600;margin-bottom:6px}
+  .td-sec{margin-top:30px}
+  .td-sec > h3{display:flex;gap:10px;align-items:baseline;font-size:14px;font-weight:600;margin:0 0 10px}
+  .td-sec > h3 .m{font-size:12px;font-weight:400;color:var(--text-3)}
+  .td-sec > h3 .sp{flex:1}
+  .td-sec > h3 a,.td-sec > h3 select{font-size:12.5px;font-weight:500}
+  .td-sec > h3 select{width:auto;padding:5px 28px 5px 9px}
+  .td-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden}
+  .td-card .tbl-wrap{overflow-x:auto}
+  .td-card tr.go{cursor:pointer}
+  .td-card tr.go:hover td{background:var(--surface-2)}
+  .td-card td.num,.td-card th.num{text-align:right;font-variant-numeric:tabular-nums}
+  .td-card tr.tot td{font-weight:600;border-top:1px solid var(--line-strong)}
+  .td-card td.z{color:var(--text-3)}
+  .td-bar{display:flex;align-items:center;gap:9px;min-width:130px}
+  .td-bar .t{flex:1;height:6px;border-radius:3px;background:var(--surface-3);overflow:hidden;min-width:60px}
+  .td-bar .f{display:block;height:100%;border-radius:3px;background:var(--s1)}
+  .td-bar .v{font-size:12px;color:var(--text-2);min-width:34px;text-align:right;font-variant-numeric:tabular-nums}
+  .td-mix{display:flex;gap:5px;flex-wrap:wrap}
+  .td-mix span{font-size:11.5px;padding:3px 7px;border-radius:100px;background:var(--surface-2);color:var(--text-2);
+    white-space:nowrap;font-variant-numeric:tabular-nums}
+  .td-mix span.z{opacity:.4}
+  .td-mix i{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:5px;font-style:normal}
+  .td-days .r{display:grid;grid-template-columns:116px 78px minmax(0,1fr);gap:14px;align-items:center;
+    padding:12px 16px;border-top:1px solid var(--line);cursor:pointer;width:100%;text-align:left;
+    border-left:0;border-right:0;border-bottom:0;background:none;font:inherit;color:inherit}
+  .td-days .r:first-child{border-top:0}
+  .td-days .r:hover{background:var(--surface-2)}
+  .td-days .dy{font-size:13.5px;font-weight:550}
+  .td-days .dy small{display:block;font-size:11.5px;font-weight:400;color:var(--blue);margin-top:2px}
+  .td-days .n{font-size:13px;font-variant-numeric:tabular-nums}
+  .td-days .n small{display:block;font-size:11.5px;color:var(--text-3)}
+  .td-note{font-size:12px;color:var(--text-3);padding:11px 16px;border-top:1px solid var(--line)}
+  .td-empty{padding:26px 18px;text-align:center;color:var(--text-3);font-size:13px}
+  .td-two{display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start}
+  @media(max-width:900px){.td-two{grid-template-columns:1fr}}
   @media(max-width:760px){
-    .td-row{grid-template-columns:8px minmax(0,1fr)}
-    .td-row .a{grid-column:2;justify-content:flex-start}
-    .td-chip{min-width:0;flex:1}
+    .td-days .r{grid-template-columns:96px minmax(0,1fr);gap:4px 12px}
+    .td-days .r .td-mix{grid-column:1/-1}
   }`;
   document.head.appendChild(s);
 }
 
-export function renderToday(view, item) {
-  ensureTodayStyles();
-  if (!DB.campaigns.length) {
-    view.innerHTML = emptyState('Nothing to do yet', 'Import a campaign and its to-dos show up here.');
-    return;
-  }
-  /* the Desk's clash checks need the server; ask once, draw without them meanwhile */
-  if (!DESK.data && !DESK.loading && !TODAY_VIEW.deskAsked) {
-    TODAY_VIEW.deskAsked = true;
-    loadDesk().then(() => { if (parseHash().section === 'today') notify(); });
-  }
-  if (!POSTS_IN.list && !TODAY_VIEW.postsAsked) {
-    TODAY_VIEW.postsAsked = true;
-    loadPostsIn().then(() => { if (parseHash().section === 'today' && (POSTS_IN.list || []).length) notify(); });
-  }
-  /* the panel narrows it to one campaign; the item is that campaign's id */
-  const only = item && item !== 'all' && byCampaign[item] ? item : '';
-  const all = todayItems();
-  const items = only ? all.filter((x) => x.campaignId === only) : all;
-  const c = todayCounts(items);
-  const when = new Date(kstToday() + 'T00:00:00Z').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
+/* creatorId -> Set of campaign ids they have been confirmed on or beyond.
+   Only campaigns that still exist count, so a deleted campaign cannot keep
+   somebody marked as "used". */
+export function creatorUse() {
+  const by = {};
+  DB.participants.forEach((p) => {
+    if (!p.creatorId || !PLANNER_CONFIRMED.includes(p.stage) || !byCampaign[p.campaignId]) return;
+    (by[p.creatorId] = by[p.creatorId] || new Set()).add(p.campaignId);
+  });
+  return by;
+}
+/* the Creators page's "Never in a campaign" segment uses this per creator */
+export function hasBeenInCampaign(creatorId) {
+  return DB.participants.some((p) => p.creatorId === creatorId && PLANNER_CONFIRMED.includes(p.stage) && byCampaign[p.campaignId]);
+}
+export const creatorTier = (c) => c.tier || tierOf(c.followers || 0).id;
 
-  const row = (it) => `<div class="td-row ${it.sev}" data-tdkey="${esc(it.key)}">
-      <span class="dot"></span>
-      <div style="min-width:0"><div class="t">${esc(it.title)}</div>
-        <div class="m"><span class="k">${esc(TODAY_KIND[it.kind] || '')}</span>${it.brand ? `<span>· ${esc(it.brand)}</span>` : ''}${
-          it.sub ? `<span>· ${esc(it.sub)}</span>` : ''}</div></div>
-      <div class="a">${it.acts.map((a, i) => `<button class="btn xs ${i === 0 && TODAY_PRIMARY.has(a) ? 'primary' : ''}"
-        data-tdact="${esc(a)}">${esc(TODAY_ACT[a] || a)}</button>`).join('')}</div>
-    </div>`;
+export function todayMix(counts) {
+  return `<div class="td-mix">${TODAY_TIERS.map((t) => `<span class="${counts[t] ? '' : 'z'}"><i style="background:${TODAY_TIER_COLOR[t]}"></i>${
+    t[0].toUpperCase() + t.slice(1)} ${counts[t] || 0}</span>`).join('')}</div>`;
+}
+export const todayBar = (n, of) => `<div class="td-bar"><span class="t"><span class="f" style="width:${of ? Math.round(n / of * 100) : 0}%"></span></span>
+  <span class="v">${of ? Math.round(n / of * 100) + '%' : '—'}</span></div>`;
 
-  view.innerHTML = `<div class="td-wrap">
-    <div class="td-head"><h2>${only ? esc(byCampaign[only].brand) : 'Today'}</h2><span class="d">${esc(when)}</span></div>
-    <div class="td-sum">
-      <div class="td-chip now"><b>${c.now}</b><span>need you now</span></div>
-      <div class="td-chip"><b>${c.todo}</b><span>to do</span></div>
-      <div class="td-chip"><b>${c.soon}</b><span>coming up</span></div>
-    </div>
-    ${items.length ? TODAY_GROUPS.map(([sev, label]) => {
-      const list = items.filter((x) => x.sev === sev);
-      return list.length ? `<div class="td-group"><h3>${label}<span class="n">${list.length}</span></h3>
-        <div class="td-list">${list.map(row).join('')}</div></div>` : '';
-    }).join('') : `<div class="td-list"><div class="td-clear"><b>All clear</b>Nothing needs a person right now.</div></div>`}
-    ${DESK.error ? `<p class="card-sub">Booking clashes aren't included — the Desk couldn't reach the server.</p>` : ''}
-  </div>`;
-
-  const byKey = {};
-  items.forEach((x) => { byKey[x.key] = x; });
-  $$('[data-tdact]', view).forEach((b) => b.addEventListener('click', () => {
-    const it = byKey[b.closest('[data-tdkey]').dataset.tdkey];
-    if (it) todayAct(it, b.dataset.tdact);
-  }));
+/* the next TODAY_HORIZON days of visits, one entry per day that has any */
+export function todaySchedule(only) {
+  const start = kstToday();
+  const end = new Date(new Date(start + 'T00:00:00Z').getTime() + (TODAY_HORIZON - 1) * DAY).toISOString().slice(0, 10);
+  const days = {};
+  const dated = new Set();
+  DB.participants.forEach((p) => {
+    const cp = byCampaign[p.campaignId];
+    if (!cp || (only && p.campaignId !== only) || !PLANNER_CONFIRMED.includes(p.stage)) return;
+    const r = plannerRow(p);
+    if (r.at) dated.add(p.campaignId);
+    if (attendanceOf(p) === 'cancelled') return;
+    if (!r.at) return;
+    if (r.dayKey < start || r.dayKey > end) return;
+    const d = days[r.dayKey] = days[r.dayKey] || { key: r.dayKey, teams: 0, heads: 0, by: {} };
+    d.teams += 1;
+    d.heads += Number(p.headcount) || 1;
+    d.by[p.campaignId] = (d.by[p.campaignId] || 0) + 1;
+  });
+  /* "no date yet" only means something for campaigns that schedule visits at all */
+  const noDate = DB.participants.filter((p) => byCampaign[p.campaignId] && (!only || p.campaignId === only) && p.stage === 'confirmed'
+    && byCampaign[p.campaignId].status !== 'wrapped' && dated.has(p.campaignId) && !plannerRow(p).at).length;
+  const list = Object.values(days).sort((a, b) => a.key.localeCompare(b.key));
+  const weekEnd = new Date(new Date(start + 'T00:00:00Z').getTime() + 6 * DAY).toISOString().slice(0, 10);
+  return { start, list, noDate,
+    week: list.filter((d) => d.key <= weekEnd).reduce((n, d) => n + d.teams, 0),
+    total: list.reduce((n, d) => n + d.teams, 0) };
 }
 
-export function todayAct(it, act) {
-  const p = it.participantId ? DB.participants.find((x) => x.id === it.participantId) : null;
-  const cp = byCampaign[it.campaignId];
-  const go = (tab) => { location.hash = `#/campaigns/${it.campaignId}/${tab}`; };
-  if (act === 'booking') return go('booking');
-  if (act === 'content') return go('content');
-  if (act === 'planner') return go('planner');
-  if (act === 'roster') return go('roster');
-  if (act === 'desk') { if (it.day) { DESK.day = it.day; } location.hash = '#/desk'; return; }
-  if (act === 'view') { window.open(it.url, '_blank', 'noopener'); return; }
-  if (act === 'accept' || act === 'reject') {
-    const sub = (POSTS_IN.list || []).find((x) => x._id === it.sub_id);
-    if (!sub) return;
-    if (act === 'accept' && p) {
-      /* the same write as typing the link into the roster drawer */
-      setContentUrl(p, byCreator[p.creatorId], sub.url);
-      if (STAGE_IDX[p.stage] < STAGE_IDX.submitted) moveStage(p, 'submitted');
-    }
-    settlePostIn(sub, act === 'accept' ? 'accepted' : 'rejected')
-      .then(() => { toast(act === 'accept' ? 'Post added to the roster' : 'Link dismissed'); notify(); })
-      .catch((err) => toast(err.message));
+export function renderToday(view, item) {
+  ensureTodayStyles();
+  if (!DB.campaigns.length && !DB.creators.length) {
+    view.innerHTML = emptyState('Nothing here yet', 'Import a campaign or a creator list and the overview fills itself in.');
     return;
   }
-  if (act === 'open' || act === 'addlink') { if (p) showParticipant(p.id); else go('roster'); return; }
-  if (act === 'snooze') {
-    snoozeToday(p || cp, it.kind, 2);
-    toast('Hidden for 2 days');
-    return notify();
-  }
-  if (!p) return;
-  if (act === 'remind') {
-    copyText(reminderMessage(cp, p));
-    p.reminderFor = plannerRow(p).slot;
-    return notify();
-  }
-  if (act === 'done') { p.reminderFor = plannerRow(p).slot; return notify(); }
-  if (act === 'came' || act === 'noshow') {
-    setAttendance(p, act === 'came' ? 'attended' : 'no_show');
-    toast(act === 'came' ? 'Marked as came' : 'Marked as no-show');
-    return notify();
-  }
-  if (act === 'chase') {
-    copyText(chaseMessage(cp, p));
-    p.chasedAt = new Date().toISOString();
-    return notify();
-  }
-  if (act === 'paid') {
-    markPaid(p);
-    toast('Marked paid');
-    return notify();
-  }
+  const only = item && item !== 'all' && byCampaign[item] ? item : '';
+  const use = creatorUse();
+  const blocked = DB.creators.filter(isBlocked).length;
+  const live = DB.creators.filter((c) => !isBlocked(c));
+  const inCamp = (c) => !!(use[c.id] && (!only || use[c.id].has(only)));
+  /* one campaign: the pool is everyone with a live row on it, so "not yet"
+     reads as "still to confirm" rather than "everyone we have ever sourced" */
+  const poolIds = only ? new Set(DB.participants.filter((p) => p.campaignId === only && p.stage !== 'dropped').map((p) => p.creatorId)) : null;
+  const pool = poolIds ? live.filter((c) => poolIds.has(c.id)) : live;
+  const did = pool.filter(inCamp);
+  const repeat = pool.filter((c) => use[c.id] && use[c.id].size >= 2);
+  const avg = did.length ? did.reduce((n, c) => n + use[c.id].size, 0) / did.length : 0;
+  const when = new Date(kstToday() + 'T00:00:00Z').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
+  const cpTitle = only ? byCampaign[only].brand : 'Home';
+
+  /* ---- by tier ---- */
+  const tierRows = TODAY_TIERS.map((t) => {
+    const all = pool.filter((c) => creatorTier(c) === t);
+    const d = all.filter(inCamp).length;
+    return { t, total: all.length, did: d, not: all.length - d };
+  });
+  const tierHtml = tierRows.map((r) => `<tr class="go" data-tdgo="#/creators/${r.t}">
+      <td><b>${r.t[0].toUpperCase() + r.t.slice(1)}</b> <span style="color:var(--text-3);font-size:12px">· ${TODAY_TIER_RANGE[r.t]}</span></td>
+      <td class="num">${num(r.total)}</td><td class="num">${num(r.did)}</td>
+      <td class="num ${r.not ? '' : 'z'}">${num(r.not)}</td><td>${todayBar(r.did, r.total)}</td></tr>`).join('');
+
+  /* ---- how many campaigns each creator has done (everything view only) ---- */
+  const BUCKETS = [[0, '0 — not yet'], [1, '1 campaign'], [2, '2 campaigns'], [3, '3 campaigns'], [4, '4 or more']];
+  const bucketOf = (c) => Math.min(4, use[c.id] ? use[c.id].size : 0);
+  const matrix = BUCKETS.map(([n, label]) => {
+    const inB = pool.filter((c) => bucketOf(c) === n);
+    const by = {}; TODAY_TIERS.forEach((t) => { by[t] = inB.filter((c) => creatorTier(c) === t).length; });
+    return { n, label, total: inB.length, by };
+  });
+  const matrixHtml = matrix.map((m) => `<tr class="go" data-tdgo="#/creators/${m.n === 0 ? 'unused' : m.n >= 2 ? 'repeat' : 'worked'}">
+      <td>${m.label}</td>${TODAY_TIERS.map((t) => `<td class="num ${m.by[t] ? '' : 'z'}">${m.by[t]}</td>`).join('')}
+      <td class="num"><b>${num(m.total)}</b></td><td>${todayBar(m.total, pool.length)}</td></tr>`).join('');
+
+  /* ---- campaigns ---- */
+  const camps = DB.campaigns.filter((c) => !only || c.id === only).map((cp) => {
+    const rows = DB.participants.filter((p) => p.campaignId === cp.id && PLANNER_CONFIRMED.includes(p.stage) && byCreator[p.creatorId]);
+    const ids = [...new Set(rows.map((p) => p.creatorId))];
+    const by = {}; TODAY_TIERS.forEach((t) => { by[t] = 0; });
+    ids.forEach((id) => { by[creatorTier(byCreator[id])] += 1; });
+    return { cp, n: ids.length, by, fresh: ids.filter((id) => use[id] && use[id].size === 1).length,
+      target: Number(cp.targetCreators) || 0 };
+  }).sort((a, b) => (a.cp.status === 'wrapped') - (b.cp.status === 'wrapped')
+    || String(b.cp.start || '').localeCompare(String(a.cp.start || '')));
+  const shownCamps = TODAY_VIEW.allCamps || only ? camps : camps.filter((r) => r.cp.status !== 'wrapped');
+  const wrappedHidden = camps.length - shownCamps.length;
+  const dates = (cp) => [cp.start, cp.end].filter(Boolean).map((d) => String(d).slice(5, 10)).join(' → ') || '—';
+
+  /* ---- schedule ---- */
+  const sch = todaySchedule(only);
+  const dayLabel = (key) => new Date(key + 'T00:00:00Z').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+  const tomorrow = new Date(new Date(sch.start + 'T00:00:00Z').getTime() + DAY).toISOString().slice(0, 10);
+  const dayHtml = sch.list.map((d) => `<button class="r" data-tdday="${esc(d.key)}">
+      <span class="dy">${esc(dayLabel(d.key))}${d.key === sch.start ? '<small>Today</small>' : d.key === tomorrow ? '<small>Tomorrow</small>' : ''}</span>
+      <span class="n"><b>${d.teams}</b> visit${d.teams === 1 ? '' : 's'}<small>${d.heads} people</small></span>
+      <span class="td-mix">${Object.entries(d.by).map(([id, n]) => `<span>${esc(byCampaign[id].brand)} ${n}</span>`).join('')}</span>
+    </button>`).join('');
+
+  /* ---- who has not been used ---- */
+  const tierPick = TODAY_VIEW.tier;
+  const idle = !only ? live.filter((c) => !use[c.id]) : [];
+  const idleShown = idle.filter((c) => !tierPick || creatorTier(c) === tierPick)
+    .sort((a, b) => (b.followers || 0) - (a.followers || 0));
+
+  view.innerHTML = `<div class="td-wrap">
+    <div class="td-head"><h2>${esc(cpTitle)}</h2><span class="d">${esc(when)}</span></div>
+
+    <div class="grid g4">
+      ${statCard(only ? 'On the roster' : 'Creators', num(pool.length), { foot: only ? 'not dropped' : blocked ? `${num(blocked)} blacklisted left out` : 'in the database' })}
+      ${statCard(only ? 'Confirmed' : 'Been in a campaign', num(did.length), { foot: `${pool.length ? Math.round(did.length / pool.length * 100) : 0}% of ${only ? 'the roster' : 'the creator list'}` })}
+      ${statCard(only ? 'Not confirmed yet' : 'Not yet in one', num(pool.length - did.length), { foot: only ? 'waiting on a decision' : 'never confirmed on a campaign' })}
+      ${statCard(only ? 'Worked with us before' : 'Repeat · 2+ campaigns', num(only ? did.filter((c) => use[c.id].size >= 2).length : repeat.length),
+        { foot: did.length ? `${avg.toFixed(1)} campaigns each, on average` : 'no one confirmed yet' })}
+    </div>
+
+    <div class="td-sec"><h3>${only ? 'Visits' : 'Scheduling'}<span class="m">next ${TODAY_HORIZON} days · ${sch.week} this week · ${sch.total} in all</span>
+        <span class="sp"></span><a href="#/desk">Open the Desk →</a></h3>
+      <div class="td-card td-days">${sch.list.length ? dayHtml
+        : `<div class="td-empty">No visits booked in the next ${TODAY_HORIZON} days.</div>`}
+        ${sch.noDate ? `<div class="td-note">${sch.noDate} confirmed creator${sch.noDate === 1 ? ' has' : 's have'} no visit date yet.</div>` : ''}</div>
+    </div>
+
+    <div class="td-sec"><h3>${only ? 'Roster by tier' : 'Creators by tier'}<span class="m">${only ? 'confirmed vs still to confirm' : 'who has been in a campaign'}</span></h3>
+      <div class="td-card"><div class="tbl-wrap"><table class="tbl"><thead><tr>
+        <th>Tier</th><th class="num">${only ? 'On roster' : 'Creators'}</th><th class="num">${only ? 'Confirmed' : 'In a campaign'}</th>
+        <th class="num">${only ? 'Not yet' : 'Not yet used'}</th><th>${only ? 'Confirmed' : 'Used'}</th></tr></thead>
+        <tbody>${tierHtml}<tr class="tot"><td>All tiers</td><td class="num">${num(pool.length)}</td><td class="num">${num(did.length)}</td>
+          <td class="num">${num(pool.length - did.length)}</td><td>${todayBar(did.length, pool.length)}</td></tr></tbody></table></div></div>
+    </div>
+
+    ${only ? '' : `<div class="td-sec"><h3>Campaigns per creator<span class="m">how many campaigns each creator has been confirmed on</span></h3>
+      <div class="td-card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Campaigns done</th>
+        ${TODAY_TIERS.map((t) => `<th class="num">${t[0].toUpperCase() + t.slice(1)}</th>`).join('')}<th class="num">Creators</th><th>Share</th></tr></thead>
+        <tbody>${matrixHtml}</tbody></table></div></div>
+    </div>`}
+
+    <div class="td-sec"><h3>${only ? 'Campaign' : 'Campaigns'}<span class="m">creators confirmed, by tier</span><span class="sp"></span>
+        ${!only && (wrappedHidden || TODAY_VIEW.allCamps) ? `<a href="#" id="tdAllCamps">${TODAY_VIEW.allCamps ? 'Hide wrapped' : `Show ${wrappedHidden} wrapped`}</a>` : ''}</h3>
+      <div class="td-card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Campaign</th><th>Status</th><th>Dates</th>
+        <th class="num">Confirmed</th><th>By tier</th><th class="num">First-timers</th></tr></thead>
+        <tbody>${shownCamps.length ? shownCamps.map((r) => `<tr class="go" data-tdgo="#/campaigns/${esc(r.cp.id)}">
+          <td><b>${esc(r.cp.brand)}</b><div style="color:var(--text-3);font-size:12px">${esc(r.cp.name || '')}</div></td>
+          <td><span class="pill ${(CAMPAIGN_STATUS[r.cp.status] || {}).cls || 'grey'}">${esc((CAMPAIGN_STATUS[r.cp.status] || {}).label || r.cp.status || '—')}</span></td>
+          <td style="white-space:nowrap;color:var(--text-2)">${esc(dates(r.cp))}</td>
+          <td class="num">${r.n}${r.target ? `<span style="color:var(--text-3)"> / ${r.target}</span>` : ''}</td>
+          <td>${todayMix(r.by)}</td><td class="num ${r.fresh ? '' : 'z'}">${r.fresh}</td></tr>`).join('')
+          : `<tr><td colspan="6" class="td-empty">No campaigns yet.</td></tr>`}</tbody></table></div></div>
+    </div>
+
+    ${only ? '' : `<div class="td-sec"><h3>Not used yet<span class="m">${num(idleShown.length)} creator${idleShown.length === 1 ? '' : 's'}, biggest first</span><span class="sp"></span>
+        <select id="tdTier"><option value="">Any tier</option>${TODAY_TIERS.map((t) => `<option value="${t}" ${tierPick === t ? 'selected' : ''}>${
+          t[0].toUpperCase() + t.slice(1)} · ${TODAY_TIER_RANGE[t]}</option>`).join('')}</select>
+        <a href="#/creators/unused">All in Creators →</a></h3>
+      <div class="td-card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Creator</th><th>Tier</th><th>Category</th><th>Country</th>
+        <th class="num">Followers</th><th class="num">ER</th></tr></thead>
+        <tbody>${idleShown.slice(0, 12).map((c) => `<tr class="go" data-tdcr="${esc(c.id)}"><td>${whoHtml(c, c.name)}</td>
+          <td>${tierPill(creatorTier(c))}</td><td>${esc((c.categories || []).slice(0, 2).join(', ') || '—')}</td><td>${esc(c.country || '—')}</td>
+          <td class="num">${kmb(c.followers)}</td><td class="num">${c.er ? erPct(c.er) : '—'}</td></tr>`).join('')
+          || `<tr><td colspan="6" class="td-empty">${idle.length ? 'No one in that tier.' : 'Every creator on the list has been in a campaign.'}</td></tr>`}</tbody></table></div>
+        ${idleShown.length > 12 ? `<div class="td-note">Showing 12 of ${num(idleShown.length)}.</div>` : ''}</div>
+    </div>`}
+  </div>`;
+
+  $$('[data-tdgo]', view).forEach((r) => r.addEventListener('click', () => { location.hash = r.dataset.tdgo; }));
+  $$('[data-tdcr]', view).forEach((r) => r.addEventListener('click', () => showCreator(r.dataset.tdcr)));
+  $$('[data-tdday]', view).forEach((b) => b.addEventListener('click', () => { DESK.day = b.dataset.tdday; location.hash = '#/desk'; }));
+  const tierSel = $('#tdTier', view);
+  if (tierSel) tierSel.addEventListener('change', () => { TODAY_VIEW.tier = tierSel.value; notify(); });
+  const allC = $('#tdAllCamps', view);
+  if (allC) allC.addEventListener('click', (e) => { e.preventDefault(); TODAY_VIEW.allCamps = !TODAY_VIEW.allCamps; notify(); });
 }
 
 /* ============================================================

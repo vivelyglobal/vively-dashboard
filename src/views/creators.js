@@ -12,6 +12,7 @@ import { parseCsvLoose } from '../sync/sheetMetrics.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { FLAGS, avatarHtml, daysAgo, downloadFile, emptyState, flagPill, sortTable, stagePill, statCard, tierPill, toCsv, whoHtml } from '../ui/html.js';
 import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';
+import { hasBeenInCampaign } from './overview.js';
 
 /* ============================================================
    VIEW — CREATOR DATABASE
@@ -53,6 +54,7 @@ export const CREATOR_SEGMENTS = [
   { id: 'all',       label: 'All creators',      test: () => true },
   { id: 'worked',    label: 'Worked with us',    test: (c) => c.campaignsDone > 0 },
   { id: 'prospects', label: 'Prospects',         test: (c) => c.campaignsDone === 0 },
+  { id: 'unused',    label: 'Never in a campaign', test: (c) => !hasBeenInCampaign(c.id) },
   { id: 'repeat',    label: 'Repeat performers', test: (c) => c.campaignsDone >= 2 },
   { id: 'reliable',  label: 'Top rated',         test: (c) => c.reliability >= 4.3 },
   { id: 'preferred', label: '★ Preferred',       test: (c) => c.flag === 'preferred' },

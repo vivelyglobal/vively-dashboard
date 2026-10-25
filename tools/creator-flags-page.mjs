@@ -107,17 +107,11 @@ ok('a name in the banner opens that creator\'s card', await (async () => {
 })());
 await p.keyboard.press('Escape');
 
-/* Needs attention is the Today list now; the old address still lands there */
+/* Needs attention used to be the Today list, which is now the Home overview;
+   the old address still lands on it, and Home no longer carries a to-do list */
 await go('overview/attention');
 await p.waitForTimeout(400);
-const attention = await viewText();
-ok('the Needs attention list raises it as an alert',
-  /is blacklisted/i.test(attention) && attention.includes(db.campaigns[0].brand), attention.slice(0, 160));
-ok('and a separate one for caution', /marked caution/i.test(attention));
-ok('the blacklist alert is one of the loudest', await p.evaluate(() => {
-  const first = document.querySelector('.td-group');
-  return !!first && /Needs you now/.test(first.textContent) && /is blacklisted/.test(first.textContent);
-}));
+ok('the old Needs attention address lands on Home', /Creators by tier/.test(await viewText()));
 
 await go('creators');
 ok('the creators table still shows the flag', (await p.$$('.flag-mark')).length >= 2);
