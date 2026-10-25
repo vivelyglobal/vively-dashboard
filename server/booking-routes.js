@@ -1141,6 +1141,9 @@ function mountBookingRoutes(app, deps) {
 
       const view = await publicView(schedule, Date.now());
       view.booking = { date: bk.date, time: bk.time, partySize: bk.partySize };
+      /* the links they have already sent, so the page can say "received" */
+      const sent = await (await submissions()).find({ bookingId: bk._id }).toArray();
+      view.posts = sent.map((x) => ({ url: x.url, at: x.submittedAt, outcome: x.outcome || null }));
       return res.json({ ok: true, ...view });
     } catch (err) {
       console.error("GET /api/book/manage failed:", err.message);
@@ -1299,6 +1302,73 @@ function mountBookingRoutes(app, deps) {
     }
   });
 
+  /* ---- manage: the creator hands over their post -----------------------
+
+     The creator already holds this page from booking, so it is where they
+     paste the link once the post is up — the longest chase in a campaign,
+     removed. It lands in its own collection and never in the workspace
+     document: that one is revision-locked and open in somebody's browser,
+     the same reason partner comments live apart. A person accepts it onto
+     the roster from Today. */
+  const submissions = () => col("post_submissions");
+  const POST_URL = /^https:\/\/((www|m|vt|vm)\.)?(instagram\.com|tiktok\.com|youtube\.com|youtu\.be)\/\S+$/i;
+
+  app.post("/api/book/manage/:manageToken/post", async (req, res) => {
+    if (needsDb(res)) return;
+    if (tooBig(req, res)) return;
+    if (limited(req, res, writeLimit, req.params.manageToken)) return;
+    const url = String((req.body || {}).url || "").trim().slice(0, 500);
+    if (!POST_URL.test(url)) {
+      return res.status(400).json({ error: "인스타그램, 틱톡 또는 유튜브 게시물 링크를 붙여넣어 주세요." });
+    }
+    try {
+      const bk = await (await bookings()).findOne({ manageToken: req.params.manageToken });
+      if (!bk || bk.status !== "confirmed") return res.status(404).json({ error: "사용할 수 없는 예약 링크입니다." });
+      const s = await submissions();
+      /* pasting the same link twice is a normal thing to do on a phone */
+      if (await s.findOne({ bookingId: bk._id, url })) return res.json({ ok: true, reused: true });
+      const mine = await s.find({ bookingId: bk._id }).toArray();
+      if (mine.length >= 10) return res.status(429).json({ error: "링크를 너무 많이 보냈습니다. 담당자에게 문의해 주세요." });
+      await s.insertOne({
+        _id: token(16), bookingId: bk._id, campaignId: bk.campaignId,
+        participantId: typeof bk.participantId === "string" ? bk.participantId : null,
+        handle: String((bk.guest && bk.guest.handle) || "").slice(0, 120),
+        url, submittedAt: new Date(), handledAt: null
+      });
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("POST /api/book manage post failed:", err.message);
+      return res.status(502).json({ error: "링크를 저장하지 못했습니다." });
+    }
+  });
+
+  /* staff: what has come in and not been dealt with yet */
+  app.get("/api/booking/submissions", requireStaff(async (req, res) => {
+    if (needsDb(res)) return;
+    try {
+      const list = await (await submissions()).find({ handledAt: null }).toArray();
+      list.sort((a, b) => new Date(a.submittedAt) - new Date(b.submittedAt));
+      return res.json({ ok: true, submissions: list });
+    } catch (err) {
+      console.error("GET /api/booking/submissions failed:", err.message);
+      return res.status(502).json({ error: "Could not reach the database." });
+    }
+  }));
+
+  app.post("/api/booking/submissions/:id/handled", requireStaff(async (req, res) => {
+    if (needsDb(res)) return;
+    const outcome = (req.body || {}).outcome === "rejected" ? "rejected" : "accepted";
+    try {
+      const r = await (await submissions()).updateOne(
+        { _id: req.params.id, handledAt: null },
+        { $set: { handledAt: new Date(), outcome, handledBy: (req.session || {}).email || "" } });
+      return res.json({ ok: true, changed: !!r.modifiedCount });
+    } catch (err) {
+      console.error("POST /api/booking/submissions handled failed:", err.message);
+      return res.status(502).json({ error: "Could not reach the database." });
+    }
+  }));
+
   /* ---- what the workspace save needs ---------------------------------- */
 
   /* Every booking that should currently be projecting onto a participant.
@@ -1334,6 +1404,8 @@ async function ensureBookingIndexes(client, dbName) {
     ["booking_slots", { campaignId: 1, startsAt: 1 }, {}],
     ["booking_invites", { campaignId: 1, participantId: 1 }, {}],
     ["campaign_bookings", { manageToken: 1 }, { unique: true }],
+    ["post_submissions", { bookingId: 1 }, {}],
+    ["post_submissions", { handledAt: 1 }, {}],
     ["campaign_bookings", { campaignId: 1, status: 1, startsAt: 1 }, {}],
     ["campaign_bookings", { campaignId: 1, participantId: 1 },
       { unique: true, partialFilterExpression: { status: "confirmed", participantId: { $type: "string" } } }],

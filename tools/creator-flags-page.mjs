@@ -107,15 +107,17 @@ ok('a name in the banner opens that creator\'s card', await (async () => {
 })());
 await p.keyboard.press('Escape');
 
+/* Needs attention is the Today list now; the old address still lands there */
 await go('overview/attention');
+await p.waitForTimeout(400);
 const attention = await viewText();
 ok('the Needs attention list raises it as an alert',
-  /blacklisted creator/i.test(attention) && attention.includes(db.campaigns[0].brand), attention.slice(0, 160));
+  /is blacklisted/i.test(attention) && attention.includes(db.campaigns[0].brand), attention.slice(0, 160));
 ok('and a separate one for caution', /marked caution/i.test(attention));
-ok('the blacklist alert is one of the loudest', await (async () => {
-  await go('overview/attention/critical');
-  return /blacklisted creator/i.test(await viewText());
-})());
+ok('the blacklist alert is one of the loudest', await p.evaluate(() => {
+  const first = document.querySelector('.td-group');
+  return !!first && /Needs you now/.test(first.textContent) && /is blacklisted/.test(first.textContent);
+}));
 
 await go('creators');
 ok('the creators table still shows the flag', (await p.$$('.flag-mark')).length >= 2);

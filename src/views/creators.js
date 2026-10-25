@@ -1,7 +1,7 @@
 import { SERIES_HEX, barsH, splitBar } from '../charts/index.js';
 import { normHeader } from '../import/excel.js';
 import { TODAY, dLabel, iso } from '../lib/dates.js';
-import { engagementsOf, kmb, num, won } from '../lib/format.js';
+import { engagementsOf, erPct, kmb, num, won } from '../lib/format.js';
 import { readXlsx } from '../lib/xlsx.js';
 import { findCreatorByHandle, normHandle } from '../model/creators.js';
 import { DB, byCampaign, byCreator, notify, serverSave, toastAfterSave } from '../model/db.js';
@@ -131,7 +131,7 @@ export function renderCreators(view, item, tab) {
       <td>${c.categories.slice(0, 2).map((x) => `<span class="tag">${esc(x)}</span>`).join(' ')}</td>
       <td>${esc(c.country)}</td>
       <td class="num">${num(c.followers)}</td>
-      <td class="num">${c.er}%</td>
+      <td class="num">${erPct(c.er)}</td>
       <td class="num">${kmb(c.avgViews)}</td>
       <td class="num">${c.campaignsDone || '—'}</td>
       <td class="num">${c.bestViews ? kmb(c.bestViews) : '—'}</td>
@@ -241,7 +241,7 @@ export function showCreator(id) {
 
     <div class="grid g3" style="gap:10px;margin-bottom:18px;">
       <div class="card tight stat"><div class="label">Followers</div><div class="value" style="font-size:22px">${kmb(c.followers)}</div></div>
-      <div class="card tight stat"><div class="label">ER</div><div class="value" style="font-size:22px">${c.er}%</div></div>
+      <div class="card tight stat"><div class="label">ER</div><div class="value" style="font-size:22px">${erPct(c.er)}</div></div>
       <div class="card tight stat"><div class="label">Avg views</div><div class="value" style="font-size:22px">${kmb(c.avgViews)}</div></div>
     </div>
 

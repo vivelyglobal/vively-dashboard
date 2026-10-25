@@ -362,7 +362,7 @@ export function renderMessageUI(mount, cp, kind) {
       <div class="card">
         <div class="card-head"><h3 id="mgTitle">${esc(label)}</h3><div class="sp"></div>
           <button class="btn sm" id="mgCopy">Copy</button>
-          <button class="btn sm" id="mgBulk">Generate for all ${candidates.length}</button>
+          ${candidates.length ? `<button class="btn sm" id="mgBulk">Generate for all ${candidates.length}</button>` : ''}
         </div>
         <p class="card-sub">Edit freely before sending — this is a starting point, not a script.</p>
         <textarea id="mgOut" style="min-height:46vh;font-size:13px;line-height:1.7"></textarea>
@@ -381,7 +381,7 @@ export function renderMessageUI(mount, cp, kind) {
 
   $('#mgCopy').addEventListener('click', () => copyText($('#mgOut').value, 'Message'));
   $('#mnSave').addEventListener('click', () => { cp.note = $('#mnNote').value; draw(); toast('Campaign note saved'); });
-  $('#mgBulk').addEventListener('click', () => {
+  if ($('#mgBulk')) $('#mgBulk').addEventListener('click', () => {
     if (!candidates.length) { toast('Nobody is at that stage right now'); return; }
     const rows = candidates.map((p) => {
       const cr = byCreator[p.creatorId];

@@ -90,7 +90,7 @@ await p.waitForSelector('.planner-grid', { timeout: 8000 });
 ok('a campaign opens on the Planner', await p.isVisible('.planner-grid'));
 const tabs = await p.$$eval('#tabbar a, #tabbar button', (els) => els.map((e) => e.textContent.trim()));
 ok('Planner is the first tab', tabs[0] === 'Planner', tabs.slice(0, 4).join(' · '));
-ok('the board is still there, one tab along', tabs.includes('Roster & pipeline'));
+ok('the board is still there, one tab along', tabs[1] === 'Creators');
 
 /* ---- the five numbers ---- */
 const head = await text('#cpTab');
@@ -99,7 +99,14 @@ ok('it counts confirmed against the target', /Confirmed 4 \/ 6/.test(head));
 ok('it names the one with no date', /1 without a date/.test(head));
 ok('it counts the visits in the next seven days', /Visits next 7 days 2/.test(head));
 ok('it counts posts and overdue ones', /Posted 0 \/ 4/.test(head) && /1 overdue/.test(head));
-ok('needs attention adds the overdue, the undated and the blacklisted', /Needs attention 3/.test(head), String(head.match(/Needs attention \d+/)));
+/* The count is the Today list for this campaign, so it is checked against
+   that list — and the list must hold the overdue, the undated and the
+   blacklisted, which is what this number used to add up by hand. */
+const todayHere = await p.evaluate((id) => todayItems({ campaignId: id }).filter((x) => x.sev !== 'soon').map((x) => x.kind), CP);
+ok('needs attention adds the overdue, the undated and the blacklisted',
+  new RegExp('Needs attention ' + todayHere.length + '\\b').test(head)
+  && ['chase', 'send_link', 'blocked'].every((k) => todayHere.includes(k)),
+  String(head.match(/Needs attention \d+/)) + ' · ' + todayHere.join(','));
 
 /* ---- warnings ---- */
 ok('the blacklisted creator is called out at the top', head.includes('blacklisted creator') && head.includes('@pl_beta'));

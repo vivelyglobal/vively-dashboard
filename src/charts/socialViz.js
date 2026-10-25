@@ -42,8 +42,8 @@ export function donutChart(mount, parts, opt) {
          aria-label="${esc(opt.aria || 'breakdown')}">
       <circle cx="59" cy="59" r="${R}" fill="none" stroke="var(--surface-3)" stroke-width="17"></circle>
       ${arcs}
-      <text x="59" y="55" text-anchor="middle" style="font:500 21px 'Roboto Mono',monospace;fill:var(--text)">${kmb(total)}</text>
-      <text x="59" y="70" text-anchor="middle" style="font:400 9px 'Roboto Mono',monospace;fill:var(--text-3)">${esc(opt.centreLabel || 'TOTAL')}</text>
+      <text x="59" y="55" text-anchor="middle" style="font:500 21px var(--font);fill:var(--text)">${kmb(total)}</text>
+      <text x="59" y="70" text-anchor="middle" style="font:400 9px var(--font);fill:var(--text-3)">${esc(opt.centreLabel || 'TOTAL')}</text>
     </svg>
     <div style="flex:1;min-width:150px;display:flex;flex-direction:column;gap:7px">
       ${parts.map((p) => `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12.5px;${p.value ? '' : 'opacity:.5'}">
@@ -81,9 +81,9 @@ export function columnChart(mount, rows, opt) {
        height="${(r.value ? Math.max(h, 2) : 2).toFixed(1)}" rx="2"
        fill="${r.value ? (r.color || 'var(--s1)') : 'var(--surface-3)'}"><title>${esc(r.label)}: ${num(r.value)}</title></rect>
       <text x="${(x + bw / 2).toFixed(1)}" y="${(r.value ? y - 5 : padT + innerH - 7).toFixed(1)}" text-anchor="middle"
-        style="font:500 10px 'Roboto Mono',monospace;fill:${r.value ? 'var(--text-2)' : 'var(--text-3)'}">${r.value}</text>
+        style="font:500 10px var(--font);fill:${r.value ? 'var(--text-2)' : 'var(--text-3)'}">${r.value}</text>
       <text x="${(x + bw / 2).toFixed(1)}" y="${H - 14}" text-anchor="middle"
-        style="font:400 10px 'Roboto Mono',monospace;fill:var(--text-3)">${esc(r.label)}</text>`;
+        style="font:400 10px var(--font);fill:var(--text-3)">${esc(r.label)}</text>`;
   }).join('');
 
   const wrap = document.createElement('div');
@@ -91,10 +91,10 @@ export function columnChart(mount, rows, opt) {
   wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto" role="img" aria-label="${esc(opt.aria || 'distribution')}">
     <line x1="${padL}" y1="${padT + innerH}" x2="${W - 4}" y2="${padT + innerH}" stroke="var(--axis)"></line>
     <line x1="${padL}" y1="${padT}" x2="${W - 4}" y2="${padT}" stroke="var(--grid)"></line>
-    <text x="${padL - 6}" y="${padT + 4}" text-anchor="end" style="font:400 10px 'Roboto Mono',monospace;fill:var(--text-3)">${max}</text>
-    <text x="${padL - 6}" y="${padT + innerH + 4}" text-anchor="end" style="font:400 10px 'Roboto Mono',monospace;fill:var(--text-3)">0</text>
+    <text x="${padL - 6}" y="${padT + 4}" text-anchor="end" style="font:400 10px var(--font);fill:var(--text-3)">${max}</text>
+    <text x="${padL - 6}" y="${padT + innerH + 4}" text-anchor="end" style="font:400 10px var(--font);fill:var(--text-3)">0</text>
     ${bars}
-  </svg>${opt.foot ? `<div style="font:400 11px/1.4 'Roboto Mono',monospace;color:var(--warning);margin-top:2px">${esc(opt.foot)}</div>` : ''}`;
+  </svg>${opt.foot ? `<div style="font:400 11px/1.4 var(--font);color:var(--warning);margin-top:2px">${esc(opt.foot)}</div>` : ''}`;
   wrap.appendChild(tableFallback([opt.labelHead || 'Bucket', 'Posts'], rows.map((r) => [r.label, num(r.value)])));
   mount.appendChild(wrap);
   return wrap;

@@ -185,43 +185,87 @@ export function bookingTab(mount, cp) {
   }
   if (BOOKING.error) {
     mount.innerHTML = `<div class="note bad">${esc(BOOKING.error)}</div>
-      <p class="card-sub" style="margin-top:10px">Bookings need the server — the rest of this campaign works offline,
-      this tab does not. Reconnecting will bring it back.</p>`;
+      <p class="card-sub" style="margin-top:10px">Booking needs a connection to the server.</p>`;
     return;
   }
   if (!BOOKING.schedule) return bookingSetup(mount, cp);
   return bookingBoard(mount, cp);
 }
 
+/* ---- venue presets ----
+   The same restaurant comes back campaign after campaign with the same
+   hours. Generating a rule saves the venue's shape under its name, and
+   setting up the next campaign can start from it. The booking period is
+   never part of a preset — it belongs to the campaign. */
+export function venuePresets() {
+  if (!Array.isArray(SETTINGS.venuePresets)) SETTINGS.venuePresets = [];
+  return SETTINGS.venuePresets;
+}
+export function saveVenuePreset(sc, rule) {
+  const name = String((sc && sc.venueName) || '').trim();
+  if (!name || !rule) return;
+  const shape = JSON.parse(JSON.stringify(rule));
+  delete shape.from; delete shape.to;
+  const list = venuePresets().filter((x) => x.venueName !== name);
+  list.unshift({ venueName: name, slotMinutes: sc.slotMinutes || 90, maxPartySize: sc.maxPartySize || 1,
+    maxPerDay: sc.maxPerDay || 0, deadlineHours: sc.deadlineHours || 0, noteForCreator: sc.noteForCreator || '',
+    rule: shape, savedAt: new Date().toISOString() });
+  SETTINGS.venuePresets = list.slice(0, 30);
+  persist();
+}
+/* a preset's weekly shape over this campaign's own period */
+export function presetRuleFor(cp, preset) {
+  const base = defaultBookingRule();
+  const today = iso(TODAY);
+  const from = cp.start && cp.start > today ? String(cp.start).slice(0, 10) : base.from;
+  const to = cp.end && String(cp.end).slice(0, 10) > from ? String(cp.end).slice(0, 10) : base.to;
+  return ruleWithSlotCount(Object.assign(JSON.parse(JSON.stringify(preset.rule)), { from, to }));
+}
+
 /* ---- before there is a schedule ---- */
 export function bookingSetup(mount, cp) {
+  const presets = venuePresets();
   mount.innerHTML = `
     <div class="card" style="max-width:640px">
-      <div class="card-head"><h3>Let creators book their own visit</h3></div>
-      <p class="card-sub">Set the times you can take, then send each creator a link. They pick a slot, it is
-      theirs, and the confirmed time lands on the roster, the calendar and the partner page exactly as if you
-      had typed it in.</p>
-      <div class="grid g2" style="gap:10px;margin-top:14px">
-        <div class="field"><label>Venue name — what the creator sees</label>
-          <input type="text" id="bkVenue" placeholder="${esc(cp.brand)}" value="${esc(cp.brand || '')}"/></div>
-        <div class="field"><label>Time zone</label>
-          <select id="bkTz">${['Asia/Seoul', 'Asia/Tokyo', 'Asia/Bangkok', 'Asia/Singapore', 'Europe/London', 'America/New_York']
-            .map((z) => `<option ${z === 'Asia/Seoul' ? 'selected' : ''}>${z}</option>`).join('')}</select></div>
-        <div class="field"><label>How long each visit takes (minutes)</label>
-          <input type="number" id="bkMins" value="90" min="5"/></div>
-        <div class="field"><label>Close booking this many hours before</label>
-          <input type="number" id="bkDeadline" value="24" min="0"/></div>
-        <div class="field"><label>Most people per booking</label>
-          <input type="number" id="bkParty" value="1" min="1"/></div>
-      </div>
-      <div class="field"><label>A note on the booking page (optional)</label>
-        <input type="text" id="bkNote" placeholder="e.g. 10분 일찍 도착해 주세요."/></div>
+      <div class="card-head"><h3>Set up booking</h3></div>
+      <p class="card-sub">Creators get their own link, pick a time, and it lands on the roster and calendar.</p>
+      ${presets.length ? `<div class="field" style="margin-top:14px"><label>Start from a venue you've used</label>
+        <select id="bkPreset"><option value="">— new venue —</option>
+          ${presets.map((x, i) => `<option value="${i}">${esc(x.venueName)}</option>`).join('')}</select></div>` : ''}
+      <div class="field" style="margin-top:${presets.length ? 4 : 14}px"><label>Venue name — what the creator sees</label>
+        <input type="text" id="bkVenue" placeholder="${esc(cp.brand)}" value="${esc(cp.brand || '')}"/></div>
+      <details class="bk-more" style="margin-bottom:14px">
+        <summary>More options</summary>
+        <div class="grid g2" style="gap:10px;margin-top:10px">
+          <div class="field"><label>Visit length (minutes)</label>
+            <input type="number" id="bkMins" value="90" min="5"/></div>
+          <div class="field"><label>Most people per booking</label>
+            <input type="number" id="bkParty" value="1" min="1"/></div>
+          <div class="field"><label>Close booking hours before</label>
+            <input type="number" id="bkDeadline" value="24" min="0"/></div>
+          <div class="field"><label>Time zone</label>
+            <select id="bkTz">${['Asia/Seoul', 'Asia/Tokyo', 'Asia/Bangkok', 'Asia/Singapore', 'Europe/London', 'America/New_York']
+              .map((z) => `<option ${z === 'Asia/Seoul' ? 'selected' : ''}>${z}</option>`).join('')}</select></div>
+        </div>
+        <div class="field"><label>Note on the booking page</label>
+          <input type="text" id="bkNote" placeholder="e.g. 10분 일찍 도착해 주세요."/></div>
+      </details>
       <button class="btn primary" id="bkCreate">Set up booking</button>
     </div>`;
 
+  const pick = $('#bkPreset');
+  if (pick) pick.addEventListener('change', () => {
+    const x = presets[+pick.value];
+    if (!x) return;
+    $('#bkVenue').value = x.venueName;
+    $('#bkMins').value = x.slotMinutes; $('#bkParty').value = x.maxPartySize;
+    $('#bkDeadline').value = x.deadlineHours; $('#bkNote').value = x.noteForCreator || '';
+  });
+
   $('#bkCreate').addEventListener('click', async () => {
+    const preset = pick && pick.value !== '' ? presets[+pick.value] : null;
     try {
-      await bookingCall('/api/booking/schedule', {
+      await bookingCall('/api/booking/schedule', Object.assign({
         campaignId: cp.id,
         venueName: $('#bkVenue').value.trim(),
         timezone: $('#bkTz').value,
@@ -229,9 +273,13 @@ export function bookingSetup(mount, cp) {
         deadlineHours: +$('#bkDeadline').value || 0,
         maxPartySize: +$('#bkParty').value || 1,
         noteForCreator: $('#bkNote').value.trim()
-      });
+      }, preset ? { maxPerDay: preset.maxPerDay || 0 } : {}));
+      /* the preset's week goes on screen as the draft, ready to generate —
+         nothing is written until somebody looks at it and presses Generate */
+      RULE_DRAFT = preset ? presetRuleFor(cp, preset) : null;
       await loadBooking(cp.id, true);
-      toast('Booking is set up — now add some dates');
+      toast(preset ? `Booking set up from ${preset.venueName} — check the times and press Generate`
+        : 'Booking is set up — now add some dates');
       notify();
     } catch (err) { toast(err.message); }
   });
@@ -261,19 +309,22 @@ export function bookingBoard(mount, cp) {
       <button class="btn xs" id="bkPause">${sc.status === 'paused' ? 'Reopen' : 'Pause'}</button>
     </div>
 
+    ${BOOKING.slots.length ? bookingShareCard(cp) : ''}
+
     ${bookingAvailabilityCard(cp)}
 
     <div class="grid g4" style="margin-bottom:16px">
       ${statCard('Booked', taken, { foot: `${seats - taken} seat${seats - taken === 1 ? '' : 's'} left` })}
       ${statCard('Slots', BOOKING.slots.length, { foot: `${dates.length} date${dates.length === 1 ? '' : 's'}` })}
-      ${statCard('Not invited yet', toInvite.length, { foot: 'on the roster, no link sent' })}
+      ${statCard('Links to send', invitableParticipants(cp).filter((p) => sendState(p).key === 'tosend').length,
+        { foot: toInvite.length ? `${toInvite.length} still need a link` : 'not sent to anyone yet' })}
       ${statCard('Needs matching', unmatched.length, { foot: unmatched.length ? 'booked, not on the roster' : 'all matched' })}
     </div>
 
     ${unmatched.length ? `<div class="card" style="margin-bottom:14px">
       <div class="card-head"><h3>Booked, but not matched to anyone</h3></div>
-      <p class="card-sub">These came in on the public link under a handle that is not on this roster. The seat is
-      held. Nothing has been added to the creator database — matching is yours to do.</p>
+      <p class="card-sub">Booked on the open link by someone not on this roster. The seat is held until you match or cancel.
+        Nothing has been added to the creator database.</p>
       <div class="tbl-wrap" style="margin-top:10px"><table class="tbl"><thead><tr>
         <th>When</th><th>Handle</th><th>Name</th><th></th></tr></thead><tbody>
         ${unmatched.map((b) => `<tr>
@@ -322,7 +373,7 @@ export function bookingBoard(mount, cp) {
       </tbody></table></div>` : '<p class="card-sub" style="margin-top:10px">No dates yet. Add one and the link starts working.</p>'}
     </div>
 
-    ${bookingShareCard(cp)}
+    ${BOOKING.slots.length ? '' : bookingShareCard(cp)}
 
     <div class="card">
       <div class="card-head"><h3>Bookings</h3></div>
@@ -595,7 +646,7 @@ export function openStaffMove(cp, bookingId) {
 
   openDrawer(`Move — ${esc(bk.date)} ${esc(bk.time)}`, `
     <p class="card-sub">Currently <strong>${esc(bk.date)} ${esc(bk.time)}</strong>${bk.partySize > 1 ? `, ${bk.partySize} people` : ''}.
-      The creator is not told automatically — there are no notifications yet.</p>
+      Let the creator know yourself — they aren't notified.</p>
     ${dayCap ? `<div class="note" style="margin:10px 0 0">The daily limit is <strong>${dayCap} team${dayCap === 1 ? '' : 's'}
       a day</strong>. A day already at its limit is marked, and moving onto one needs a second yes — it is allowed,
       and recorded as an override.</div>` : ''}
@@ -1068,10 +1119,8 @@ export function bookingAvailabilityCard(cp) {
     <div class="divider"></div>
     <div class="lbl">Booking period</div>
     <p class="card-sub" style="margin:4px 0 8px">${haveDates.length
-      ? `Dates run <strong style="color:var(--text-2)">${esc(haveDates[0])} → ${esc(haveDates[haveDates.length - 1])}</strong>
-         right now (${BOOKING.slots.length} time${BOOKING.slots.length === 1 ? '' : 's'}). Push the To date out and
-         apply: the new days are added and everything already there — dates, times and the bookings on them —
-         is left exactly as it is.`
+      ? `Open <strong style="color:var(--text-2)">${esc(haveDates[0])} → ${esc(haveDates[haveDates.length - 1])}</strong>
+         · ${BOOKING.slots.length} time${BOOKING.slots.length === 1 ? '' : 's'}. To extend, move the end date and apply — existing bookings stay put.`
       : 'Set the stretch of dates this rule covers, then apply it to create them.'}</p>
     <div class="grid g3" style="gap:10px">
       <div class="field"><label>From</label><input type="date" id="bkFrom" value="${esc(rule.from)}"/></div>
@@ -1097,8 +1146,7 @@ export function bookingAvailabilityCard(cp) {
       <input type="text" id="bkHolName" placeholder="what is it? e.g. Chuseok" style="flex:1 1 140px"/>
       <button class="btn xs" id="bkHolAdd">Add</button>
     </div>
-    <p class="card-sub" style="margin-top:7px">Fixed-date Korean holidays are here already. Seollal, Chuseok and
-      Buddha's birthday move each year, so add those — and the venue's own closures — by hand.</p>
+    <p class="card-sub" style="margin-top:7px">Add Seollal, Chuseok, Buddha's birthday and the venue's own closures by hand.</p>
 
     <div class="divider"></div>
     <div class="grid g2" style="gap:12px;align-items:start">
@@ -1122,9 +1170,7 @@ export function bookingAvailabilityCard(cp) {
           <button class="btn primary" id="bkGenerate" ${toAdd ? '' : 'disabled'}>Generate ${toAdd || ''} time${toAdd === 1 ? '' : 's'}</button>
           <button class="btn" data-bkreset="1" ${BOOKING.slots.length ? '' : 'disabled'}>Reset all dates</button>
         </div>
-        <p class="card-sub" style="margin-top:8px">Generating adds to what is there; it never touches a day somebody
-          has already booked. Reset clears every date so you can change the rule above and generate again —
-          booked days are kept, and the rule itself is not lost.</p>
+        <p class="card-sub" style="margin-top:8px">Generate only adds — booked days are never touched.</p>
       </div>
     </div>
   </div>`;
@@ -1237,6 +1283,58 @@ export function parseVenueHours(text, base) {
 }
 
 /* ---- the links, where they belong: at the end of setting it up ---- */
+
+/* The message that carries one creator's own invite link. Every booking
+   is instant — the creator's page confirms the time on the spot — so the
+   text says so, and never promises a confirmation step that does not
+   exist (the schedule's old `mode` field is read by nothing). The link is
+   always the per-creator invite: the open link would arrive unmatched. */
+export const BOOKING_LINK_NUDGE_DAYS = 2;
+export function bookingLinkMessage(cp, p, url, lang, nudge) {
+  const sc = BOOKING.schedule || {};
+  const cr = byCreator[p.creatorId] || {};
+  const who = p.fullName || cr.name || String(cr.handle || '').replace(/^@/, '') || '';
+  const venue = sc.venueName || cp.brand;
+  const dates = [...new Set(BOOKING.slots.filter((s) => s.status === 'open').map((s) => s.date))].sort();
+  const note = sc.noteForCreator || '';
+  if (lang === 'en') {
+    const span = dates.length ? ` between ${dLabel(dates[0])} and ${dLabel(dates[dates.length - 1])}` : '';
+    return (nudge
+      ? [`Hi ${who}! Just bringing this back up — you haven't picked a time for ${venue} yet.`, url,
+         'Choose whatever suits you and it is booked straight away. Thank you!']
+      : [`Hi ${who}! Here's your booking link for the ${venue} visit:`, url,
+         `Pick any date and time that suits you${span} — it's booked on the spot, no waiting for us to confirm.`,
+         note, 'Thank you! — VIVELY']).filter(Boolean).join('\n');
+  }
+  const span = dates.length ? `${dLabel(dates[0])} ~ ${dLabel(dates[dates.length - 1])} 중 ` : '';
+  return (nudge
+    ? [`안녕하세요 ${who}님 :)`, `${venue} 방문 예약이 아직 안 되어 있어서 링크 다시 보내드려요!`, url,
+       '편하신 시간 골라주시면 바로 예약 확정됩니다. 감사합니다!']
+    : [`안녕하세요 ${who}님 :)`, `${venue} 방문 예약 링크 보내드려요!`, url,
+       `${span}편하신 날짜와 시간을 골라주시면 바로 예약이 확정됩니다.`, note, '감사합니다! VIVELY 드림'])
+    .filter(Boolean).join('\n');
+}
+export function bookingMsgLang(cp) {
+  return BOOKING.msgLang || (/korea|한국/i.test(String(cp.market || 'Korea')) ? 'ko' : 'en');
+}
+export const daysSince = (at) => (at ? Math.floor((Date.now() - new Date(at).getTime()) / DAY) : null);
+
+/* Where one roster row is in the send: booked, sent and waiting, or not
+   sent. The booking is the truth for "booked"; bookingLinkSentAt is
+   written by whoever copied the message, because a DM sent from a phone
+   is invisible to us otherwise. */
+export function sendState(p) {
+  const b = (BOOKING.bookings || []).find((x) => x.participantId === p.id && x.status !== 'cancelled');
+  if (b) return { key: 'booked', label: `${b.date} ${b.time}`, cls: 'green', b };
+  if (p.bookingLinkSentAt) {
+    const d = daysSince(p.bookingLinkSentAt);
+    const stale = d >= BOOKING_LINK_NUDGE_DAYS;
+    return { key: stale ? 'nudge' : 'sent', label: d < 1 ? 'Sent today' : `Sent ${d}d ago${stale ? ' · not booked' : ''}`,
+             cls: stale ? 'orange' : 'grey', days: d };
+  }
+  return { key: 'tosend', label: 'Not sent', cls: 'blue' };
+}
+
 export function bookingShareCard(cp) {
   const sc = BOOKING.schedule;
   const live = BOOKING.slots.filter((s) => s.status === 'open').length;
@@ -1245,96 +1343,80 @@ export function bookingShareCard(cp) {
   const inScope = invitableParticipants(cp);
   const invites = (BOOKING.invites || []).filter((i) => inScope.some((p) => p.id === i.participantId));
   const toInvite = bookableParticipants(cp);
-  const dates = [...new Set(BOOKING.slots.map((s) => s.date))].sort();
-  const span = dates.length
-    ? `${dLabel(dates[0])} to ${dLabel(dates[dates.length - 1])}`
-    : 'dates to be confirmed';
-  const message = [
-    `Hi! Here's your booking link for the ${sc.venueName || cp.brand} visit: ${bookingUrl(sc.publicToken)}`,
-    `Pick any date and time that suits you — ${span}.`,
-    sc.noteForCreator ? sc.noteForCreator : '',
-    /* Every booking is instant: the creator's page confirms the time on
-       the spot and the slot is claimed there and then. The schedule still
-       carries a `mode` field from an earlier design, but nothing reads it
-       — so this line is not allowed to branch on it. Branching on a
-       setting that does nothing is how the suggested message came to
-       promise a 24-hour confirmation that never existed. */
-    'Whatever you pick is booked on the spot — no waiting for us to confirm.'
-  ].filter(Boolean).join('\n');
+  const lang = bookingMsgLang(cp);
+  const byPart = {};
+  invites.forEach((i) => { byPart[i.participantId] = i; });
+  const rows = inScope.filter((p) => byPart[p.id]).map((p) => ({ p, i: byPart[p.id], st: sendState(p),
+    cr: byCreator[p.creatorId] || {} }));
+  const order = { nudge: 0, tosend: 1, sent: 2, booked: 3 };
+  rows.sort((a, b) => order[a.st.key] - order[b.st.key]);
+  const n = (k) => rows.filter((r) => r.st.key === k).length;
+  const handleOf = (cr) => String(cr.handle || '').replace(/^@/, '').trim();
 
   return `<div class="card" style="margin-bottom:14px">
-    <div class="card-head"><h3>Send it to the creators</h3>
+    <div class="card-head"><h3>Send booking links</h3>
       <div class="sp"></div>
-      <span class="pill ${live ? 'green' : 'grey'}">${live ? live + ' times live' : 'nothing to book yet'}</span>
+      <div class="seg" id="bkLang"><button data-lang="ko" class="${lang === 'ko' ? 'active' : ''}">한국어</button><button
+        data-lang="en" class="${lang === 'en' ? 'active' : ''}">English</button></div>
+      <span class="pill ${live ? 'green' : 'grey'}">${live ? live + ' times open' : 'no times yet'}</span>
     </div>
-    <p class="card-sub">The invite link is the one to use: it knows who the creator is, so the booking matches
-      itself to the roster and cannot become somebody else if it is forwarded.</p>
-
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">
-      <span class="lbl" style="margin:0">Who gets a link</span>
-      <span class="pill ${safeScope ? 'green' : 'orange'}">${esc(scope[1])} · ${inScope.length}</span>
-      ${safeScope ? `<span style="font-size:11.5px;color:var(--text-3)">Shortlisted and unapproved creators are
-        left out, so nobody can be sent a link by mistake.</span>` : ''}
+    <div class="bk-sendsum">
+      <span><b>${n('tosend')}</b> to send</span><span><b>${n('nudge')}</b> to nudge</span>
+      <span><b>${n('sent')}</b> waiting</span><span><b>${n('booked')}</b> booked</span>
       <div class="sp"></div>
-      <button class="btn xs" id="bkAdvanced">${BOOKING.inviteAdvanced ? 'Hide advanced' : 'Advanced'}</button>
+      <span class="pill ${safeScope ? 'green' : 'orange'}" title="Blacklisted and dropped creators never get a link">${esc(scope[1])} · ${inScope.length}</span>
+      ${safeScope ? '<span>unconfirmed creators are left out</span>' : ''}
+      <button class="btn xs" id="bkAdvanced">${BOOKING.inviteAdvanced ? 'Hide' : 'Who gets a link'}</button>
     </div>
     ${!safeScope ? `<div class="note warn" style="margin-top:8px">
       <strong>Override on — unconfirmed creators are included.</strong>
-      Links, the Excel copy and the CSV all cover ${inScope.length} ${scope[1].toLowerCase()}.
       <button class="btn xs" id="bkScopeReset" style="margin-left:6px">Back to confirmed only</button>
     </div>` : ''}
     ${BOOKING.inviteAdvanced ? `<div class="note ${safeScope ? '' : 'warn'}" style="margin-top:8px">
-      <strong>Advanced — who gets a link.</strong>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:7px">
-        <select id="bkScope" style="width:auto;padding:4px 8px;font-size:12px">
-          ${INVITE_SCOPES.map(([id, label, , warn]) => `<option value="${id}" ${scope[0] === id ? 'selected' : ''}>${
-            label}${warn ? ' ⚠ ' + warn : ''} (${invitableParticipants(cp, id).length})</option>`).join('')}
-        </select>
-        <span style="font-size:11.5px;color:var(--text-3)">Anything wider than confirmed sends booking links to
-          creators the brand has not approved. Blacklisted and dropped creators are never included.</span>
-      </div>
+      <select id="bkScope" style="width:auto;padding:4px 8px;font-size:12px">
+        ${INVITE_SCOPES.map(([id, label, , warn]) => `<option value="${id}" ${scope[0] === id ? 'selected' : ''}>${
+          label}${warn ? ' ⚠ ' + warn : ''} (${invitableParticipants(cp, id).length})</option>`).join('')}
+      </select>
     </div>` : ''}
 
-    <div class="lbl" style="margin-top:12px">Invite links · ${inScope.length} ${scope[1].toLowerCase()}</div>
-    ${invites.length ? `<div class="tbl-wrap" style="margin-top:6px;max-height:190px;overflow-y:auto"><table class="tbl"><tbody>
-      ${invites.map((i) => {
-        const b = BOOKING.bookings.find((x) => x.participantId === i.participantId);
-        return `<tr><td style="width:40%">${esc(i.name || i.handle || i.participantId)}</td>
-          <td>${b ? `<span class="pill green">${esc(b.date)} ${esc(b.time)}</span>` : '<span class="pill grey">not booked yet</span>'}</td>
-          <td style="text-align:right"><button class="btn xs" data-copyinvite="${esc(i._id)}">Copy link</button></td></tr>`;
-      }).join('')}
-    </tbody></table></div>` : '<p class="card-sub" style="margin:4px 0 0">No invites yet.</p>'}
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
-      ${toInvite.length ? `<button class="btn sm" id="bkInviteAll">Make links for ${toInvite.length} more</button>` : ''}
-      ${invites.length ? `<button class="btn sm primary" id="bkCopyExcel">Copy for Excel (${invites.length})</button>` : ''}
-      ${invites.length ? '<button class="btn sm" id="bkCsv">Download full CSV</button>' : ''}
+    ${rows.length ? `<div class="bk-queue">${rows.map(({ p, i, st, cr }) => {
+      const h = handleOf(cr);
+      const done = st.key === 'booked';
+      return `<div class="bk-q ${st.key}" data-qrow="${esc(p.id)}">
+        <div class="who"><b>${esc(p.fullName || cr.name || cr.handle || i.name || '')}</b>
+          <span>${esc(cr.handle || i.handle || '')}</span></div>
+        <span class="pill ${st.cls}">${esc(st.label)}</span>
+        <div class="acts">
+          ${done ? '' : `<button class="btn xs ${st.key === 'sent' ? '' : 'primary'}" data-sendmsg="${esc(p.id)}"
+            data-nudge="${st.key === 'tosend' ? '' : '1'}">${st.key === 'tosend' ? 'Copy message' : 'Copy nudge'}</button>`}
+          ${!done && h ? `<a class="btn xs" href="https://ig.me/m/${encodeURIComponent(h)}" target="_blank" rel="noopener"
+            data-dm="${esc(p.id)}">DM ↗</a>` : ''}
+          <button class="btn xs" data-copyinvite="${esc(i._id)}" title="Copy just the link">Link</button>
+        </div>
+      </div>`;
+    }).join('')}</div>` : `<p class="card-sub" style="margin:10px 0 0">${toInvite.length
+      ? 'Making links…' : 'Links appear here when creators are confirmed on the roster.'}</p>`}
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+      ${toInvite.length && (!safeScope || BOOKING.autoInviteError === cp.id)
+        ? `<button class="btn sm" id="bkInviteAll">Make links for ${toInvite.length} more</button>` : ''}
+      ${invites.length ? `<button class="btn sm" id="bkCopyExcel">Copy for Excel (${invites.length})</button>` : ''}
+      ${invites.length ? '<button class="btn sm" id="bkCsv">Download CSV</button>' : ''}
     </div>
-    ${invites.length ? `<p class="card-sub" style="margin-top:6px">Copy for Excel gives two columns — name in A,
-      booking link in B — one row per creator, ${invites.length} ${safeScope ? 'confirmed ' : ''}in all. The CSV is the
-      fuller working file: handle, stage and booking time as well.</p>` : ''}
 
-    <div class="divider"></div>
-    <div class="lbl">Open link — anyone holding it can book</div>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px">
-      <code style="flex:1 1 240px;min-width:0;font-size:12px;color:var(--text-2);word-break:break-all">${esc(bookingUrl(sc.publicToken))}</code>
-      <button class="btn xs" id="bkCopy">Copy</button>
-    </div>
-    <p class="card-sub" style="margin-top:6px">A booking made on this one arrives unmatched and waits for you to say who it is.</p>
-
-    <div class="divider"></div>
-    <div class="lbl">Message to send with it</div>
-    <pre id="bkMsg" style="white-space:pre-wrap;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;
-      padding:10px 12px;font-size:12.5px;line-height:1.6;margin:6px 0 0">${esc(message)}</pre>
-    <button class="btn xs" id="bkCopyMsg" style="margin-top:8px">Copy message</button>
-
-    <div class="divider"></div>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <button class="btn sm" id="bkEditSetup">Edit booking settings</button>
-      <div class="sp"></div>
-      <button class="btn sm" id="bkWipe" style="color:var(--critical)">Delete booking and start again</button>
-    </div>
-    <p class="card-sub" style="margin-top:7px">Deleting removes the schedule, every date, every invite link and every
-      booking on this campaign. The creators are not told, and the links stop working.</p>
+    <details class="bk-more">
+      <summary>Open link and settings</summary>
+      <div class="lbl" style="margin-top:10px">Open link — anyone holding it can book; bookings arrive unmatched</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px">
+        <code style="flex:1 1 240px;min-width:0;font-size:12px;color:var(--text-2);word-break:break-all">${esc(bookingUrl(sc.publicToken))}</code>
+        <button class="btn xs" id="bkCopy">Copy</button>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">
+        <button class="btn sm" id="bkEditSetup">Edit booking settings</button>
+        <div class="sp"></div>
+        <button class="btn sm" id="bkWipe" style="color:var(--critical)"
+          title="Removes every date, link and booking on this campaign. Creators are not told.">Delete booking</button>
+      </div>
+    </details>
   </div>`;
 }
 
@@ -1588,6 +1670,7 @@ export function wireBookingAvailability(cp) {
          venue name, the visit length and the party size on every
          Generate. */
       await patchSchedule(cp, { rule });
+      saveVenuePreset(BOOKING.schedule, rule);
       toast(`${r.created} time${r.created === 1 ? '' : 's'} added`
         + `${newDays ? ` on ${newDays} new day${newDays === 1 ? '' : 's'}` : ''}`
         + `${r.skipped ? ` · ${r.skipped} already there, untouched` : ''}`
@@ -1632,8 +1715,28 @@ export function wireBookingShare(cp) {
   const sc = BOOKING.schedule;
   const copy2 = $('#bkCopy');
   if (copy2) copy2.addEventListener('click', () => copyText(bookingUrl(sc.publicToken)));
-  const msg = $('#bkCopyMsg');
-  if (msg) msg.addEventListener('click', () => copyText($('#bkMsg').textContent));
+  $$('#bkLang [data-lang]').forEach((b) => b.addEventListener('click', () => { BOOKING.msgLang = b.dataset.lang; notify(); }));
+
+  /* Copying the message is the moment it is sent, as far as anyone here
+     can know — the DM itself goes out from somebody's phone. */
+  const markSent = (p) => {
+    if (!p || p.bookingLinkSentAt && daysSince(p.bookingLinkSentAt) < 1) return;
+    p.bookingLinkSentAt = new Date().toISOString();
+    notify();
+  };
+  const partOf = (id) => DB.participants.find((x) => x.id === id);
+  const inviteFor = (pid) => (BOOKING.invites || []).find((i) => i.participantId === pid);
+  $$('[data-sendmsg]').forEach((b) => b.addEventListener('click', () => {
+    const p = partOf(b.dataset.sendmsg), inv = inviteFor(b.dataset.sendmsg);
+    if (!p || !inv) return;
+    copyText(bookingLinkMessage(cp, p, inviteUrl(inv._id), bookingMsgLang(cp), !!b.dataset.nudge));
+    markSent(p);
+  }));
+  $$('[data-dm]').forEach((a) => a.addEventListener('click', () => markSent(partOf(a.dataset.dm))));
+  $$('.bk-queue [data-copyinvite]').forEach((b) => b.addEventListener('click', () => {
+    const inv = (BOOKING.invites || []).find((i) => i._id === b.dataset.copyinvite);
+    if (inv) markSent(partOf(inv.participantId));
+  }));
   const adv = $('#bkAdvanced');
   if (adv) adv.addEventListener('click', () => { BOOKING.inviteAdvanced = !BOOKING.inviteAdvanced; notify(); });
   const scopeSel = $('#bkScope');
@@ -1665,10 +1768,32 @@ export function wireBookingShare(cp) {
           creatorId: p.creatorId, handle: (byCreator[p.creatorId] || {}).handle, name: p.fullName });
       }
       await loadBooking(cp.id, true);
+      if (BOOKING.autoInviteError === cp.id) BOOKING.autoInviteError = null;
       toast(`${list.length} invite link${list.length === 1 ? '' : 's'} ready to copy`);
       notify();
     } catch (err) { toast(err.message); inviteAll.disabled = false; }
   });
+
+  /* Every confirmed creator gets a link without anybody asking: making
+     them was a button press that never needed a decision. Only the safe
+     scope — a wider one is an override, and an override is clicked. The
+     server reuses an existing invite, so a second pass is harmless. */
+  const owed = bookableParticipants(cp);
+  if (inviteScope()[0] === SAFE_SCOPE && owed.length && !BOOKING.autoInviting && BOOKING.autoInviteError !== cp.id) {
+    BOOKING.autoInviting = true;
+    (async () => {
+      try {
+        for (const p of owed) {
+          await bookingCall('/api/booking/invite', { campaignId: cp.id, participantId: p.id,
+            creatorId: p.creatorId, handle: (byCreator[p.creatorId] || {}).handle, name: p.fullName });
+        }
+        await loadBooking(cp.id, true);
+        if (bookableParticipants(cp).length) BOOKING.autoInviteError = cp.id;
+      } catch (err) { BOOKING.autoInviteError = cp.id; }
+      BOOKING.autoInviting = false;
+      if (BOOKING.campaignId === cp.id) notify();
+    })();
+  }
 }
 
 /* ---- one creator, from the participant drawer ---- */

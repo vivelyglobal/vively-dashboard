@@ -33,14 +33,14 @@ export function ensureOverviewStyles() {
   .so-c5{grid-column:span 5}.so-c4{grid-column:span 4}.so-c2{grid-column:span 2}
   .so-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:10px}
   .so-head h4{margin:0;font-size:13px;font-weight:500}
-  .so-hint{font:400 11px/1.35 'Roboto Mono',monospace;color:var(--text-3)}
-  .so-kpi .label{font:500 10.5px/1.2 'Roboto Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3)}
+  .so-hint{font:400 12px/1.3 var(--font);color:var(--text-3)}
+  .so-kpi .label{font:500 12px/1.3 var(--font);color:var(--text-3)}
   .so-kpi .value{font-size:23px;font-weight:400;letter-spacing:-.02em;margin-top:7px;line-height:1.1}
-  .so-kpi .foot{margin-top:7px;min-height:29px;font:400 11px/1.3 'Roboto Mono',monospace;color:var(--text-3)}
+  .so-kpi .foot{margin-top:7px;min-height:29px;font:400 12px/1.3 var(--font);color:var(--text-3)}
   .so-meter{height:3px;border-radius:2px;background:var(--surface-3);overflow:hidden;margin-top:8px}
   .so-meter i{display:block;height:100%;background:var(--blue)}
   .so-seg{display:flex;gap:1px;background:var(--surface-2);border-radius:999px;padding:2px}
-  .so-seg button{font:500 10.5px/1 Roboto,sans-serif;padding:5px 10px;border-radius:999px;border:0;
+  .so-seg button{font:500 12px/1.3 var(--font);padding:5px 10px;border-radius:999px;border:0;
     background:transparent;color:var(--text-3);cursor:pointer}
   .so-seg button[aria-pressed="true"]{background:var(--surface-3);color:var(--text)}
   .so-filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
@@ -57,16 +57,16 @@ export function ensureOverviewStyles() {
   .so-tc:hover{border-color:var(--line-strong)}
   .so-tc:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
   .so-tc .plate{aspect-ratio:4/3;position:relative;display:flex;align-items:flex-end;padding:9px}
-  .so-tc .plate .big{font:500 19px/1 'Roboto Mono',monospace;color:#fff;text-shadow:0 1px 6px rgba(0,0,0,.6)}
-  .so-tc .plate .tag{position:absolute;top:8px;left:8px;font:500 9.5px/1 'Roboto Mono',monospace;
+  .so-tc .plate .big{font:500 19px/1 var(--font);color:#fff;text-shadow:0 1px 6px rgba(0,0,0,.6)}
+  .so-tc .plate .tag{position:absolute;top:8px;left:8px;font:500 12px/1.3 var(--font);
     background:rgba(0,0,0,.42);color:#fff;border-radius:3px;padding:4px 5px;letter-spacing:.04em}
   .so-tc .body{padding:9px 10px 11px;display:flex;flex-direction:column;gap:6px}
   .so-tc .h{font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .so-tc .m{font:400 10.5px/1.35 'Roboto Mono',monospace;color:var(--text-3)}
+  .so-tc .m{font:400 12px/1.3 var(--font);color:var(--text-3)}
   .so-tc .st{display:flex;gap:10px}
-  .so-tc .st div{font:400 10px/1.3 'Roboto Mono',monospace;color:var(--text-3)}
-  .so-tc .st b{display:block;font:500 12px/1.2 'Roboto Mono',monospace;color:var(--text)}
-  .so-gap{font:500 10px/1 'Roboto Mono',monospace;color:var(--warning);border:1px solid rgba(250,178,25,.35);
+  .so-tc .st div{font:400 12px/1.3 var(--font);color:var(--text-3)}
+  .so-tc .st b{display:block;font:500 12px/1.2 var(--font);color:var(--text)}
+  .so-gap{font:500 12px/1.3 var(--font);color:var(--warning);border:1px solid rgba(250,178,25,.35);
     background:rgba(250,178,25,.08);border-radius:3px;padding:3px 5px;white-space:nowrap}
   .so-row{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;font-size:12px}
   @media(max-width:1000px){.so-grid{grid-template-columns:repeat(6,1fr)}
@@ -84,28 +84,27 @@ export function ensureOverviewStyles() {
      the chart code both style against them. Later rules win, so the new
      composition overrides the old card grid without breaking anything
      that still reads the old class names. */
-  .so-band{background:#0C1211;color:#F1F6F3;border-radius:14px;padding:30px 28px 24px;margin-bottom:34px;
-    background-image:radial-gradient(120% 130% at 88% -10%,rgba(47,168,140,.16),transparent 58%)}
+  .so-band{background:var(--surface);border:1px solid var(--line);color:var(--text);border-radius:14px;padding:30px 28px 24px;margin-bottom:34px}
   .so-band-in{display:grid;grid-template-columns:minmax(0,.85fr) minmax(0,1.15fr);gap:44px;align-items:start}
-  .so-lab{font:500 10.5px/1 'Roboto Mono',monospace;letter-spacing:.15em;text-transform:uppercase;color:#7E938B}
+  .so-lab{font:500 12px/1.3 var(--font);color:var(--text-3)}
   .so-big{font-size:clamp(48px,7vw,74px);font-weight:600;line-height:.94;letter-spacing:-.04em;margin-top:12px;
     font-variant-numeric:tabular-nums}
-  .so-band .so-sub{color:#7E938B;font-size:13px;margin-top:11px}
-  .so-sats{display:flex;gap:34px;flex-wrap:wrap;margin-top:22px;padding-top:20px;border-top:1px solid #22302C}
-  .so-sat .l{font:500 10px/1 'Roboto Mono',monospace;letter-spacing:.13em;text-transform:uppercase;color:#7E938B}
+  .so-band .so-sub{color:var(--text-3);font-size:13px;margin-top:11px}
+  .so-sats{display:flex;gap:34px;flex-wrap:wrap;margin-top:22px;padding-top:20px;border-top:1px solid var(--line)}
+  .so-sat .l{font:500 12px/1.3 var(--font);color:var(--text-3)}
   .so-sat .v{font-size:25px;font-weight:600;letter-spacing:-.028em;margin-top:8px;font-variant-numeric:tabular-nums}
-  .so-sat .v.off{color:#7E938B}
-  .so-sat .s{font:400 10.5px/1.3 'Roboto Mono',monospace;color:#7E938B;margin-top:5px}
+  .so-sat .v.off{color:var(--text-3)}
+  .so-sat .s{font:400 12px/1.3 var(--font);color:var(--text-3);margin-top:5px}
   .so-chart-h{display:flex;align-items:baseline;justify-content:space-between;gap:14px;margin-bottom:12px}
-  .so-chart-h .t{font:500 10px/1 'Roboto Mono',monospace;letter-spacing:.13em;text-transform:uppercase;color:#7E938B}
-  .so-band .so-seg{background:#151E1B;border-radius:7px;padding:3px;display:flex;gap:2px}
-  .so-band .so-seg button{border:0;background:none;color:#7E938B;font-size:11.5px;font-weight:500;
+  .so-chart-h .t{font:500 12px/1.3 var(--font);color:var(--text-3)}
+  .so-band .so-seg{background:var(--surface-2);border-radius:7px;padding:3px;display:flex;gap:2px}
+  .so-band .so-seg button{border:0;background:none;color:var(--text-3);font-size:11.5px;font-weight:500;
     padding:6px 10px;border-radius:5px;cursor:pointer;font-family:inherit}
-  .so-band .so-seg button[aria-pressed="true"]{background:#0C1211;color:#F1F6F3}
-  .so-band .so-hint{color:#7E938B}
-  .so-band .so-filters{margin:24px 0 0;padding-top:20px;border-top:1px solid #22302C}
-  .so-band .so-filters select,.so-band .so-filters input{background:#151E1B;border-color:#2A3733;color:#F1F6F3}
-  .so-band .so-filters .btn{background:#151E1B;border-color:#2A3733;color:#F1F6F3}
+  .so-band .so-seg button[aria-pressed="true"]{background:var(--surface);color:var(--text)}
+  .so-band .so-hint{color:var(--text-3)}
+  .so-band .so-filters{margin:24px 0 0;padding-top:20px;border-top:1px solid var(--line)}
+  .so-band .so-filters select,.so-band .so-filters input{background:var(--surface-2);border-color:var(--line-strong);color:var(--text)}
+  .so-band .so-filters .btn{background:var(--surface-2);border-color:var(--line-strong);color:var(--text)}
 
   /* sections, not boxes */
   .so-flow{display:flex;flex-direction:column;gap:46px}
@@ -121,11 +120,11 @@ export function ensureOverviewStyles() {
     justify-content:center;position:relative;overflow:hidden}
   .so-mrail::before{content:'';position:absolute;inset:0;
     background:repeating-linear-gradient(115deg,transparent 0 9px,var(--line) 9px 10px)}
-  .so-mrail span{position:relative;font:500 12px/1 'Roboto Mono',monospace;color:var(--text-3)}
+  .so-mrail span{position:relative;font:500 12px/1 var(--font);color:var(--text-3)}
   .so-mkeys{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-top:11px}
   .so-mk{padding:13px 11px;border-radius:9px;background:var(--surface-2)}
   .so-mk .n{font-size:21px;font-weight:600;color:var(--text-3);letter-spacing:-.02em}
-  .so-mk .l{font:500 9.5px/1 'Roboto Mono',monospace;letter-spacing:.1em;text-transform:uppercase;
+  .so-mk .l{font:500 12px/1.3 var(--font);
     color:var(--text-3);margin-top:8px}
 
   /* richer content plates */
@@ -133,8 +132,8 @@ export function ensureOverviewStyles() {
   .so-tc{border-radius:12px}
   .so-tc .plate{aspect-ratio:4/5;justify-content:space-between}
   .so-tc .plate .big{font-size:26px;font-weight:600;letter-spacing:-.03em}
-  .so-tc .vl{font:400 9.5px/1 'Roboto Mono',monospace;color:rgba(255,255,255,.72);
-    letter-spacing:.1em;text-transform:uppercase;margin-top:6px}
+  .so-tc .vl{font:400 12px/1.3 var(--font);color:rgba(255,255,255,.72);
+    margin-top:6px}
   .so-tc:hover{transform:translateY(-3px)}
   .so-tc{transition:transform .18s ease,border-color .18s ease}
 
@@ -209,10 +208,8 @@ export function renderSocialOverview(view) {
           <div class="so-sub">${num(k.content)} total content · ${num(k.measuredCount)} measured
             · ${pct(k.coverage, 0)} coverage${platformLine ? ' · ' + esc(platformLine) : ''}</div>
           <div class="so-sats">
-            <div class="so-sat"><div class="l">+24h</div><div class="v off">—</div>
-              <div class="s">${withHistory ? num(withHistory) + ' posts have history' : 'awaiting daily tracking'}</div></div>
-            <div class="so-sat"><div class="l">+7d</div><div class="v off">—</div>
-              <div class="s">awaiting daily tracking</div></div>
+            ${withHistory ? `<div class="so-sat"><div class="l">+24h</div><div class="v off">—</div>
+              <div class="s">${num(withHistory)} posts have history</div></div>` : ''}
             <div class="so-sat"><div class="l">Avg eng. rate</div>
               <div class="v">${k.rate == null ? '—' : k.rate.toFixed(2) + '%'}</div>
               <div class="s">${num(k.engagements)} engagements</div></div>
@@ -247,35 +244,33 @@ export function renderSocialOverview(view) {
     </div>
 
     <div class="so-flow">
-      <div class="so-duo">
-        <div>
-          <div class="so-sec"><h4>Content momentum</h4><div class="ln"></div>
-            <span class="so-hint">fills once daily tracking begins</span></div>
-          <div class="so-mrail"><span>${num(rows.length - withHistory)} posts · no snapshot history yet</span></div>
+      <div class="${withHistory ? 'so-duo' : ''}">
+        ${withHistory ? `<div>
+          <div class="so-sec"><h4>Content momentum</h4><div class="ln"></div></div>
+          <div class="so-mrail"><span>${num(withHistory)} of ${num(rows.length)} posts tracked daily</span></div>
           <div class="so-mkeys">
             <div class="so-mk"><div class="n">—</div><div class="l">Rising</div></div>
             <div class="so-mk"><div class="n">—</div><div class="l">Growing</div></div>
             <div class="so-mk"><div class="n">—</div><div class="l">Stable</div></div>
             <div class="so-mk"><div class="n">—</div><div class="l">Plateaued</div></div>
           </div>
-        </div>
+        </div>` : ''}
         <div>
-          <div class="so-sec"><h4>Data coverage</h4><div class="ln"></div>
-            <span class="so-hint">what this page cannot see yet</span></div>
+          <div class="so-sec"><h4>What's measured</h4><div class="ln"></div></div>
           <div id="soCoverageViz"></div>
         </div>
       </div>
 
       <div>
         <div class="so-sec"><h4>Top performing content</h4><div class="ln"></div>
-          <span class="so-hint">click opens the post</span></div>
+</div>
         <div id="soTopViz"></div>
       </div>
 
       <div class="so-duo">
         <div>
           <div class="so-sec"><h4>Campaign performance</h4><div class="ln"></div>
-            <span class="so-hint">click a bar to filter</span></div>
+</div>
           <div id="soCampaignViz"></div>
         </div>
         <div>
@@ -284,9 +279,9 @@ export function renderSocialOverview(view) {
           <div class="so-sec" style="margin-top:28px"><h4>Needs review</h4><div class="ln"></div></div>
           <div style="display:flex;flex-direction:column;gap:11px">
             <div class="so-row"><span>Unassigned content</span>
-              <span style="font:500 12px/1 'Roboto Mono',monospace;color:${unassigned ? 'var(--warning)' : 'var(--text-3)'}">${num(unassigned)}</span></div>
+              <span style="font:500 12px/1 var(--font);color:${unassigned ? 'var(--warning)' : 'var(--text-3)'}">${num(unassigned)}</span></div>
             <div class="so-row"><span>Suggested matches to confirm</span>
-              <span style="font:500 12px/1 'Roboto Mono',monospace;color:${suggested ? 'var(--warning)' : 'var(--text-3)'}">${num(suggested)}</span></div>
+              <span style="font:500 12px/1 var(--font);color:${suggested ? 'var(--warning)' : 'var(--text-3)'}">${num(suggested)}</span></div>
           </div>
         </div>
       </div>
@@ -384,7 +379,7 @@ export function renderSocialOverview(view) {
           <span>${esc(p.label)}</span>
           ${p.unavailable
             ? `<span class="so-gap">${p.id === 'saves' ? 'not in the Notion form' : 'none recorded'}</span>`
-            : `<span style="font:500 11.5px/1 'Roboto Mono',monospace;color:var(--text-2)">${num(p.value)} · ${pct(p.share, 1)}</span>`}
+            : `<span style="font:500 11.5px/1 var(--font);color:var(--text-2)">${num(p.value)} · ${pct(p.share, 1)}</span>`}
         </div>
         <div style="height:9px;border-radius:3px;overflow:hidden;background:${p.unavailable
           ? 'repeating-linear-gradient(135deg,var(--surface-2) 0 5px,var(--surface-3) 5px 10px)'
@@ -468,7 +463,7 @@ export function renderSocialOverview(view) {
       <div style="margin-bottom:10px">
         <div class="so-row" style="${c.have ? '' : 'color:var(--text-3)'}">
           <span>${esc(c.label)}${c.note ? ` <span class="so-hint">· ${esc(c.note)}</span>` : ''}</span>
-          <span style="font:500 11.5px/1 'Roboto Mono',monospace;color:var(--text-2)">${num(c.have)} / ${num(c.of)}</span>
+          <span style="font:500 11.5px/1 var(--font);color:var(--text-2)">${num(c.have)} / ${num(c.of)}</span>
         </div>
         <div class="so-meter"><i style="width:${c.of ? (c.have / c.of * 100).toFixed(1) : 0}%"></i></div>
       </div>`).join('');

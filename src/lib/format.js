@@ -11,6 +11,9 @@ export const kmb = (v) => {
   return String(Math.round(v));
 };
 export const pct = (v, d = 1) => (v * 100).toFixed(d) + '%';
+/* A creator's ER is stored as a percent already (4.2 means 4.2%), and
+   imports hand it over as whatever float the sheet held. */
+export const erPct = (v) => (v == null || v === '' || isNaN(+v)) ? '—' : (Math.round(+v * 10) / 10) + '%';
 export const won = (v) => '₩' + nf.format(Math.round(v || 0));
 export const wonK = (v) => {
   v = v || 0;

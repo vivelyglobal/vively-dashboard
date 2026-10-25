@@ -4,7 +4,8 @@ import { $, $$, esc } from '../ui/dom.js';
 import { emptyState, flagMark } from '../ui/html.js';
 import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';
 import { holidayList } from './booking.js';
-import { showParticipant } from './campaigns.js';
+import { campaignShips, showParticipant } from './campaigns.js';
+import { activeCampaigns } from './overview.js';
 import { ATTENDANCE, attendanceOf, pastCampaignsWith, setAttendance } from './planner.js';
 
 /* ============================================================
@@ -269,7 +270,7 @@ export function ensureDeskStyles() {
   .dk-band{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--line);
     border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden;margin-bottom:12px}
   .dk-b{background:var(--surface);padding:12px 14px}
-  .dk-b .lab{font-size:11px;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em}
+  .dk-b .lab{font-size:12px;color:var(--text-3)}
   .dk-b .big{font-size:26px;font-weight:600;line-height:1.15;margin-top:3px}
   .dk-b .big.warn{color:var(--warning)} .dk-b .big.bad{color:#f08a8a}
   .dk-b .cap{font-size:11.5px;color:var(--text-3)}
@@ -339,16 +340,22 @@ export function renderDesk(view, item) {
   }
   if (DESK.error) {
     view.innerHTML = `<div class="note bad">${esc(DESK.error)}</div>
-      <p class="card-sub" style="margin-top:10px">The desk needs the server — the rest of the dashboard works
-      offline, this page does not. <button class="btn sm" id="dkRetry">Try again</button></p>`;
+      <p class="card-sub" style="margin-top:10px">The Desk needs a connection to the server. <button class="btn sm" id="dkRetry">Try again</button></p>`;
     $('#dkRetry').addEventListener('click', () => loadDesk(true).then(() => notify()));
     return;
   }
 
   const schedules = deskSchedules();
   if (!schedules.length) {
+    /* The generic empty state offers imports; here the campaigns exist
+       and what is missing is a booking setup on one of them. */
+    const visits = activeCampaigns().filter((c) => !campaignShips(c));
     view.innerHTML = emptyState('No campaign takes bookings yet',
-      'Set booking up on a campaign and every venue shows here, side by side.');
+      visits.length ? 'Set up booking on a visit campaign and its venue appears here.'
+        : 'Visit campaigns appear here once booking is set up on them.', { actions: false, icon: '◷' })
+      + (visits.length ? `<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:14px">
+        ${visits.map((c) => `<a class="btn sm" href="#/campaigns/${esc(c.id)}/booking">Set up ${esc(c.brand)}</a>`).join('')}
+      </div>` : '');
     return;
   }
 
@@ -680,8 +687,7 @@ export function openDeskMove(bookingId) {
     <p class="card-sub">${esc(w.handle)} is at <strong>${esc(v.name)}</strong> on
       ${esc(deskLabel(b.date))} at ${esc(b.time)} — ${b.partySize || 1}
       ${(b.partySize || 1) === 1 ? 'person' : 'people'}.</p>
-    <p class="card-sub" style="margin-top:4px">Pick the new time. Only this venue's own times are listed:
-      a booking belongs to the campaign that issued it, so it cannot be moved to a different restaurant.</p>
+    <p class="card-sub" style="margin-top:4px">Pick a new time at this venue.</p>
     ${Object.keys(byDate).length ? Object.entries(byDate).map(([d, list]) => {
       const onDay = deskBookingsOn(d).filter((x) => x.scheduleId === b.scheduleId).length;
       const shut = deskClosed(sc, d);
@@ -770,8 +776,7 @@ export function openDeskAddTime(scheduleId, day) {
       <input type="time" id="dkNewTime" value="${have.length ? '' : '18:00'}" step="900"/></div>
     <div class="field"><label>Seats</label>
       <input type="number" id="dkNewCap" min="1" max="20" value="${deskUsualCapacity(scheduleId)}"/></div>
-    <p class="card-sub">This adds one time to this day only. The weekly rule on the campaign's Booking tab is
-      untouched, so regenerating later will not wipe it.</p>
+    <p class="card-sub">Adds one time to this day only.</p>
     <div style="display:flex;gap:8px;margin-top:14px"><button class="btn primary" id="dkNewGo">Add it</button>
       <button class="btn" id="dkNewNo">Cancel</button></div>`);
   $('#dkNewNo').addEventListener('click', closeDrawer);

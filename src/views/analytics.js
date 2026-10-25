@@ -1,6 +1,7 @@
 import { SERIES_HEX, barsH, fitHeight, lineChart, splitBar } from '../charts/index.js';
 import { engagementsOf, kmb, money2, num, pct, wonK } from '../lib/format.js';
 import { DB, byCampaign, byCreator } from '../model/db.js';
+import { overviewKpis, overviewRows } from '../model/socialStats.js';
 import { campaignStats, dailySeries, portfolioStats, viralScore } from '../model/stats.js';
 import { CONTENT_FORMATS, PLATFORMS, STAGE_IDX } from '../model/vocab.js';
 import { $, esc } from '../ui/dom.js';
@@ -49,20 +50,25 @@ export function renderAnalytics(view, item, tab) {
   /* trend */
   const ds = dailySeries(all, state.range);
   const isEng = tab === 'engagement';
+  /* Views and post counts come from the same rows Home and Social read,
+     so the three pages cannot report different totals. */
+  const k = overviewKpis(overviewRows(DB));
+  const series = isEng ? ds.eng : ds.views;
+  const hasDaily = series.some((v) => v > 0);
   view.innerHTML = `
     <div class="grid g4" style="margin-bottom:16px;">
-      ${statCard('Total views', kmb(s.views), { foot: `${num(live.length)} posts across ${all.length} campaigns` })}
-      ${statCard('Total reach', kmb(s.reach), { foot: `${pct(s.organicViews / (s.views || 1), 0)} of views organic` })}
-      ${statCard('Engagement rate', pct(s.er), { foot: `${kmb(s.eng)} engagements` })}
+      ${statCard('Total views', kmb(k.views), { foot: `${num(k.content)} posts across ${all.length} campaigns` })}
+      ${statCard('Total reach', s.reach ? kmb(s.reach) : '—', { foot: s.reach ? `${pct(s.organicViews / (s.views || 1), 0)} of views organic` : 'not collected' })}
+      ${statCard('Engagement rate', k.rate == null ? '—' : k.rate.toFixed(1) + '%', { foot: `${kmb(k.engagements)} engagements` })}
       ${statCard('Total spend', wonK(s.spend), { foot: 'product + fees + ads' })}
     </div>
     <div class="card">
-      <div class="card-head"><h3>${isEng ? 'Daily engagements' : 'Daily views'}</h3><div class="sp"></div>${rangeSeg()}
+      <div class="card-head"><h3>${isEng ? 'Daily engagements' : 'Daily views'}</h3><div class="sp"></div>${hasDaily ? rangeSeg() : ''}
         <button class="btn sm" id="anExport">Export dataset</button></div>
-      <p class="card-sub">Every campaign combined.</p>
-      <div id="anTrend"></div>
+      ${hasDaily ? '<div id="anTrend"></div>'
+        : '<p class="card-sub">Daily numbers show here once posts have been measured on more than one day.</p>'}
     </div>`;
-  lineChart($('#anTrend'), {
+  if (hasDaily) lineChart($('#anTrend'), {
     labels: ds.labels, height: fitHeight(430, 240),
     series: [isEng ? { name: 'Engagements', values: ds.eng, color: 'var(--s2)', area: true }
                    : { name: 'Views', values: ds.views, area: true }]

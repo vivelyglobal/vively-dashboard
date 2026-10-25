@@ -26,7 +26,7 @@ CPS.forEach((c, ci) => {
     const followers = 4000 + i * 9000 + ci * 3000;
     creators.push({ id, handle: `@creator${ci}${i}`, name: `Creator ${ci}${i}`,
       platform: i % 3 === 0 ? 'TikTok' : 'Instagram', followers,
-      er: 0.03 + i * 0.002, avgViews: Math.round(followers * 0.6),
+      er: +(3 + i * 0.2).toFixed(1), avgViews: Math.round(followers * 0.6),
       categories: [c.category], country: ci === 2 ? 'Vietnam' : 'Korea',
       nationality: ci === 2 ? 'Vietnamese' : 'Korean', languages: ['EN'],
       tier: followers > 50000 ? 'mid' : 'micro', source: 'Notion form',

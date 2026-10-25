@@ -5,6 +5,7 @@ import { activityFeed, attentionCounts, campaignPipeline, campaignRegister, crea
 import { overviewRows, topContent } from '../model/socialStats.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { emptyState } from '../ui/html.js';
+import { todayItems } from './planner.js';
 import { showSocialContent } from './social.js';
 import { ensureOverviewStyles, platformTag } from './socialOverview.js';
 
@@ -39,44 +40,43 @@ export function ensureHomeStyles() {
   s.id = 'hmCss';
   s.textContent = `
   /* ---- the command band ---- */
-  .hm-band{background:#0C1211;color:#F1F6F3;border-radius:14px;padding:34px 30px 26px;margin-bottom:44px;
-    background-image:radial-gradient(120% 130% at 88% -10%,rgba(47,168,140,.16),transparent 58%)}
+  .hm-band{background:var(--surface);border:1px solid var(--line);color:var(--text);border-radius:14px;padding:34px 30px 26px;margin-bottom:44px}
   .hm-top{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:58px;align-items:start}
-  .hm-lab{font:500 10.5px/1 'Roboto Mono',monospace;letter-spacing:.15em;text-transform:uppercase;color:#7E938B}
+  .hm-lab{font:500 12px/1.3 var(--font);color:var(--text-3)}
   .hm-big{font-size:clamp(56px,8vw,86px);font-weight:600;line-height:.92;letter-spacing:-.045em;
     margin-top:14px;font-variant-numeric:tabular-nums}
   .hm-cap{font-size:19px;font-weight:500;letter-spacing:-.02em;margin-top:10px}
-  .hm-band .hm-sub{color:#7E938B;font-size:13px;margin-top:7px}
-  .hm-sats{display:grid;grid-template-columns:1fr 1fr;gap:24px 44px;padding-left:38px;border-left:1px solid #22302C}
-  .hm-sat .l{font:500 10px/1 'Roboto Mono',monospace;letter-spacing:.13em;text-transform:uppercase;color:#7E938B}
+  .hm-band .hm-sub{color:var(--text-3);font-size:13px;margin-top:7px}
+  .hm-sats{display:grid;grid-template-columns:1fr 1fr;gap:24px 44px;padding-left:38px;border-left:1px solid var(--line)}
+  .hm-sat .l{font:500 12px/1.3 var(--font);color:var(--text-3)}
   .hm-sat .v{font-size:26px;font-weight:600;letter-spacing:-.028em;margin-top:8px;font-variant-numeric:tabular-nums}
-  .hm-sat .s{font:400 10.5px/1.35 'Roboto Mono',monospace;color:#7E938B;margin-top:5px}
+  .hm-sat .s{font:400 12px/1.3 var(--font);color:var(--text-3);margin-top:5px}
 
   /* ---- the campaign pipeline rail, inside the band ---- */
-  .hm-rail{margin-top:32px;padding-top:22px;border-top:1px solid #22302C}
+  .hm-rail{margin-top:32px;padding-top:22px;border-top:1px solid var(--line)}
   .hm-rail-h{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:13px}
-  .hm-rail-h .t{font:500 10px/1 'Roboto Mono',monospace;letter-spacing:.13em;text-transform:uppercase;color:#7E938B}
-  .hm-rail-h .n{font:400 11px/1 'Roboto Mono',monospace;color:#7E938B}
+  .hm-rail-h .t{font:500 12px/1.3 var(--font);color:var(--text-3)}
+  .hm-rail-h .n{font:400 12px/1.3 var(--font);color:var(--text-3)}
   .hm-track{display:flex;gap:4px;height:34px}
-  .hm-seg{border-radius:5px;display:flex;align-items:center;justify-content:center;background:#151E1B;
+  .hm-seg{border-radius:5px;display:flex;align-items:center;justify-content:center;background:var(--surface-2);
     cursor:pointer;transition:transform .16s ease;min-width:28px;border:0;color:inherit;font:inherit;padding:0}
   .hm-seg:hover{transform:translateY(-2px)}
-  .hm-seg .c{font:600 14px/1 'Roboto Mono',monospace}
-  .hm-seg.on{background:#0E7C66}.hm-seg.on .c{color:#04120E}
-  .hm-seg.mid{background:#2C403A}
-  .hm-seg.zero{background:transparent;box-shadow:inset 0 0 0 1px #22302C}
-  .hm-seg.zero .c{color:#7E938B;font-weight:400}
+  .hm-seg .c{font:600 14px/1 var(--font)}
+  .hm-seg.on{background:var(--blue)}.hm-seg.on .c{color:var(--on-accent)}
+  .hm-seg.mid{background:var(--line-strong)}
+  .hm-seg.zero{background:transparent;box-shadow:inset 0 0 0 1px var(--line)}
+  .hm-seg.zero .c{color:var(--text-3);font-weight:400}
   .hm-labs{display:flex;gap:4px;margin-top:9px}
-  .hm-labs span{font:400 10.5px/1.3 'Roboto Mono',monospace;color:#7E938B;text-align:center;min-width:28px}
+  .hm-labs span{font:400 12px/1.3 var(--font);color:var(--text-3);text-align:center;min-width:28px}
 
   /* ---- sections, not boxes ---- */
   .hm-flow{display:flex;flex-direction:column;gap:50px}
   .hm-sec{display:flex;align-items:baseline;gap:12px;margin-bottom:17px}
   .hm-sec h4{margin:0;font-size:15px;font-weight:600;letter-spacing:-.015em;white-space:nowrap}
   .hm-sec .ln{flex:1;height:1px;background:var(--line)}
-  .hm-sec .m{font:400 11px/1 'Roboto Mono',monospace;color:var(--text-3);white-space:nowrap}
+  .hm-sec .m{font:400 12px/1.3 var(--font);color:var(--text-3);white-space:nowrap}
   .hm-duo{display:grid;grid-template-columns:1.62fr 1fr;gap:44px;align-items:start}
-  .hm-note{font:400 11.5px/1.65 'Roboto Mono',monospace;color:var(--text-3);margin-top:15px}
+  .hm-note{font:400 11.5px/1.65 var(--font);color:var(--text-3);margin-top:15px}
 
   /* ---- creator flow ---- */
   #hmFlow svg{width:100%;height:auto;display:block;overflow:visible}
@@ -91,7 +91,7 @@ export function ensureHomeStyles() {
   .hm-att .row.crit .dot{background:var(--danger);box-shadow:0 0 0 3px rgba(220,76,76,.14)}
   .hm-att .row.warn .dot{background:var(--warning);box-shadow:0 0 0 3px rgba(250,178,25,.14)}
   .hm-att .tx{font-size:13.5px;display:flex;align-items:baseline;gap:9px;min-width:0}
-  .hm-att .tx b{font:600 15px/1 'Roboto Mono',monospace}
+  .hm-att .tx b{font:600 15px/1 var(--font)}
   .hm-att .row.crit .tx b{color:var(--danger)}
   .hm-att .row.warn .tx b{color:var(--warning)}
   .hm-att .tx span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -106,8 +106,7 @@ export function ensureHomeStyles() {
     grid-template-columns:minmax(160px,2fr) 104px minmax(120px,1fr) 66px 104px 96px;
     gap:18px;align-items:center}
   .hm-reg-head{padding:0 12px 11px;border-bottom:1px solid var(--line-strong)}
-  .hm-reg-head span{font:500 10px/1 'Roboto Mono',monospace;letter-spacing:.12em;
-    text-transform:uppercase;color:var(--text-3)}
+  .hm-reg-head span{font:500 12px/1.3 var(--font);color:var(--text-3)}
   .hm-reg-head .r,.hm-reg-row .r{text-align:right}
   .hm-reg-row{padding:14px 12px;border-radius:9px;cursor:pointer;width:100%;text-align:left;
     border:0;background:none;font:inherit;color:inherit;transition:background .14s ease}
@@ -119,10 +118,10 @@ export function ensureHomeStyles() {
   .hm-prog .t{flex:1;height:5px;border-radius:3px;background:var(--surface-3);overflow:hidden;min-width:40px}
   .hm-prog .f{height:100%;border-radius:3px;background:var(--s1)}
   .hm-prog .f.nil{background:var(--danger);width:2px}
-  .hm-prog .v{font:500 11.5px/1 'Roboto Mono',monospace;color:var(--text-2);white-space:nowrap}
-  .hm-reg-row .fig{font:500 13px/1 'Roboto Mono',monospace;font-variant-numeric:tabular-nums}
+  .hm-prog .v{font:500 11.5px/1 var(--font);color:var(--text-2);white-space:nowrap}
+  .hm-reg-row .fig{font:500 13px/1 var(--font);font-variant-numeric:tabular-nums}
   .hm-reg-row .fig.na{color:var(--text-3);font-weight:400;font-size:10.5px}
-  .hm-more{margin-top:13px;font:500 12px/1 'Roboto Mono',monospace;color:var(--blue);cursor:pointer;
+  .hm-more{margin-top:13px;font:500 12px/1 var(--font);color:var(--blue);cursor:pointer;
     padding:11px 12px;border-radius:8px;border:0;background:none}
   .hm-more:hover{background:var(--blue-soft)}
 
@@ -137,7 +136,7 @@ export function ensureHomeStyles() {
   /* ---- activity ---- */
   .hm-feed .e{display:grid;grid-template-columns:56px 1fr;gap:12px;padding:9px 0;font-size:13px}
   .hm-feed .e + .e{border-top:1px solid var(--line)}
-  .hm-feed .d{font:400 10.5px/1.5 'Roboto Mono',monospace;color:var(--text-3)}
+  .hm-feed .d{font:400 12px/1.3 var(--font);color:var(--text-3)}
   .hm-feed .w{color:var(--text-3);font-size:11.5px}
 
   .hm-blank{border-radius:10px;background:var(--surface-2);padding:22px;text-align:center;
@@ -145,7 +144,7 @@ export function ensureHomeStyles() {
 
   @media(max-width:1000px){
     .hm-top{grid-template-columns:1fr;gap:28px}
-    .hm-sats{padding-left:0;border-left:0;border-top:1px solid #22302C;padding-top:24px}
+    .hm-sats{padding-left:0;border-left:0;border-top:1px solid var(--line);padding-top:24px}
     .hm-duo{grid-template-columns:1fr;gap:36px}
     .hm-reg-head{display:none}
     .hm-reg-row{grid-template-columns:1fr auto;gap:8px 14px}
@@ -196,8 +195,8 @@ export function flowSvg(flow) {
       <stop offset="1" stop-color="var(--s3)" stop-opacity=".62"/></linearGradient></defs>
     ${body}${nodes}
     <g font-family="inherit" font-size="21" font-weight="600" fill="var(--text)">${counts}</g>
-    <g font-family="'Roboto Mono',monospace" font-size="10.5" fill="var(--text-3)">${labels}</g>
-    <g font-family="'Roboto Mono',monospace" font-size="11">${losses}</g>
+    <g font-family="inherit" font-size="10.5" fill="var(--text-3)">${labels}</g>
+    <g font-family="inherit" font-size="11">${losses}</g>
   </svg>`;
 }
 
@@ -222,6 +221,8 @@ export function renderHome(view) {
   const rows = overviewRows(DB);
   const k = homeKpis(DB, rows);
   const att = attentionCounts(DB, rows);
+  /* the same list the Today page shows, so the two can never disagree */
+  const today = todayItems();
   const pipe = campaignPipeline(DB);
   const activeIds = DB.campaigns.filter((c) => c.status !== 'wrapped').map((c) => c.id);
   const flow = creatorFlow(DB, activeIds);
@@ -255,12 +256,12 @@ export function renderHome(view) {
 
       <div class="hm-rail">
         <div class="hm-rail-h"><span class="t">Campaign pipeline</span>
-          <span class="n">${num(pipe.total)} campaigns · width by count</span></div>
+          <span class="n">${num(pipe.total)} campaigns</span></div>
         <div class="hm-track" id="hmRail">
-          ${pipe.rows.map((r) => railSeg(r, r.value === 0 ? 'zero' : r.key === 'live' ? 'on' : 'mid')).join('')}
+          ${pipe.rows.filter((r) => r.value).map((r) => railSeg(r, r.key === 'live' ? 'on' : 'mid')).join('')}
         </div>
         <div class="hm-labs">
-          ${pipe.rows.map((r) => `<span style="${r.value ? 'flex:' + r.value : 'flex:0 0 30px'}">${esc(r.label)}</span>`).join('')}
+          ${pipe.rows.filter((r) => r.value).map((r) => `<span style="flex:${r.value}">${esc(r.label)}</span>`).join('')}
         </div>
       </div>
     </div>
@@ -271,25 +272,22 @@ export function renderHome(view) {
           <div class="hm-sec"><h4>Creator flow</h4><div class="ln"></div>
             <span class="m">${num(flow.total)} active · ${num(flow.dropped)} dropped</span></div>
           <div id="hmFlow">${flowSvg(flow)}</div>
-          <p class="hm-note">Contacted and Replied are folded into the first block: the Notion form never
-            produces those stages, so all ${num(flow.steps[0].n)} pass through them untouched and three
-            identical segments would imply movement that was never recorded.</p>
         </div>
         <div class="hm-att">
-          <div class="hm-sec"><h4>Needs attention</h4><div class="ln"></div>
-            <span class="m">${num(att.urgent)} open</span></div>
-          ${att.items.map((i) => `<a class="row ${i.n ? (i.key === 'overdue' || i.key === 'links' ? 'crit' : 'warn') : 'done'}"
-             href="${esc(i.href)}"><span class="dot"></span>
-             <span class="tx"><b>${num(i.n)}</b><span>${esc(i.label)}</span></span>
-             <span class="go">→</span></a>`).join('')}
+          <div class="hm-sec"><h4>Today</h4><div class="ln"></div>
+            <a class="m" href="#/today">${num(today.length)} open →</a></div>
+          ${today.length ? today.slice(0, 6).map((i) => `<a class="row ${i.sev === 'now' ? 'crit' : i.sev === 'todo' ? 'warn' : 'done'}"
+             href="#/today"><span class="dot"></span>
+             <span class="tx"><span>${esc(i.title)}</span></span>
+             <span class="go">→</span></a>`).join('')
+            : '<div class="hm-blank">All clear — nothing needs a person right now.</div>'}
           ${att.noEnd ? `<p class="hm-note">${num(att.noEnd)} active campaign${att.noEnd === 1 ? ' has' : 's have'}
             no end date, so they cannot be counted as overdue or ending soon.</p>` : ''}
         </div>
       </div>
 
       <div>
-        <div class="hm-sec"><h4>Campaigns</h4><div class="ln"></div>
-          <span class="m">scan the company in one pass</span></div>
+        <div class="hm-sec"><h4>Campaigns</h4><div class="ln"></div></div>
         <div class="hm-reg-head"><span>Campaign</span><span>Status</span><span>Creators confirmed</span>
           <span class="r">Posts</span><span class="r">Views</span><span class="r">Health</span></div>
         <div id="hmRegister">${shown.map((c) => `
@@ -306,8 +304,6 @@ export function renderHome(view) {
           </button>`).join('')}</div>
         ${reg.length > 9 ? `<button class="hm-more" id="hmRegMore">${
           home.registerAll ? 'Show fewer' : 'Show all ' + num(reg.length) + ' campaigns'} →</button>` : ''}
-        <p class="hm-note">A campaign with posts and no readings shows “unmeasured”, never a zero —
-          a zero would say the work failed rather than that nobody entered a number.</p>
       </div>
 
       <div class="hm-duo">
@@ -319,8 +315,6 @@ export function renderHome(view) {
         <div>
           <div class="hm-sec"><h4>Activity</h4><div class="ln"></div></div>
           <div id="hmFeed"></div>
-          <p class="hm-note">Derived from measurement and sync timestamps — not an event log.
-            Creator stage changes are not timestamped individually, so they cannot appear here.</p>
         </div>
       </div>
     </div>`;

@@ -76,13 +76,12 @@ export function duplicateIdBanner() {
   const groups = duplicateIdGroups();
   if (!groups.length) return '';
   const campaignDupes = groups.filter((g) => g.kind === 'campaigns');
-  return `<div class="note bad" style="margin-bottom:14px">
-    <strong>${groups.length} record${groups.length === 1 ? '' : 's'} share an id with another.</strong>
-    ${campaignDupes.length ? campaignDupes.map((g) =>
-      `<br>${esc(g.list.map((c) => c.brand || c.name).join('  ·  '))} all answer to <code>${esc(g.id)}</code>,
-       so selecting one selects them all and an edit cannot tell them apart.` ).join('') : ''}
-    <div style="margin-top:8px"><button class="btn xs" id="dupFix">Give each one its own id</button>
-      <span style="margin-left:8px;color:var(--text-3)">Then run <em>Sync from Notion</em> on each to pull its own creators back.</span></div>
+  /* One line: it is a repair to make once, not something to read every visit. */
+  const names = campaignDupes.map((g) => g.list.map((c) => c.brand || c.name).join(' & ')).join(', ');
+  return `<div class="note bad" style="margin-bottom:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <span><strong>${groups.length} record${groups.length === 1 ? '' : 's'} share an id with another</strong>${
+      names ? ` — ${esc(names)} can't be edited separately` : ''}.</span>
+    <button class="btn xs" id="dupFix" title="Then run Sync from Notion on each to pull its own creators back">Fix it</button>
   </div>`;
 }
 

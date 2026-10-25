@@ -101,9 +101,11 @@ ok('the workspace came from the server, not a cached copy', await p.evaluate(() 
 ok('and the roster it loaded has the campaign in it',
   await p.evaluate((id) => !!byCampaign[id] && DB.participants.some((x) => x.campaignId === id), CP));
 const tabNames = await p.$$eval('#tabbar a, #tabbar button', (els) => els.map((e) => e.textContent.trim()));
-ok('Booking is a campaign tab', tabNames.includes('Booking'), tabNames.join(' · '));
+/* Booking sits in the Schedule group, beside the Creators group whose
+   roster it feeds; the group's own switch names the page. */
+ok('Booking is a campaign tab', tabNames.includes('Schedule'), tabNames.join(' · '));
 ok('and it sits next to the roster it feeds',
-  tabNames.indexOf('Booking') === tabNames.indexOf('Roster & pipeline') + 1);
+  tabNames.indexOf('Schedule') === tabNames.indexOf('Creators') + 1);
 
 /* ---- setting it up ----------------------------------------------------- */
 
@@ -111,10 +113,11 @@ await go('campaigns/' + CP + '/booking');
 await p.waitForSelector('#bkCreate', { timeout: 8000 });
 ok('an unset campaign offers to set booking up', await p.isVisible('#bkCreate'));
 await p.fill('#bkVenue', '굽네치킨 강남');
+await p.click('#view .bk-more summary');   /* the defaults sit under More options */
 await p.selectOption('#bkTz', 'Asia/Seoul');
 await p.fill('#bkParty', '2');
 await p.click('#bkCreate');
-await p.waitForSelector('#bkCopy', { timeout: 8000 });
+await p.waitForSelector('#bkCopy', { timeout: 8000, state: 'attached' });
 ok('setting it up shows the link', (await p.textContent('#main, #view')).includes('/book/'));
 
 /* ---- availability ------------------------------------------------------ */
@@ -175,10 +178,11 @@ ok('its slots came back rather than being recreated',
 
 /* ---- invites ------------------------------------------------------------ */
 
-ok('the roster is offered links it does not have yet', await p.isVisible('#bkInviteAll'));
+/* Confirmed creators get their links without a click; the button only
+   comes back for a widened scope or after a failure. */
 const beforeCreators = await p.evaluate(() => DB.creators.length);
-await p.click('#bkInviteAll');
 await p.waitForSelector('[data-copyinvite]', { timeout: 15000 });
+ok('links are made for the roster without anybody asking', !(await p.isVisible('#bkInviteAll')));
 const invites = await p.$$('[data-copyinvite]');
 ok('every uninvited roster row gets a link', invites.length > 0, invites.length + ' links');
 ok('inviting adds nobody to the creator database',
@@ -413,6 +417,7 @@ ok('and it is the one carrying handle, stage and booking time', await p.evaluate
 
 /* ---- editing the setup after the first day ------------------------------ */
 
+await p.$eval('#bkEditSetup', (b) => b.closest('details').open = true);
 await p.click('#bkEditSetup');
 await p.waitForSelector('#bsVenue', { timeout: 8000 });
 ok('the setup form comes back with what was entered',
@@ -431,6 +436,7 @@ const hadWork = await p.evaluate(() => ({ slots: BOOKING.slots.length,
 ok('there is real work to throw away', hadWork.slots > 0 && hadWork.bookings > 0 && hadWork.invites > 0,
   JSON.stringify(hadWork));
 
+await p.$eval('#bkWipe', (b) => b.closest('details').open = true);
 await p.click('#bkWipe');
 await p.waitForSelector('#bwGo', { timeout: 8000 });
 ok('it says what will go, and that nobody is told',
@@ -460,9 +466,10 @@ ok('nothing is left in the database for this campaign', await (async () => {
 
 /* and it can be set up again right away */
 await p.fill('#bkVenue', 'Second try');
+await p.click('#view .bk-more summary');   /* the defaults sit under More options */
 await p.selectOption('#bkTz', 'Asia/Seoul');
 await p.click('#bkCreate');
-await p.waitForSelector('#bkCopy', { timeout: 10000 });
+await p.waitForSelector('#bkCopy', { timeout: 10000, state: 'attached' });
 ok('a fresh schedule can be built on the same campaign',
   await p.evaluate(() => !!BOOKING.schedule && BOOKING.schedule.venueName === 'Second try'));
 
@@ -779,6 +786,7 @@ ok('setting it saves on the schedule, where the server can enforce it',
 ok('and the card says what it means in visits',
   (await p.textContent('#view')).includes('Capped at 1 team a day'));
 ok('the settings drawer shows the same number', await (async () => {
+  await p.$eval('#bkEditSetup', (b) => b.closest('details').open = true);
   await p.click('#bkEditSetup');
   await p.waitForSelector('#bsMaxPerDay', { timeout: 8000 });
   const v = await p.inputValue('#bsMaxPerDay');
@@ -1031,6 +1039,66 @@ ok('still clear after a reload — the cancelled visit does not come back', awai
   const row = DB.participants.find((x) => x.id === c.participantId);
   return row ? String(row.confirmedVisitAt) : 'row gone';
 }, cancelled));
+
+/* ---- a click is not a navigation ---------------------------------------- */
+
+/* Expanding a date, blocking a day, ticking a box — all of them go
+   through render(), and render() used to put the page back at the top
+   afterwards. On a tab holding a fortnight of dates that meant scrolling
+   back down after every single click. The top of the page belongs to
+   arriving somewhere new, and nothing else.
+
+   Each check below scrolls the control it is about into the middle of a
+   short viewport first. That is not decoration: a control off screen
+   would be scrolled to by the click itself, and the measurement would
+   then be about focus rather than about the redraw. */
+await p.setViewportSize({ width: 1500, height: 480 });
+await go('campaigns/' + CP + '/booking');
+await p.waitForSelector('[data-date-row]', { timeout: 8000 });
+
+const centre = (sel) => p.evaluate((s) => {
+  const el = document.querySelector(s);
+  if (!el) return null;
+  const y = el.getBoundingClientRect().top + window.scrollY - Math.round(window.innerHeight / 2);
+  window.scrollTo(0, Math.max(1, Math.round(y)));
+  return { y: window.scrollY, max: document.documentElement.scrollHeight - window.innerHeight };
+}, sel);
+const where = () => p.evaluate(() => window.scrollY);
+
+const atRow = await centre('[data-date-row] td:first-child');
+ok('the booking tab scrolls on a short screen', !!atRow && atRow.y > 0,
+  JSON.stringify(atRow));
+await p.click('[data-date-row] td:first-child');
+await p.waitForTimeout(600);
+const afterExpand = await where();
+ok('expanding a date leaves the page exactly where it was',
+  Math.abs(afterExpand - atRow.y) <= 4, atRow.y + ' -> ' + afterExpand);
+ok('and the date really did expand', await p.isVisible('[data-addslot]'));
+
+/* whichever day the earlier sections left standing */
+const blockable = await p.evaluate(() => {
+  const el = document.querySelector('[data-block]');
+  return el ? el.dataset.block : '';
+});
+if (blockable) {
+  const atBlock = await centre(`[data-block="${blockable}"]`);
+  await p.click(`[data-block="${blockable}"]`);
+  await p.waitForFunction(() => (BOOKING.schedule.closedDates || []).length > 0, null, { timeout: 8000 });
+  await p.waitForTimeout(400);
+  const afterBlock = await where();
+  ok('blocking a day leaves the page exactly where it was',
+    Math.abs(afterBlock - atBlock.y) <= 4, atBlock.y + ' -> ' + afterBlock);
+  await p.click(`[data-block="${blockable}"]`);
+  await p.waitForFunction(() => (BOOKING.schedule.closedDates || []).length === 0, null, { timeout: 8000 });
+} else {
+  ok('blocking a day leaves the page exactly where it was', false, 'no blockable day left on the tab');
+}
+
+await go('campaigns/' + CP + '/roster');
+ok('but arriving on another tab still starts at the top', (await where()) === 0, String(await where()));
+await go('campaigns/' + CP + '/booking');
+ok('and so does coming back to the booking tab', (await where()) === 0, String(await where()));
+await p.setViewportSize({ width: 1500, height: 1000 });
 
 /* ---- nothing else moved -------------------------------------------------- */
 

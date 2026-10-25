@@ -1,14 +1,15 @@
 import { joinSlot, parseVisitSlot, splitSlot, visitSlotOf } from '../import/notion.js';
-import { DAY, TODAY } from '../lib/dates.js';
-import { kmb, wonK } from '../lib/format.js';
+import { DAY, TODAY, iso } from '../lib/dates.js';
+import { erPct, kmb, wonK } from '../lib/format.js';
 import { dayKey } from '../model/calendar.js';
 import { DB, SERVER, byCampaign, byCreator, lastServerJson, notify, serverLoad, serverSave, workspacePayload } from '../model/db.js';
 import { partsOf } from '../model/stats.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { copyText, flagMark, flagRowClass, statCard } from '../ui/html.js';
 import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';
-import { BOOKING, loadBooking, openStaffMove } from './booking.js';
-import { flaggedRosterBanner, moveStage, showParticipant } from './campaigns.js';
+import { BOOKING, BOOKING_LINK_NUDGE_DAYS, daysSince, loadBooking, openStaffMove } from './booking.js';
+import { campaignShips, flaggedRosterBanner, moveStage, shipmentLate, showParticipant } from './campaigns.js';
+import { DESK, deskClashes, kstToday } from './desk.js';
 
 /* ============================================================
    PLANNER — the tab a campaign opens on.
@@ -154,7 +155,8 @@ export function plannerSummary(cp) {
     posted: posted.length,
     overdue: overdue.length,
     flagged: flagged.length,
-    attention: overdue.length + (confirmed.length - withDate.length) + flagged.filter((r) => r.flag === 'blocked').length
+    /* the same list Today shows, narrowed to this campaign */
+    attention: todayItems({ campaignId: cp.id }).filter((x) => x.sev !== 'soon').length
   };
 }
 
@@ -231,6 +233,239 @@ export function daySheetText(cp, key) {
 }
 
 /* ---- small pieces of markup shared by both lists ---- */
+/* ============================================================
+   TODAY — one list of what needs a person, and one set of rules.
+
+   Home, the Overview, the Planner and the Desk each used to decide
+   "needs attention" for themselves, and they disagreed: Home said three
+   campaigns were behind while the attention page said the queue was
+   clear. Everything now counts from todayItems(), so a number on one
+   page is the length of a list on another.
+
+   Only dated facts are used. contactedAt, confirmedAt and shippedAt are
+   back-filled to the campaign start by the Notion import (see
+   homeStats), so nothing here keys off them. The clocks are the visit
+   (the booking owns it), the creator's application, a shipment someone
+   recorded by hand, and the timestamps this page writes itself when a
+   message is copied: bookingLinkSentAt, reminderFor, chasedAt.
+
+   Each item: { key, kind, sev, campaignId, participantId, title, sub,
+   acts }. sev is 'now' (somebody has to act today), 'todo' (this
+   week) or 'soon' (coming up, worth a glance). acts are ids the view
+   knows how to perform in place.
+   ============================================================ */
+export const TODAY_CHASE_QUIET_DAYS = 3;   /* a chased post stays quiet this long */
+
+/* Post links creators sent from their booking page. They live on the
+   server, apart from the workspace, until somebody accepts one. */
+export const POSTS_IN = { list: null, loading: false, error: '' };
+export async function loadPostsIn(force) {
+  if ((POSTS_IN.list && !force) || POSTS_IN.loading) return POSTS_IN.list;
+  POSTS_IN.loading = true;
+  try {
+    const res = await fetch('/api/booking/submissions');
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || 'Could not read submitted links.');
+    POSTS_IN.list = body.submissions || [];
+    POSTS_IN.error = '';
+  } catch (err) { POSTS_IN.error = err.message; POSTS_IN.list = POSTS_IN.list || []; }
+  POSTS_IN.loading = false;
+  return POSTS_IN.list;
+}
+export async function settlePostIn(sub, outcome) {
+  const res = await fetch('/api/booking/submissions/' + encodeURIComponent(sub._id) + '/handled', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ outcome }) });
+  if (!res.ok) throw new Error('Could not update the link — try again.');
+  POSTS_IN.list = (POSTS_IN.list || []).filter((x) => x._id !== sub._id);
+}
+export const TODAY_SEV = { now: 0, todo: 1, soon: 2 };
+
+export function todayKey(day) { return iso(day || TODAY); }
+export function todaySnoozed(obj, kind) {
+  const until = obj && obj.todaySnooze && obj.todaySnooze[kind];
+  return !!until && until > todayKey();
+}
+export function snoozeToday(obj, kind, days) {
+  if (!obj) return;
+  obj.todaySnooze = Object.assign({}, obj.todaySnooze || {});
+  obj.todaySnooze[kind] = iso(new Date(TODAY.getTime() + (days || 2) * DAY));
+}
+/* the Korean day a visit falls on, compared as calendar days */
+export function visitDayOffset(r) {
+  if (!r.at) return null;
+  const v = Date.UTC(r.at.getFullYear(), r.at.getMonth(), r.at.getDate());
+  const t = Date.UTC(TODAY.getFullYear(), TODAY.getMonth(), TODAY.getDate());
+  return Math.round((v - t) / DAY);
+}
+
+export function todayItems(opts) {
+  opts = opts || {};
+  const out = [];
+  const push = (it) => out.push(Object.assign({ acts: [], sub: '' }, it));
+  /* wrapped campaigns stay in for one thing only: money still owed */
+  const camps = DB.campaigns.filter((c) => !opts.campaignId || c.id === opts.campaignId);
+
+  camps.forEach((cp) => {
+    const wrapped = cp.status === 'wrapped';
+    const visits = !campaignShips(cp);
+    const rows = partsOf(cp.id).filter((p) => p.stage !== 'dropped').map(plannerRow);
+    const tag = (r) => (r.cr.handle || r.p.fullName || 'A creator');
+
+    rows.forEach((r) => {
+      const p = r.p;
+      const base = { campaignId: cp.id, participantId: p.id, brand: cp.brand };
+      const confirmed = PLANNER_CONFIRMED.includes(p.stage);
+      const pay = payInfo(p);
+      if (pay.owed && r.post.state === 'posted' && !todaySnoozed(p, 'pay')) push(Object.assign({}, base, {
+        key: 'pay:' + p.id, kind: 'pay', sev: 'soon',
+        title: `Pay ${tag(r)}`, sub: `${wonK(pay.amount)} · posted`, acts: ['paid', 'snooze'] }));
+      if (wrapped) return;
+
+      if (r.flag === 'blocked' && !todaySnoozed(p, 'blocked')) push(Object.assign({}, base, {
+        key: 'blocked:' + p.id, kind: 'blocked', sev: 'now',
+        title: `${tag(r)} is blacklisted but still on the roster`,
+        sub: r.cr.flagReason || cp.brand, acts: ['open'] }));
+      if (r.flag === 'caution' && !todaySnoozed(p, 'caution')) push(Object.assign({}, base, {
+        key: 'caution:' + p.id, kind: 'caution', sev: 'todo',
+        title: `${tag(r)} is marked caution`, sub: r.cr.flagReason || 'check before confirming', acts: ['open', 'snooze'] }));
+
+      if (!confirmed) return;
+      const st = r.post.state;
+
+      if (visits && st === 'no_date') {
+        const sent = p.bookingLinkSentAt ? daysSince(p.bookingLinkSentAt) : null;
+        if (sent == null && !todaySnoozed(p, 'send_link')) push(Object.assign({}, base, {
+          key: 'send_link:' + p.id, kind: 'send_link', sev: 'todo',
+          title: `Send ${tag(r)} a booking link`, sub: 'confirmed, no visit booked', acts: ['booking', 'snooze'] }));
+        else if (sent >= BOOKING_LINK_NUDGE_DAYS && !todaySnoozed(p, 'nudge_link')) push(Object.assign({}, base, {
+          key: 'nudge_link:' + p.id, kind: 'nudge_link', sev: 'todo',
+          title: `${tag(r)} hasn't booked`, sub: `link sent ${sent} days ago`, acts: ['booking', 'snooze'] }));
+      }
+
+      /* by calendar day: a visit at 18:30 today already reads as "due" to
+         postedState, and it is exactly the one that needs the reminder */
+      if (visits && (st === 'upcoming' || st === 'due') && !attendanceOf(p)) {
+        const off = visitDayOffset(r);
+        if ((off === 0 || off === 1) && p.reminderFor !== r.slot && !todaySnoozed(p, 'remind')) push(Object.assign({}, base, {
+          key: 'remind:' + p.id, kind: 'remind', sev: off === 0 ? 'now' : 'soon',
+          title: `${tag(r)} visits ${off === 0 ? 'today' : 'tomorrow'}${r.time ? ' at ' + r.time : ''}`,
+          sub: 'send a reminder', acts: ['remind', 'done'] }));
+      }
+
+      if (visits && (st === 'due' || st === 'overdue') && !attendanceOf(p) && visitDayOffset(r) < 0
+          && !todaySnoozed(p, 'attend')) push(Object.assign({}, base, {
+        key: 'attend:' + p.id, kind: 'attend', sev: 'todo',
+        title: `Did ${tag(r)} come in?`, sub: `visit ${plannerDayLabel(r.dayKey)}`, acts: ['came', 'noshow'] }));
+
+      if (st === 'overdue') {
+        const chased = p.chasedAt ? daysSince(p.chasedAt) : null;
+        if ((chased == null || chased >= TODAY_CHASE_QUIET_DAYS) && !todaySnoozed(p, 'chase')) push(Object.assign({}, base, {
+          key: 'chase:' + p.id, kind: 'chase', sev: 'now',
+          title: `${tag(r)} hasn't posted`, sub: r.post.label.replace(/^No post · /, '') + (chased != null ? ` · chased ${chased}d ago` : ''),
+          acts: ['chase', 'addlink'] }));
+      }
+
+      if (!visits && p.shipment && shipmentLate(p) && !todaySnoozed(p, 'ship')) push(Object.assign({}, base, {
+        key: 'ship:' + p.id, kind: 'ship', sev: 'todo',
+        title: `No word on ${tag(r)}'s parcel`, sub: `sent ${String(p.shippedAt || '').slice(0, 10)}`, acts: ['open', 'snooze'] }));
+
+      if ((p.stage === 'submitted' || p.stage === 'review') && !todaySnoozed(p, 'review')) push(Object.assign({}, base, {
+        key: 'review:' + p.id, kind: 'review', sev: 'todo',
+        title: `Review ${tag(r)}'s content`, sub: 'submitted, waiting on you', acts: ['content'] }));
+
+    });
+    if (wrapped) return;
+
+    /* applications are counted per campaign: twelve rows saying the same
+       thing is how a list stops being read */
+    const cold = rows.filter((r) => PLANNER_WAITING.includes(r.p.stage) && r.waited != null && r.waited > WAIT_WARN_DAYS);
+    if (cold.length && !todaySnoozed(cp, 'apply')) push({
+      key: 'apply:' + cp.id, kind: 'apply', sev: 'todo', campaignId: cp.id, brand: cp.brand,
+      title: `${cold.length} application${cold.length === 1 ? '' : 's'} waiting ${WAIT_WARN_DAYS}+ days`,
+      sub: `oldest ${Math.max(...cold.map((r) => r.waited))} days`, acts: ['planner', 'snooze'] });
+
+    /* behind: the same test Home's campaign register uses */
+    const start = String(cp.start || '').slice(0, 10), end = String(cp.end || '').slice(0, 10);
+    const target = Number(cp.targetCreators) || 0;
+    if (start && end && end > start && target) {
+      const span = new Date(end + 'T00:00:00Z') - new Date(start + 'T00:00:00Z');
+      const elapsed = Math.max(0, Math.min(1, (TODAY - new Date(start + 'T00:00:00Z')) / span));
+      const conf = rows.filter((r) => PLANNER_CONFIRMED.includes(r.p.stage)).length;
+      if (elapsed > 0 && Math.min(1, conf / target) < elapsed && !todaySnoozed(cp, 'behind')) push({
+        key: 'behind:' + cp.id, kind: 'behind', sev: 'todo', campaignId: cp.id, brand: cp.brand,
+        title: `${cp.brand} is behind on creators`,
+        sub: `${conf}/${target} confirmed, ${Math.round(elapsed * 100)}% of the way through`, acts: ['roster', 'snooze'] });
+    }
+  });
+
+  /* links creators sent in themselves: the fastest thing on the list to clear */
+  (POSTS_IN.list || []).filter((x) => !opts.campaignId || x.campaignId === opts.campaignId).forEach((x) => {
+    const p = x.participantId ? DB.participants.find((q) => q.id === x.participantId) : null;
+    const cp = byCampaign[x.campaignId] || {};
+    const who = p ? ((byCreator[p.creatorId] || {}).handle || p.fullName) : (x.handle || 'Someone');
+    push({ key: 'post_in:' + x._id, kind: 'post_in', sev: 'now', campaignId: x.campaignId, participantId: p ? p.id : null,
+      brand: cp.brand, sub_id: x._id, url: x.url,
+      title: `${who} sent their post link`, sub: String(x.url).replace(/^https:\/\/(www\.)?/, '').slice(0, 60),
+      acts: p ? ['accept', 'view', 'reject'] : ['view', 'reject'] });
+  });
+
+  /* the Desk's judgements, when its data is here — it needs the server */
+  if (!opts.campaignId && typeof DESK !== 'undefined' && DESK.data && !DESK.error) {
+    for (let i = 0; i < 7; i++) {
+      const d = iso(new Date(new Date(kstToday() + 'T00:00:00Z').getTime() + i * DAY));
+      deskClashes(d).filter((c) => c.bad && c.kind !== 'flag').forEach((c) => push({
+        key: 'desk:' + c.kind + ':' + d + ':' + (c.bookingId || c.text), kind: 'desk', sev: 'now',
+        title: c.text, sub: c.why, day: d, acts: ['desk'] }));
+    }
+  }
+
+  return out.sort((a, b) => TODAY_SEV[a.sev] - TODAY_SEV[b.sev]);
+}
+
+/* What a roster row is owed. The drawer records mode, status, amount
+   and the day it was paid; older rows only carry a fee, which means the
+   same thing as a paid row with that amount. Gifted-only owes nothing. */
+export function payInfo(p) {
+  const pay = (p && p.payment) || {};
+  const fee = Number(p && p.fee) || 0;
+  const mode = pay.mode || (fee > 0 ? 'paid' : 'none');
+  const amount = Number(pay.amount) || fee;
+  const paid = pay.status === 'paid' || !!pay.paidAt;
+  return { mode, amount, paid, paidAt: pay.paidAt || '', owed: mode !== 'none' && amount > 0 && !paid };
+}
+export function markPaid(p, day) {
+  const was = payInfo(p);
+  p.payment = Object.assign({ mode: was.mode === 'none' ? 'paid' : was.mode, amount: was.amount }, p.payment || {},
+    { status: 'paid', paidAt: day || iso(TODAY) });
+}
+
+export function todayCounts(items) {
+  const list = items || todayItems();
+  return { now: list.filter((x) => x.sev === 'now').length, todo: list.filter((x) => x.sev === 'todo').length,
+           soon: list.filter((x) => x.sev === 'soon').length, total: list.length };
+}
+
+/* the two messages Today copies */
+export function todayLang(cp) { return /korea|한국/i.test(String((cp && cp.market) || 'Korea')) ? 'ko' : 'en'; }
+export function reminderMessage(cp, p) {
+  const r = plannerRow(p);
+  const cr = byCreator[p.creatorId] || {};
+  const who = p.fullName || cr.name || String(cr.handle || '').replace(/^@/, '');
+  const off = visitDayOffset(r);
+  if (todayLang(cp) === 'en') return [`Hi ${who}! A quick reminder about your ${cp.brand} visit`,
+    `${off === 0 ? 'today' : 'tomorrow'}${r.time ? ' at ' + r.time : ''}.`, 'See you there! — VIVELY'].join(' ');
+  return [`안녕하세요 ${who}님 :)`, `${off === 0 ? '오늘' : '내일'}${r.time ? ' ' + r.time : ''} ${cp.brand} 방문 예정이신 것 리마인드 드려요!`,
+    '조심히 오세요. 감사합니다! VIVELY 드림'].join('\n');
+}
+export function chaseMessage(cp, p) {
+  const cr = byCreator[p.creatorId] || {};
+  const who = p.fullName || cr.name || String(cr.handle || '').replace(/^@/, '');
+  if (todayLang(cp) === 'en') return `Hi ${who}! Hope you enjoyed ${cp.brand}. Just checking in on the post — `
+    + `could you send us the link once it's up? (${cp.deliverables || 'as agreed'}) Thank you!`;
+  return [`안녕하세요 ${who}님 :)`, `${cp.brand} 방문은 즐거우셨나요? 콘텐츠 업로드 일정 확인차 연락드려요!`,
+    `업로드 후 링크 공유 부탁드립니다 (${cp.deliverables || '협의된 내용'}). 감사합니다!`].join('\n');
+}
+
 export function plAgePill(r) {
   if (r.waited == null) return '<span class="pl-age none">no date</span>';
   const cls = r.waited > WAIT_WARN_DAYS * 2 ? 'hot' : r.waited > WAIT_WARN_DAYS ? 'warm' : '';
@@ -278,7 +513,7 @@ export function plannerTab(mount, cp) {
       ${statCard('Visits next 7 days', s.thisWeek, { foot: `${b.confirmed.filter((r) => r.at).length} booked in all` })}
       ${statCard('Posted', `${s.posted}<span style="font-size:15px;color:var(--text-3)"> / ${s.confirmed}</span>`,
         { foot: s.overdue ? `${s.overdue} overdue` : 'nothing overdue' })}
-      ${statCard('Needs attention', s.attention, { foot: s.attention ? 'overdue, undated or flagged' : 'nothing on fire' })}
+      ${statCard('Needs attention', s.attention, { foot: s.attention ? `<a href="#/today">on the Today list →</a>` : 'nothing on fire' })}
     </div>
 
     <div class="planner-grid">
@@ -441,7 +676,7 @@ export function plannerApplicant(r, i, selectable) {
           <span data-plopen="${esc(p.id)}" style="cursor:pointer">${esc(cr.handle || p.fullName || '—')}</span>
           ${plMarks(r)} ${plAgePill(r)}
         </div>
-        <div class="pl-facts">${kmb(cr.followers || 0)} followers · ER ${cr.er || 0}% · ${esc(cr.country || '—')}${p.headcount ? ' · ' + esc(String(p.headcount)) + ' people' : ''}</div>
+        <div class="pl-facts">${kmb(cr.followers || 0)} followers · ER ${erPct(cr.er || 0)} · ${esc(cr.country || '—')}${p.headcount ? ' · ' + esc(String(p.headcount)) + ' people' : ''}</div>
         ${cr.flagReason ? `<div class="pl-why ${r.flag === 'caution' ? 'amber' : ''}">${esc(cr.flagReason)}</div>` : ''}
         ${asked && asked.date ? `<div class="pl-prefs"><span>🗓 asked for ${esc(asked.date)}${asked.time ? ' ' + esc(asked.time) : ''}</span></div>` : ''}
       </div>
@@ -748,8 +983,7 @@ export function openPlannerConfirm(cp, pid) {
 export function openDaySheet(cp, key) {
   const text = daySheetText(cp, key);
   openDrawer(`Day sheet — ${esc(key)}`, `
-    <p class="card-sub">What the venue needs: who is coming, when, and how many. Korean, because the person
-      reading it works at the restaurant.</p>
+    <p class="card-sub">Who is coming, when, and how many — in Korean, ready to send to the venue.</p>
     <pre id="dsText" style="white-space:pre-wrap;background:var(--surface-2);border:1px solid var(--line);
       border-radius:8px;padding:12px;font-size:12.5px;line-height:1.6;margin-top:10px">${esc(text)}</pre>
     <div style="display:flex;gap:8px;margin-top:10px">

@@ -38,7 +38,7 @@ const only = process.argv.slice(2);
 const manifest = JSON.parse(fs.readFileSync('tools/manifest.json', 'utf8'));
 let touched = 0; const unknown = new Set();
 for (const f of files) {
-  const rel = f.replace(/^src\//, '');
+  const rel = f.replace(/\\/g, '/').replace(/^src\//, '');   /* Windows walks with backslashes */
   if (only.length && !only.includes(rel)) continue;
   const ast = parseBody(f);
   const declared = new Set();

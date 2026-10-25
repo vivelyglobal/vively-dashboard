@@ -2,7 +2,7 @@ import { SERIES_HEX, barsH, fitHeight, lineChart, sparkSvg, splitBar } from '../
 import { openMetricsImport } from '../import/metrics.js';
 import { campaignsSharingNotionDb, joinSlot, notionLinkedCampaigns, openNotionMappingDrawer, splitSlot, syncAllNotionCampaigns, visitMismatchMark, visitMismatchesIn, visitSlotMoved, visitSlotOf } from '../import/notion.js';
 import { DAY, TODAY, addDays, dLabel, iso } from '../lib/dates.js';
-import { engagementsOf, kmb, money2, num, pct, won, wonK } from '../lib/format.js';
+import { engagementsOf, erPct, kmb, money2, num, pct, won, wonK } from '../lib/format.js';
 import { recomputeCreatorStats } from '../model/creators.js';
 import { DB, byCampaign, byCreator, detachContent, notify, persist, serverSave, setContentUrl, stripPayout, toastAfterSave } from '../model/db.js';
 import { duplicateIdBanner, wireDuplicateIdBanner } from '../model/duplicates.js';
@@ -34,6 +34,27 @@ export const CAMPAIGN_TABS = [
   ['performance', 'Performance'], ['creators', 'Creator results'], ['messages', 'Messages'],
   ['brief', 'Brief'], ['report', 'Report']
 ];
+/* The tab bar shows six groups; a group with more than one page gets a
+   small switch above the page. The URL still names the page itself, so
+   #/campaigns/x/booking and every bookmark like it lands where it did. */
+export const CAMPAIGN_GROUPS = [
+  ['planner', 'Planner', ['planner']],
+  ['roster', 'Creators', ['roster']],
+  ['booking', 'Schedule', ['booking', 'calendar']],
+  ['content', 'Content', ['content', 'performance', 'creators']],
+  ['messages', 'Messages', ['messages']],
+  ['brief', 'Brand', ['brief', 'report']]
+];
+export function campaignGroupOf(tab) {
+  return CAMPAIGN_GROUPS.find((g) => g[2].includes(tab)) || CAMPAIGN_GROUPS[0];
+}
+export function campaignSubNav(cp, tab) {
+  const g = campaignGroupOf(tab);
+  if (g[2].length < 2) return '';
+  const label = (id) => (CAMPAIGN_TABS.find((t) => t[0] === id) || [id, id])[1];
+  return `<div class="subnav no-print">${g[2].map((id) => `<a href="#/campaigns/${esc(cp.id)}/${id}"
+    class="${id === tab ? 'active' : ''}">${esc(label(id))}</a>`).join('')}</div>`;
+}
 
 export function renderCampaignSection(view, item, tab) {
   if (!item || item === 'all') return renderCampaignGrid(view, tab || 'active');
@@ -176,7 +197,8 @@ export function renderCampaign(view, id, tab) {
       <button class="icon-btn no-print" id="cpDelete" title="Delete this campaign">&#128465;</button>
     </div>
 
-    ${tab === 'planner' ? '' : `<div class="grid g6" style="margin-bottom:16px;">
+    ${campaignSubNav(cp, tab)}
+    ${!['roster', 'performance', 'creators'].includes(tab) ? '' : `<div class="grid g6" style="margin-bottom:16px;">
       ${statCard('Confirmed', `${s.confirmed}<span style="font-size:15px;color:var(--text-3)"> / ${cp.targetCreators}</span>`, { foot: `${num(s.contacted)} contacted` })}
       ${statCard('Delivered', s.delivered, { foot: `${pct(s.deliveryRate, 0)} of confirmed` })}
       ${statCard('Views', kmb(s.views), { foot: `${pct(s.paidViews / (s.views || 1), 0)} paid` })}
@@ -565,8 +587,10 @@ export function renderBoard(mount, cp) {
         const cr = byCreator[p.creatorId];
         return `<div class="kb-card ${flagRowClass(cr)}" draggable="true" data-pid="${p.id}">
           ${whoHtml(cr)}
-          <div class="kb-meta"><span>ER ${cr.er}%</span><span>${esc(cr.country)}</span>${p.fee ? `<span>${wonK(p.fee)}</span>` : ''}</div>
-          ${visitSlotOf(p) ? `<div style="font-size:11px;color:var(--text-2);margin-top:5px">🗓 ${esc(visitSlotOf(p))}${p.confirmedVisitAt ? ' <span style="color:var(--text-3)">confirmed</span>' : ''}${visitMismatchMark(p)}</div>` : ''}
+          <div class="kb-meta"><span>ER ${erPct(cr.er)}</span><span>${esc(cr.country)}</span>${p.fee ? `<span>${wonK(p.fee)}</span>` : ''}</div>
+          ${visitSlotOf(p) ? `<div style="font-size:11px;color:var(--text-2);margin-top:5px">🗓 ${esc(visitSlotOf(p))}${p.confirmedVisitAt ? ' <span style="color:var(--text-3)">confirmed</span>' : ''}${visitMismatchMark(p)}</div>`
+            : p.bookingLinkSentAt && p.stage !== 'dropped' ? `<div style="font-size:11px;color:var(--text-3);margin-top:5px">🔗 booking link sent ${
+              esc(String(p.bookingLinkSentAt).slice(0, 10))} · not booked</div>` : ''}
           ${campaignShips(cp) && STAGE_IDX[p.stage] >= STAGE_IDX.confirmed && p.stage !== 'dropped'
             ? `<div style="font-size:11px;margin-top:5px;color:${shipmentState(p).id === 'waiting' ? 'var(--text-3)' : 'var(--text-2)'}">
                 📦 ${esc(shipmentLine(p))}${shipmentLate(p) ? ' <span class="pill amber">no word</span>' : ''}</div>` : ''}
@@ -620,7 +644,7 @@ export function renderRosterTable(mount, cp) {
       return `<tr class="${flagRowClass(cr)}">
         <td>${whoHtml(cr)}</td>
         <td><span class="tag">${esc(p.source)}</span></td>
-        <td class="num">${num(cr.followers)}</td><td class="num">${cr.er}%</td>
+        <td class="num">${num(cr.followers)}</td><td class="num">${erPct(cr.er)}</td>
         <td><select data-pid="${p.id}" class="stageSel" style="width:150px;padding:5px 8px;font-size:12px">
           ${STAGES.map((st) => `<option value="${st.id}" ${p.stage === st.id ? 'selected' : ''}>${st.label}</option>`).join('')}
         </select></td>
@@ -701,7 +725,7 @@ export function openAddCreators(cp) {
       ${avatarHtml(c.handle)}
       <div style="min-width:0;flex:1">
         <div style="font-size:13px;font-weight:500">${hl(c.handle)} <span style="color:var(--text-3);font-weight:400">${hl(c.name)}</span> ${c.flag === 'caution' || c.flag === 'blocked' ? flagMark(c) : flagPill(c.flag)}</div>
-        <div style="font-size:11.5px;color:var(--text-3)">${kmb(c.followers)} · ER ${c.er}% · ${esc(c.country)} · ${esc(c.categories.join(', '))}${c.campaignsDone ? ` · ${c.campaignsDone} past` : ' · new'}</div>
+        <div style="font-size:11.5px;color:var(--text-3)">${kmb(c.followers)} · ER ${erPct(c.er)} · ${esc(c.country)} · ${esc(c.categories.join(', '))}${c.campaignsDone ? ` · ${c.campaignsDone} past` : ' · new'}</div>
         ${s.reasons.length ? `<div style="font-size:11px;color:var(--text-3);margin-top:3px">${s.reasons.map((r) => `<span class="tag">${esc(r)}</span>`).join(' ')}</div>` : ''}
       </div>
       <div class="score">${s.score}</div>
@@ -787,7 +811,7 @@ export function showParticipant(pid) {
     <dl class="kv" style="margin-bottom:18px">
       <dt>Campaign</dt><dd><a href="#/campaigns/${cp.id}/roster">${esc(cp.brand)} — ${esc(cp.name)}</a></dd>
       <dt>Found via</dt><dd>${esc(p.source)}</dd>
-      <dt>Followers</dt><dd>${num(cr.followers)} · ER ${cr.er}% · avg ${kmb(cr.avgViews)} views</dd>
+      <dt>Followers</dt><dd>${num(cr.followers)} · ER ${erPct(cr.er)} · avg ${kmb(cr.avgViews)} views</dd>
       <dt>Fee</dt><dd>${p.fee ? won(p.fee) : 'Gifted only'}</dd>
       <dt>Contacted</dt><dd>${p.contactedAt || '—'} <span style="color:var(--text-3)">${daysAgo(p.contactedAt)}</span></dd>
       <dt>Confirmed</dt><dd>${p.confirmedAt || '—'}</dd>

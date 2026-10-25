@@ -874,6 +874,48 @@ ok('a fresh schedule can be created for the same campaign afterwards', await (as
   return r.status === 200 && r.body.schedule.publicToken !== publicToken;
 })());
 
+/* ---- the creator sends their post link from the booking page ---------- */
+
+{
+  const sch = (await call('/api/booking/campaign/cp_1')).body.schedule;
+  const d = new Date(Date.now() + (9 + 6 * 24) * 3600000).toISOString().slice(0, 10);
+  const sl = await call('/api/booking/slot', { body: { scheduleId: sch._id, date: d, time: '18:00', capacity: 2 } });
+  const inv = await call('/api/booking/invite', { body: {
+    campaignId: 'cp_1', participantId: 'pt_post', creatorId: 'cr_post', name: 'Poster', handle: '@poster' } });
+  const bk = await call('/api/book/' + inv.body.invite._id + '/confirm', { body: { slotId: sl.body.slot._id } });
+  const mt = bk.body.booking.manageToken;
+  ok('a booked creator can be handed the post box', bk.status === 200 && !!mt);
+
+  ok('a link that is not a post is refused, in Korean',
+    await (async () => {
+      const r = await call('/api/book/manage/' + mt + '/post', { body: { url: 'https://example.com/x' } });
+      return r.status === 400 && /링크/.test(r.body.error);
+    })());
+  ok('an Instagram reel is taken', (await call('/api/book/manage/' + mt + '/post',
+    { body: { url: 'https://www.instagram.com/reel/ABC123/' } })).status === 200);
+  ok('pasting it twice keeps one copy', await (async () => {
+    const r = await call('/api/book/manage/' + mt + '/post', { body: { url: 'https://www.instagram.com/reel/ABC123/' } });
+    return r.body.reused === true && (await count('post_submissions', { url: 'https://www.instagram.com/reel/ABC123/' })) === 1;
+  })());
+  ok('the creator\'s page shows it as received', await (async () => {
+    const r = await call('/api/book/manage/' + mt);
+    return (r.body.posts || []).length === 1 && r.body.posts[0].url.includes('ABC123');
+  })());
+  ok('a token that is not a booking cannot post', (await call('/api/book/manage/nope/post',
+    { body: { url: 'https://www.instagram.com/reel/ZZZ/' } })).status === 404);
+
+  const open = await call('/api/booking/submissions');
+  const mine = (open.body.submissions || []).find((x) => x.url.includes('ABC123'));
+  ok('staff see it, matched to the roster row', !!mine && mine.participantId === 'pt_post' && mine.campaignId === 'cp_1');
+  ok('accepting it takes it off the open list', await (async () => {
+    const r = await call('/api/booking/submissions/' + mine._id + '/handled', { body: { outcome: 'accepted' } });
+    const again = await call('/api/booking/submissions');
+    return r.body.changed === true && !(again.body.submissions || []).some((x) => x._id === mine._id);
+  })());
+  ok('and accepting twice changes nothing', (await call('/api/booking/submissions/' + mine._id + '/handled',
+    { body: { outcome: 'accepted' } })).body.changed === false);
+}
+
 srv.close();
 console.log(errs.length ? '\n' + errs.length + ' FAILED' : '\nall booking API checks passed');
 process.exit(errs.length ? 1 : 0);

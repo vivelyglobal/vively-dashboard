@@ -335,6 +335,8 @@ function renderDone(main, bar, barIn, v) {
   const manage = b.manageToken
     ? location.origin + '/book/manage/' + b.manageToken
     : (IS_MANAGE ? location.href : '');
+  const postTok = IS_MANAGE ? TOKEN : b.manageToken;
+  const posts = (v.posts || []).filter((x) => x.outcome !== 'rejected');
 
   main.innerHTML =
     '<section class="centre"><div class="ok-mark">✓</div>' +
@@ -357,6 +359,17 @@ function renderDone(main, bar, barIn, v) {
         '</div></section>'
       : '') +
 
+    /* After the visit, the same page takes the post link — no DM needed */
+    (postTok
+      ? '<section><div class="card"><h3 style="margin:0 0 4px;font-size:15px">콘텐츠 링크 보내기</h3>' +
+        '<p class="muted" style="margin:0 0 10px;font-size:13px">방문 후 게시물을 올리셨다면 링크를 붙여넣어 주세요.</p>' +
+        (posts.length ? '<div class="note" style="margin-bottom:10px">받았습니다 ✓' +
+          posts.map((x) => '<span class="link">' + esc(x.url) + '</span>').join('') + '</div>' : '') +
+        '<input type="url" id="postUrl" inputmode="url" placeholder="https://www.instagram.com/reel/…" autocomplete="off">' +
+        '<button class="alt" id="postSend" style="width:100%;margin-top:10px;min-height:46px">링크 보내기</button>' +
+        '</div></section>'
+      : '') +
+
     (S.error ? '<div class="note bad">' + esc(S.error) + '</div>' : '');
 
   bar.hidden = false;
@@ -368,6 +381,18 @@ function renderDone(main, bar, barIn, v) {
   if (copy) copy.addEventListener('click', async () => {
     try { await navigator.clipboard.writeText(manage); copy.textContent = '복사되었습니다'; }
     catch (e) { copy.textContent = '길게 눌러 복사해 주세요'; }
+  });
+
+  const send = $('#postSend');
+  if (send) send.addEventListener('click', async () => {
+    const url = $('#postUrl').value.trim();
+    if (!url) return;
+    send.disabled = true; send.textContent = '보내는 중…';
+    const r = await api('/api/book/manage/' + postTok + '/post', { url });
+    if (!r.ok) { S.error = r.body.error || '링크를 보내지 못했습니다.'; send.disabled = false; return render(); }
+    S.error = null;
+    S.view = Object.assign({}, S.view, { posts: (S.view.posts || []).concat(r.body.reused ? [] : [{ url }]) });
+    render();
   });
 
   $('#change').addEventListener('click', async () => {

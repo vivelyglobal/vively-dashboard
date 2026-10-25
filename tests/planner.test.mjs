@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   daysWaiting, attendanceOf, setAttendance, postedState, plannerBuckets,
-  plannerSummary, plannerConflicts, daySheetText
+  plannerSummary, plannerConflicts, daySheetText, todayItems
 } from '../src/views/planner.js';
 import { BOOKING } from '../src/views/booking.js';
 import { DB, byCampaign, byCreator } from '../src/model/db.js';
@@ -142,7 +142,12 @@ test('the summary answers the five questions the header asks', () => {
   assert.equal(s.posted, 1);
   assert.equal(s.overdue, 1);
   assert.equal(s.flagged, 2, 'one blacklisted and one caution');
-  assert.equal(s.attention, 3, 'one overdue + one undated + one blacklisted');
+  /* "Needs attention" is the Today list narrowed to this campaign, so the
+     header and Today can never disagree. It still has to hold the overdue
+     post and the blacklisted creator this count was first built for. */
+  const kinds = todayItems({ campaignId: 'cpK' }).filter((x) => x.sev !== 'soon').map((x) => x.kind);
+  assert.equal(s.attention, kinds.length, 'the Today list, narrowed to this campaign');
+  assert.ok(kinds.includes('chase') && kinds.includes('blocked'), 'it holds the overdue post and the blacklisted creator');
 });
 
 test('an empty campaign reports zeroes rather than breaking', () => {
