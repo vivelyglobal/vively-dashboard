@@ -3,6 +3,8 @@ import { openMetricsImport } from '../import/metrics.js';
 import { campaignsSharingNotionDb, joinSlot, notionLinkedCampaigns, openNotionMappingDrawer, splitSlot, syncAllNotionCampaigns, visitMismatchMark, visitMismatchesIn, visitSlotMoved, visitSlotOf } from '../import/notion.js';
 import { DAY, TODAY, addDays, dLabel, iso } from '../lib/dates.js';
 import { engagementsOf, erPct, kmb, money2, num, pct, won, wonK } from '../lib/format.js';
+import { downloadXlsx } from '../lib/xlsx.js';
+import { buildBrandSheet, loadBrandSheetOptions, saveBrandSheetOptions } from '../model/brandSheet.js';
 import { recomputeCreatorStats } from '../model/creators.js';
 import { DB, byCampaign, byCreator, detachContent, notify, persist, serverSave, setContentUrl, stripPayout, toastAfterSave } from '../model/db.js';
 import { duplicateIdBanner, wireDuplicateIdBanner } from '../model/duplicates.js';
@@ -540,6 +542,7 @@ export function rosterTab(mount, cp) {
           sh.late ? ` · <span style="color:var(--amber)">${sh.late} out over 10 days</span>` : ''}</span>` : '';
       })() : ''}
       <button class="btn sm" id="rosterCsv">Export roster</button>
+      <button class="btn sm" id="rosterBrandSheet" title="The creator list in the brand-sheet template layout (.xlsx)">Brand sheet (.xlsx)</button>
       <button class="btn sm" id="rosterMetrics" title="Update views / likes / comments / shares from a spreadsheet">Update metrics</button>
       <button class="btn sm" id="notionSync" title="${cp.notionSyncedAt ? 'Last synced ' + new Date(cp.notionSyncedAt).toLocaleString() : "Pull submissions from this campaign's Notion form"}">Sync from Notion</button>
       ${cp.notionDatabaseId ? `<button class="icon-btn sm" id="notionConfig" title="Change Notion database or field mapping">&#9881;</button>
@@ -565,6 +568,7 @@ export function rosterTab(mount, cp) {
   });
   $('#addCreators').addEventListener('click', () => openAddCreators(cp));
   $('#rosterCsv').addEventListener('click', () => exportRoster(cp));
+  $('#rosterBrandSheet').addEventListener('click', () => openBrandSheetExport(cp));
   $('#rosterMetrics').addEventListener('click', () => openMetricsImport(cp));
   $('#notionSync').addEventListener('click', () => openNotionSync(cp));
   wireSharedNotionFormBanner(cp);
@@ -675,6 +679,69 @@ export function exportRoster(cp) {
   });
   downloadFile(toCsv(['handle','name','platform','followers','er','country','source','stage','contacted','confirmed','shipped','fee_krw','url','views','likes','comments','shares','saves','reach'], rows),
     `vively-${cp.brand.toLowerCase().replace(/\W+/g, '-')}-roster.csv`, 'text/csv;charset=utf-8');
+}
+
+/* --------------------------- brand sheet (.xlsx) ---------------------------
+   Built here in the browser from the workspace the signed-in staff member has
+   already loaded, so no new endpoint and no new secret. The brand-safe file is
+   the default; the internal file needs a second, separate click. */
+export function openBrandSheetExport(cp) {
+  /* option state: this browser only, never the workspace */
+  const store = (() => { try { return window.localStorage; } catch (e) { return null; } })();
+  const opts = store ? loadBrandSheetOptions(store) : { showNames: false, showNationality: false, includeRejected: false };
+  const make = (mode, confirmInternal) => buildBrandSheet({
+    cp, participants: partsOf(cp.id), creators: byCreator, mode, confirmInternal,
+    showNames: opts.showNames, showNationality: opts.showNationality, includeRejected: opts.includeRejected,
+    date: new Date().toISOString().slice(0, 10)
+  });
+  const preview = make('brand', false);
+  const missing = preview.counts.missingStore;
+  openDrawer(`Brand sheet — ${esc(cp.brand)}`, `
+    <div class="note" style="margin-bottom:14px">
+      One row per creator in the template's columns: <strong>${preview.counts.confirmed}</strong> confirmed,
+      then a STANDBY row and <strong>${preview.counts.standby}</strong> waiting for the brand's approval.
+      Brand-rejected creators are left out unless you tick the box below (${preview.counts.rejectedHidden} at the moment).
+      Visiting Date is the confirmed visit only.
+      ${missing ? `<br><span style="color:var(--amber)">Store name missing for ${missing} creator${missing === 1 ? '' : 's'}: their Visiting Date shows date and time only.</span>` : ''}
+    </div>
+    <div class="lbl">Brand-safe file (default)</div>
+    <p class="card-sub" style="margin-top:4px">No address, phone number, DM text, gender, email, fee, notes or Notion links.
+      The Instagram profile link is always shown.</p>
+    <label style="display:block;margin:6px 0"><input type="checkbox" id="bsNames" ${opts.showNames ? 'checked' : ''}/>
+      Show creator names to brands <span style="color:var(--text-3)">(off = Instagram link only)</span></label>
+    <label style="display:block;margin:6px 0"><input type="checkbox" id="bsNat" ${opts.showNationality ? 'checked' : ''}/>
+      Show nationality <span style="color:var(--text-3)">(off by default)</span></label>
+    <label style="display:block;margin:6px 0"><input type="checkbox" id="bsRej" ${opts.includeRejected ? 'checked' : ''}/>
+      Include rejected <span style="color:var(--text-3)">(brand-rejected creators; off by default)</span></label>
+    <button class="btn primary sm" id="bsDownload" style="margin-top:8px">Download brand-safe .xlsx</button>
+    <div class="divider"></div>
+    <div class="lbl">Internal full file (staff only)</div>
+    <p class="card-sub" style="margin-top:4px">Everything the template has, including address and phone number. Never send this to a brand.</p>
+    <button class="btn sm" id="bsInternalAsk">Internal full file&hellip;</button>
+    <div id="bsInternalBox" style="display:none;margin-top:10px">
+      <div class="note warn">This file contains creators' home addresses and phone numbers. Keep it inside the team.</div>
+      <button class="btn sm" id="bsInternalGo" style="margin-top:8px">Yes, download the INTERNAL file</button>
+    </div>`);
+  /* remembered in this browser only: no persist(), no workspace save, no Sheet push */
+  const remember = () => {
+    opts.showNames = $('#bsNames').checked;
+    opts.showNationality = $('#bsNat').checked;
+    opts.includeRejected = $('#bsRej').checked;
+    if (store) saveBrandSheetOptions(store, opts);
+  };
+  $('#bsNames').addEventListener('change', remember);
+  $('#bsNat').addEventListener('change', remember);
+  $('#bsRej').addEventListener('change', remember);
+  $('#bsDownload').addEventListener('click', () => {
+    remember();
+    const s = make('brand', false);
+    downloadXlsx(s.sheetName, s.rows, s.filename);
+  });
+  $('#bsInternalAsk').addEventListener('click', () => { $('#bsInternalBox').style.display = 'block'; });
+  $('#bsInternalGo').addEventListener('click', () => {
+    const s = make('internal', true);
+    downloadXlsx(s.sheetName, s.rows, s.filename);
+  });
 }
 
 /* --------------------------- add creators (autosuggest) --------------------------- */
