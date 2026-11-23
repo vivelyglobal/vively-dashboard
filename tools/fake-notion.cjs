@@ -77,9 +77,22 @@ app.get('/v1/databases/:id', (q, r) => {
   r.json({ object: 'database', id: q.params.id, data_sources: [{ id: q.params.id, name: 'Responses' }] });
 });
 
+/* Optional: /__schema sets { <dataSourceId>: { "Property name": "type", ... } } so a test can serve a
+   data source schema with real property types (title, url, number, date ...). Without it the
+   schema is derived from the rows as before. Every schema read is recorded in /__state.schemaReads. */
+let schemas = {};
+const schemaReads = [];
+app.post('/__schema', (q, r) => { schemas = q.body || {}; r.json({ ok: true, sources: Object.keys(schemas) }); });
+
 app.get('/v1/data_sources/:id', (q, r) => {
+  schemaReads.push(q.params.id);
   const rows = form[q.params.id];
   if (!rows) return r.status(404).json({ message: 'Could not find data source' });
+  if (schemas[q.params.id]) {
+    const props = {};
+    Object.entries(schemas[q.params.id]).forEach(([name, type]) => { props[name] = { id: name, name, type }; });
+    return r.json({ object: 'data_source', id: q.params.id, title: [{ plain_text: 'Responses' }], properties: props });
+  }
   const properties = {};
   Object.keys((rows[0] || {}).properties || {}).forEach((name) => {
     properties[name] = name === 'Status'
@@ -89,13 +102,34 @@ app.get('/v1/data_sources/:id', (q, r) => {
   r.json({ object: 'data_source', id: q.params.id, title: [{ plain_text: 'Responses' }], properties });
 });
 
+const queries = [];   // every data source query the fake served: { id, body }
 app.post('/v1/data_sources/:id/query', (q, r) => {
-  const rows = form[q.params.id] || [];
+  const body = q.body || {};
+  queries.push({ id: q.params.id, body });
+  let rows = (form[q.params.id] || []).slice();
+  /* Optional, and only when the caller asks (the manual sync sends none of
+     these, so it sees exactly what it always saw): a last_edited_time filter,
+     an ascending sort on it, and page_size / start_cursor paging. */
+  const edited = (row) => row.lastEditedTime || row.createdTime || '2026-08-01T00:00:00.000Z';
+  const f = body.filter && body.filter.last_edited_time;
+  if (f && f.on_or_after) rows = rows.filter((row) => edited(row) >= f.on_or_after);
+  if (Array.isArray(body.sorts) && body.sorts.some((x) => x.timestamp === 'last_edited_time')) {
+    rows = rows.map((row, i) => ({ row, i })).sort((x, y) => (edited(x.row) < edited(y.row) ? -1 : edited(x.row) > edited(y.row) ? 1 : x.i - y.i)).map((x) => x.row);
+  }
+  let more = false, next = null;
+  const size = Number(body.page_size) || 100;
+  if (body.start_cursor || size < rows.length) {
+    const from = Number(body.start_cursor) || 0;
+    more = from + size < rows.length; next = more ? String(from + size) : null;
+    rows = rows.slice(from, from + size);
+  }
   r.json({
-    object: 'list', has_more: false, next_cursor: null,
+    object: 'list', has_more: more, next_cursor: next,
     results: rows.map((row) => ({
       object: 'page', id: row.pageId, url: 'https://notion.so/' + String(row.pageId).replace(/-/g, ''),
       created_time: row.createdTime || '2026-08-01T00:00:00.000Z',
+      last_edited_time: edited(row),
+      archived: !!row.archived,
       properties: Object.fromEntries(Object.entries(row.properties || {}).map(([name, v]) =>
         [name, name === 'Status'
           ? { type: 'status', status: { name: (pages[row.pageId] || {}).Status || v } }
@@ -119,8 +153,8 @@ app.get('/v1/blocks/:id/children', (q, r) => {
   r.json({ object: 'list', results: slice, has_more: more, next_cursor: more ? String(from + size) : null });
 });
 
-app.get('/__state', (q, r) => r.json({ pages, writes, sources: Object.keys(form), pageProps }));
-app.post('/__reset', (q, r) => { Object.keys(pages).forEach((k) => delete pages[k]); Object.keys(pageProps).forEach((k) => delete pageProps[k]); failPlan = null; writes.length = 0; form = {}; blocks = {}; r.json({ ok: true }); });
+app.get('/__state', (q, r) => r.json({ pages, writes, sources: Object.keys(form), pageProps, queries, schemaReads }));
+app.post('/__reset', (q, r) => { Object.keys(pages).forEach((k) => delete pages[k]); Object.keys(pageProps).forEach((k) => delete pageProps[k]); failPlan = null; writes.length = 0; queries.length = 0; schemaReads.length = 0; schemas = {}; form = {}; blocks = {}; r.json({ ok: true }); });
 
 /* the port is overridable so a test can pick a free one; 3466 stays the default */
 const PORT = Number(process.env.FAKE_NOTION_PORT) || 3466;

@@ -105,6 +105,7 @@ const notionAutocreate = require("./server/notion-autocreate.js");
 const { writeWorkspaceCas } = require("./server/workspace-cas.js");
 const dateWritebackLib = require("./server/date-writeback.js");
 const sheetsClient = require("./server/sheets-client.js");
+const notionApplicants = require("./server/notion-applicants.js");
 
 /* ------------------------------------------------------------------
    Who is allowed into the workspace.
@@ -227,6 +228,8 @@ async function notionFetch(path, opts) {
        from a permanent one; the message is unchanged */
     const err = new Error((body && body.message) || `Notion responded ${res.status}`);
     err.status = res.status;
+    /* seconds, when Notion sent a Retry-After (a 429); NaN when it did not */
+    err.retryAfter = Number(res.headers && res.headers.get ? res.headers.get("retry-after") : NaN);
     throw err;
   }
   return body;
@@ -1095,6 +1098,77 @@ app.get("/api/notion/autocreate/status", requireStaff(async (req, res) => {
   }
   return res.json({ ok: true, ...base, last });
 }));
+
+/* ---------------- creator applications: Notion Responses rows -> roster ----------------
+   OFF unless NOTION_APPLICANTS_SYNC=1. Logic, rules and caps are in
+   server/notion-applicants.js; this is only the wiring. Toward Notion it
+   only ever POSTs a data source QUERY (a read). The workspace is written
+   through saveWorkspaceDoc without `force`, one save per campaign batch.
+   A dry run (NOTION_APPLICANTS_DRY_RUN=1, or { dryRun: true } on a manual
+   run) writes nothing at all: no workspace, no job state, no log. */
+const applicantsCfg = notionApplicants.parseConfig(process.env);
+let applicants = null;
+let applicantsOff = "";
+if (!applicantsCfg.requested) applicantsOff = "NOTION_APPLICANTS_SYNC is not 1";
+else if (!NOTION_TOKEN) applicantsOff = "NOTION_TOKEN is not set";
+else if (!MONGODB_URI) applicantsOff = "MONGODB_URI is not set";
+let applicantsShared = null;
+if (!applicantsOff) {
+  try { applicantsShared = notionApplicants.loadShared(); }
+  catch (err) { applicantsOff = "the import mapping code could not be loaded (" + (err && err.message ? String(err.message).slice(0, 80) : "error") + ")"; }
+}
+if (applicantsCfg.requested && applicantsOff) console.error("Notion applicants sync stays off: " + applicantsOff + ".");
+
+let applicantsLog = null;
+if (!applicantsOff) {
+  const apCol = async () => { const c = await getMongoClient(); return c ? c.db(MONGODB_DB).collection("notion_applicants_log") : null; };
+  /* the run history lives in one capped list; every Mongo call goes through the collection above */
+  applicantsLog = {
+    async save(entry) { const c = await apCol(); if (c) await notionApplicants.makeLogStore(c, applicantsCfg.logKeep).save(entry); },
+    async readHistory() { const c = await apCol(); return c ? notionApplicants.makeLogStore(c, applicantsCfg.logKeep).readHistory() : []; },
+    async readLast() { const c = await apCol(); return c ? notionApplicants.makeLogStore(c, applicantsCfg.logKeep).readLast() : null; }
+  };
+  /* every Notion call of this job goes through one guarded caller: only a data source query, a data source read and a page read
+     are allowed, each with a timeout, backoff, Retry-After and a gap; repeated 429s stop the run */
+  const apNotion = notionApplicants.makeNotionApi((p, o) => notionFetch(p, o), extractNotionValue,
+    { timeoutMs: applicantsCfg.timeoutMs, maxRetries: applicantsCfg.maxRetries, minGapMs: applicantsCfg.minGapMs });
+  applicants = notionApplicants.createApplicants({
+    shared: applicantsShared,
+    loadWorkspace: async () => {
+      const doc = await loadWorkspaceDoc();
+      return doc ? { db: doc.db, settings: doc.settings || {}, revision: doc.revision || 0 } : null;
+    },
+    /* the same wrapper the autocreate job uses: always force:false */
+    saveWorkspace: notionAutocreate.makeSaveWorkspace(saveWorkspaceDoc),
+    queryRows: apNotion.queryRows, getPage: apNotion.getPage, getSchema: apNotion.getSchema,
+    loadState: async () => { const c = await apCol(); const row = c && await c.findOne({ _id: "state" }); return (row && row.state) || null; },
+    saveState: async (state) => {
+      const c = await apCol();
+      if (!c) throw new Error("no database connection");
+      await c.updateOne({ _id: "state" }, { $set: { state } }, { upsert: true });
+    },
+    saveLog: (entry) => applicantsLog.save(entry),
+    newId: (prefix) => prefix + Date.now().toString(36) + crypto.randomUUID().replace(/-/g, "").slice(0, 12),
+    maxCreate: applicantsCfg.maxCreate, maxRows: applicantsCfg.maxRows, pageSize: applicantsCfg.pageSize,
+    maxCampaigns: applicantsCfg.maxCampaigns, includeWrapped: applicantsCfg.includeWrapped,
+    manualMinSec: applicantsCfg.manualMinSec, docLimitFraction: applicantsCfg.docLimitFraction, docLimitBytes: applicantsCfg.docLimitBytes,
+    maxHeldRetry: applicantsCfg.maxHeldRetry,
+    dryRun: applicantsCfg.dryRun,
+    logger: console
+  });
+  const apTick = () => applicants.run({ trigger: "poll" })
+    .catch((e) => console.error("Notion applicants tick failed:", e && e.status ? "http-" + e.status : "error"));
+  setTimeout(apTick, 60000).unref();
+  setInterval(apTick, applicantsCfg.intervalMs).unref();
+  console.log("Notion applicants sync: ON, every %d min%s; caps %d new roster rows per run, %d rows per campaign.", applicantsCfg.intervalMin,
+    applicantsCfg.dryRun ? " (dry run: reads Notion, writes nothing)" : "", applicantsCfg.maxCreate, applicantsCfg.maxRows);
+}
+
+/* Staff: run now (POST, body { dryRun?: true, campaignId?: "<id>", rescan?: [...] }; at most one every
+   NOTION_APPLICANTS_MANUAL_MIN_SEC seconds) and read the status and the last runs (GET). A request can
+   only make a run MORE careful (dryRun true); it cannot turn the env dry run off. Both routes are
+   registered here so a test can mount them behind the real requireStaff. */
+notionApplicants.registerRoutes(app, requireStaff, () => ({ applicants, off: applicantsOff, cfg: applicantsCfg, logStore: applicantsLog }));
 
 /* ---------------- confirmed visit date: dashboard -> Notion row + Sheet row ----------------
    Both channels are OFF unless NOTION_DATE_WRITEBACK=1 / SHEET_DATE_WRITEBACK=1.
