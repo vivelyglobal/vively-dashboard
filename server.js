@@ -654,6 +654,19 @@ function publicUser(user) {
    set, so nothing downstream double-parses. */
 app.use("/api/webhooks/instagram", express.raw({ type: "*/*", limit: "1mb" }));
 
+/* The partner comment route is unauthenticated, so its body is capped at 8 KB
+   by its own parser, registered BEFORE the global 10 MB one. body-parser
+   enforces the limit while reading, so a chunked body (no content-length) is
+   cut off too, and the global parser then skips a request already parsed. */
+const partnerCommentParser = express.json({ limit: "8kb" });
+app.use("/api/partner/:token/comment", (req, res, next) => {
+  partnerCommentParser(req, res, (err) => {
+    if (!err) return next();
+    const tooBig = err.type === "entity.too.large" || err.status === 413;
+    res.status(tooBig ? 413 : 400).json({ error: tooBig ? "That comment is too large." : "That request could not be read." });
+  });
+});
+
 app.use(express.json({ limit: "10mb" }));
 
 /* The React build, served alongside the original single-file dashboard.
@@ -665,6 +678,46 @@ if (fs.existsSync(NEXT_DIR)) {
   app.use("/next", express.static(NEXT_DIR));
   app.get("/next/*", (req, res) => res.sendFile(path.join(NEXT_DIR, "index.html")));
 }
+
+/* express.static(__dirname) serves the repo root, which is where the server
+   source, tests, tools, docs and render.yaml live. The files stay where they
+   are (moving them is a production change), so the request path is checked
+   here, first, and anything unusual is refused.
+
+   The raw path is decoded ONCE (what express.static does), then refused if it
+   was malformed, held a backslash or NUL, or has a "." / ".." segment, which
+   a browser never sends but a script does ("/./server.js", "/x/../server.js").
+   EVERY segment, not just the first, is then compared with the deny set,
+   lowercased and with trailing dots and spaces stripped (Windows and macOS
+   disks ignore them), and any dotfile segment is refused. The name check is
+   skipped under /api/, whose segments are ids and tokens that static never
+   sees; the malformed and dot-segment checks still apply there.
+
+   This is deny-by-segment, not an allow-list: a new top-level file or folder
+   is public until it is added here. An allow-list was not done because the
+   served set (index.html, partner.html, book.html, dist/, and whatever else
+   a deployed page links) cannot be proven complete without a browser run, and
+   a wrong list breaks production. The proper fix is a public/ folder. */
+const STATIC_DENY_SEGMENT = new Set(["server.js", "server", "tests", "tools", "docs", "src", "data", "tmp",
+  "node_modules", "_to_delete", "architecture.md", "readme.md", "render.yaml", "package.json",
+  "package-lock.json", "vite.config.mjs"]);
+function staticDenied(rawPath) {
+  let p = String(rawPath || "");
+  try { p = decodeURIComponent(p); } catch (e) { return true; }
+  if (p.indexOf("\\") !== -1 || p.indexOf("\0") !== -1) return true;
+  const segs = p.split("/").filter((s) => s !== "");           /* "//" is harmless */
+  if (segs.some((s) => s === "." || s === "..")) return true;
+  if (segs[0] === "api") return false;
+  return segs.some((seg) => {
+    const norm = seg.toLowerCase().replace(/[. ]+$/, "");
+    /* ":" is refused too: NTFS alternate data streams (/server.js::$DATA) */
+    return seg.charAt(0) === "." || seg.indexOf(":") !== -1 || norm === "" || STATIC_DENY_SEGMENT.has(norm);
+  });
+}
+app.use((req, res, next) => {
+  if (staticDenied(req.path)) return res.status(404).type("text/plain").send("Not found");
+  next();
+});
 
 app.use(express.static(__dirname));
 
@@ -805,6 +858,15 @@ app.post("/api/workspace", requireStaff(async (req, res) => {
         console.error("Booking projection skipped on this save:", err.message);
       }
     }
+
+    /* Partner-link housekeeping, decided here and not in whichever browser
+       saved: a stable clientId on each link and on the campaigns it covers,
+       an expiry, and a revoked link stays revoked even if a stale browser
+       sends it back without the flag. */
+    const storedLinks = await col.findOne({ _id: WORKSPACE_ID }, { projection: { "db.partnerLinks": 1 } });
+    const stamped = stampPartnerClients(db, storedLinks && storedLinks.db && storedLinks.db.partnerLinks,
+      { ttlDays: PARTNER_LINK_TTL_DAYS });
+    if (stamped.revokedKept) console.warn("POST /api/workspace: kept %d revoked partner link(s) revoked.", stamped.revokedKept);
 
     const savedAt = new Date().toISOString();
     const nextRevision = currentRevision + 1;
@@ -1094,10 +1156,102 @@ async function loadWorkspaceDoc() {
   return col.findOne({ _id: WORKSPACE_ID });
 }
 
-function resolvePartnerToken(doc, token) {
+/* ---- partner link: lookup, expiry, tenant key ---------------------------
+
+   A link is a bearer credential, so three things are enforced HERE, on the
+   server, and never trusted from the browser that stored the link:
+     - it must not be revoked, and must not be past `expiresAt`;
+     - the token is compared in constant time, over every link (no early exit);
+     - the tenant is `clientId`, an opaque id minted by the server, not the
+       free-text `partner` label (a typo or rename used to merge tenants).
+
+   A link may carry `tokenHash` (sha256 hex of the token) instead of the
+   plaintext `token`; both are accepted. The staff dashboard still stores and
+   copies the plaintext token today, so nothing is hashed automatically. */
+const PARTNER_TOKEN_RE = /^[A-Za-z0-9_-]{8,128}$/;
+
+function sha256Hex(s) {
+  return crypto.createHash("sha256").update(String(s)).digest("hex");
+}
+
+function digestEq(aHex, bHex) {
+  const a = Buffer.from(String(aHex), "hex"), b = Buffer.from(String(bHex), "hex");
+  return a.length === 32 && a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/* Returns { partner, clientId, legacy } for a live link, else null. The
+   caller gets the same null for unknown, revoked and expired, so the page
+   cannot be used to ask which of the three it was. `now` is injectable so
+   expiry is testable. */
+function resolvePartnerToken(doc, token, now) {
+  if (typeof token !== "string" || !PARTNER_TOKEN_RE.test(token)) return null;
   const links = (doc && doc.db && doc.db.partnerLinks) || [];
-  const hit = links.find((l) => l.token === token && !l.revokedAt);
-  return hit ? hit.partner : null;
+  const want = sha256Hex(token);
+  const at = typeof now === "number" ? now : Date.now();
+  let hit = null;
+  for (const l of links) {           /* every link, every time: no early exit */
+    if (!l) continue;
+    const have = l.tokenHash || (typeof l.token === "string" ? sha256Hex(l.token) : "");
+    if (digestEq(want, have) && !hit) hit = l;
+  }
+  if (!hit || hit.revokedAt) return null;
+  /* a link with no label would otherwise match every campaign that has no
+     partner (the internal ones), so it is not a usable link at all */
+  if (typeof hit.partner !== "string" || !hit.partner.trim()) return null;
+  if (hit.expiresAt) {
+    const t = Date.parse(hit.expiresAt);
+    if (!Number.isFinite(t) || t <= at) return null;   /* unreadable date fails closed */
+  }
+  return { partner: hit.partner || "", clientId: hit.clientId || "", legacy: !hit.clientId };
+}
+
+/* Run on every staff save, server-side, so the tenant key does not depend on
+   which browser saved. It never invents access: it only (a) gives each link
+   a stable clientId, (b) stamps that id onto the campaigns whose label
+   already equals the link's label and which have no clientId yet, (c) gives a
+   link without an expiry one, and (d) refuses to let a stale browser un-revoke
+   a link the stored workspace already has revoked. `stored` is the links
+   currently in Mongo. */
+function stampPartnerClients(db, stored, opts) {
+  opts = opts || {};
+  const ttlMs = (opts.ttlDays || 90) * 86400000;
+  const nowMs = typeof opts.now === "number" ? opts.now : Date.now();
+  const mint = opts.mint || (() => "cl_" + crypto.randomBytes(12).toString("base64url"));
+  const links = Array.isArray(db.partnerLinks) ? db.partnerLinks : [];
+  const prior = Array.isArray(stored) ? stored : [];
+  const keyOf = (l) => l.tokenHash || (l.token ? sha256Hex(l.token) : "");
+  const priorByKey = new Map(prior.filter(Boolean).map((l) => [keyOf(l), l]));
+  const clientByLabel = new Map();
+  [...prior, ...links].forEach((l) => {
+    if (l && l.partner && l.clientId && !clientByLabel.has(l.partner)) clientByLabel.set(l.partner, l.clientId);
+  });
+  const out = { clientIds: 0, expiries: 0, revokedKept: 0, campaigns: 0 };
+  links.forEach((l) => {
+    if (!l || !l.partner) return;
+    const was = priorByKey.get(keyOf(l));
+    if (was && was.revokedAt && !l.revokedAt) { l.revokedAt = was.revokedAt; out.revokedKept++; }
+    /* a browser that loaded before these fields existed sends the link back
+       without them; the stored values win, or every save would re-mint the
+       id and push the expiry out another 90 days */
+    if (was && was.clientId && !l.clientId) l.clientId = was.clientId;
+    if (was && was.expiresAt && !l.expiresAt) l.expiresAt = was.expiresAt;
+    if (!l.clientId) {
+      if (!clientByLabel.has(l.partner)) clientByLabel.set(l.partner, mint());
+      l.clientId = clientByLabel.get(l.partner);
+      out.clientIds++;
+    }
+    if (!l.expiresAt && !l.revokedAt) {
+      l.expiresAt = new Date(nowMs + ttlMs).toISOString();
+      out.expiries++;
+    }
+  });
+  const liveLabels = new Set(links.filter((l) => l && l.partner && !l.revokedAt).map((l) => l.partner));
+  (db.campaigns || []).forEach((c) => {
+    if (!c || c.clientId || !c.partner || !liveLabels.has(c.partner)) return;
+    c.clientId = clientByLabel.get(c.partner);
+    out.campaigns++;
+  });
+  return out;
 }
 
 /* The slot the visit actually happens at, server-side.
@@ -1124,7 +1278,36 @@ function partnerContentUrl(db, p) {
   return (p.content && p.content.url) || "";
 }
 
-function buildPartnerRows(db, partner) {
+/* The ONLY fields that may leave on a partner row. The row is built, then
+   passed through this list, so a field added to the builder by mistake still
+   does not ship. Deliberately NOT here: email, phone / Kakao, address, gender,
+   nationality, payout, fee, note, otherSns, formNotes, creatorId and any
+   Notion url. To widen what a brand sees, add a name here and in the leak
+   test (tests/partner.test.mjs) in the same change. */
+const PARTNER_ROW_FIELDS = ["pid", "campaign", "creator", "handle", "igUrl", "visitDate", "visitTime",
+  "status", "followers", "remark", "headcount", "contentUrl"];
+const PARTNER_CAMPAIGN_FIELDS = ["id", "brand", "name", "start", "end"];
+const PARTNER_STATUS_FIELDS = ["key", "ko", "en", "tone"];
+
+function pickFields(obj, fields) {
+  const o = {};
+  fields.forEach((k) => { if (obj[k] !== undefined) o[k] = obj[k]; });
+  return o;
+}
+
+/* Only http(s) links leave: a stored "javascript:" value must not become an
+   href on a brand's screen. */
+function partnerSafeUrl(u) {
+  const s = String(u || "").trim();
+  return /^https?:\/\//i.test(s) ? s : "";
+}
+
+/* clientId is the tenant key. When given, a campaign belongs to this link
+   only if its own clientId is the same AND its label still matches, so a
+   renamed, retyped or cleared label hides the campaign instead of moving it
+   to someone else. When absent (a legacy link not yet stamped by a staff
+   save) it falls back to the label alone, which is the old behaviour. */
+function buildPartnerRows(db, partner, clientId) {
   const byCreator = Object.fromEntries((db.creators || []).map((c) => [c.id, c]));
   const byCampaign = Object.fromEntries((db.campaigns || []).map((c) => [c.id, c]));
   const all = db.campaigns || [];
@@ -1134,10 +1317,14 @@ function buildPartnerRows(db, partner) {
      id is dropped from BOTH partners' views. Showing nothing is recoverable;
      showing one partner another's creators is not. */
   const owners = {};
-  all.forEach((c) => { (owners[c.id] = owners[c.id] || new Set()).add(c.partner || ""); });
+  all.forEach((c) => { (owners[c.id] = owners[c.id] || new Set()).add((c.clientId || "") + "|" + (c.partner || "")); });
   const contested = new Set(Object.keys(owners).filter((id) => owners[id].size > 1));
 
-  const mine = all.filter((c) => (c.partner || "") === partner && !contested.has(c.id));
+  /* an empty label never matches: "" would equal every unassigned campaign */
+  const isMine = (c) => !partner ? false : clientId
+    ? c.clientId === clientId && (c.partner || "") === partner
+    : (c.partner || "") === partner;
+  const mine = all.filter((c) => isMine(c) && !contested.has(c.id));
   const ids = new Set(mine.map((c) => c.id));
 
   /* A creator still awaiting brand approval is not shown at all. They are a
@@ -1152,31 +1339,22 @@ function buildPartnerRows(db, partner) {
     const st = partnerStatusOf(p);
     const m = partnerVisitSlot(p).match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{1,2}:\d{2}))?/);
     const handle = cr.handle || "";
-    return {
+    const handleBare = String(handle).replace(/^@/, "");
+    const fol = Number(cr.followers);
+    return pickFields({
       pid: p.id,
       campaign: cp.brand || "",
-      creator: p.fullName || cr.name || handle,
+      creator: p.fullName || cr.name || handle,   /* name is shown today; see report: founder decision */
       handle,
-      igUrl: handle ? "https://www.instagram.com/" + String(handle).replace(/^@/, "") + "/" : "",
+      igUrl: handleBare ? "https://www.instagram.com/" + encodeURIComponent(handleBare) + "/" : "",
       visitDate: m ? m[1] : "",
       visitTime: m && m[2] ? m[2] : "",
-      email: cr.email || "",
-      status: st,
-      gender: cr.gender || "",
-      followers: cr.followers || 0,
+      status: pickFields(st, PARTNER_STATUS_FIELDS),
+      followers: Number.isFinite(fol) && fol > 0 ? fol : 0,
       remark: p.remark || "",
       headcount: p.headcount || "",
-      contentUrl: partnerContentUrl(db, p),
-      nationality: p.nationality || cr.nationality || cr.country || ""
-      /* Deliberately absent: cr.payout, p.note, p.fee, p.address, the Kakao
-         ID, the accept/reject message, and every campaign that is not this
-         partner's.
-         Also gone: otherSns and formNotes. The partner view stopped showing
-         them, and a field nobody reads is a field that should not be leaving
-         — a creator's other handles in particular are roster data, not
-         booking data. Anything the partner genuinely needs to know about a
-         guest belongs in `remark`, which is still here and still shown. */
-    };
+      contentUrl: partnerSafeUrl(partnerContentUrl(db, p))
+    }, PARTNER_ROW_FIELDS);
   });
 
   rows.sort((a, b) => (a.visitDate || "9999").localeCompare(b.visitDate || "9999") ||
@@ -1185,7 +1363,7 @@ function buildPartnerRows(db, partner) {
   const withheld = (db.participants || []).filter((p) => ids.has(p.campaignId))
     .filter((p) => partnerWithholds(partnerStatusOf(p))).length;
   return { partner, withheld, contested: [...contested],
-    campaigns: mine.map((c) => ({ id: c.id, brand: c.brand, name: c.name, start: c.start, end: c.end })), rows };
+    campaigns: mine.map((c) => pickFields(c, PARTNER_CAMPAIGN_FIELDS)), rows };
 }
 
 async function partnerCommentsCollection() {
@@ -1194,18 +1372,96 @@ async function partnerCommentsCollection() {
   return client.db(MONGODB_DB).collection("partner_comments");
 }
 
+/* The partner page and API carry a bearer token in the URL, so none of it may
+   be cached, framed, indexed or leaked through a Referer header. Applied to
+   the error responses too, because it is set before the route runs.
+   "/api/partner" matches "/api/partner/..." only, not the staff
+   "/api/partner-comments". */
+function partnerHeaders(req, res, next) {
+  res.set({
+    "Cache-Control": "no-store, max-age=0",
+    "Pragma": "no-cache",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "frame-ancestors 'none'",
+    "X-Content-Type-Options": "nosniff",
+    "X-Robots-Tag": "noindex, nofollow"
+  });
+  next();
+}
+app.use("/api/partner", partnerHeaders);
+app.use("/partner", partnerHeaders);
+
+/* Same limiter the booking routes use (in memory: right for one Render
+   instance). Per IP first, then per token, so one link cannot be hammered
+   from many addresses and one address cannot hammer many links. The token
+   key is a hash, so no token sits in memory or in a log. The IP comes from
+   x-forwarded-for exactly as booking-routes.js does, which a caller can
+   spoof; the per-token limit is the backstop that does not depend on it. */
+const partnerReadIp = bookingRoutes.rateLimiter({ windowMs: 60000, max: 60 });
+const partnerReadTok = bookingRoutes.rateLimiter({ windowMs: 60000, max: 30 });
+const partnerWriteIp = bookingRoutes.rateLimiter({ windowMs: 60000, max: 20 });
+const partnerWriteTok = bookingRoutes.rateLimiter({ windowMs: 60000, max: 10 });
+const PARTNER_LINK_TTL_DAYS = Math.min(365, Math.max(1, Number(process.env.PARTNER_LINK_TTL_DAYS) || 90));
+const PARTNER_AUTHOR_MAX = 60;
+const PARTNER_TEXT_MAX = 1500;
+
+/* The caller's address for the limiter. x-forwarded-for is "client-supplied
+   entries..., then one entry appended by each proxy we trust", so the FIRST
+   entry is whatever the caller typed and is never used. We count from the
+   RIGHT: with N trusted proxy hops (PARTNER_PROXY_HOPS, default 1: Render's
+   edge appends the address it saw) the entry N from the end is the first one
+   a proxy of ours vouched for. No header, or fewer entries than hops, means
+   the request did not come through the proxy, so the socket address is used.
+   Not set app-wide with app.set("trust proxy"), because that also changes
+   req.secure / req.protocol, which the login cookie code decides on.
+   ASSUMED: one hop. render.yaml and docs do not state Render's chain; if
+   there is a second hop in front, every caller shares one bucket (over-
+   limiting, never under-limiting) until PARTNER_PROXY_HOPS is raised. */
+const PARTNER_PROXY_HOPS = Math.min(5, Math.max(1, Math.floor(Number(process.env.PARTNER_PROXY_HOPS)) || 1));
+function partnerClientIp(req) {
+  const parts = String(req.headers["x-forwarded-for"] || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const sock = (req.socket && req.socket.remoteAddress) || "unknown";
+  if (parts.length >= PARTNER_PROXY_HOPS) return parts[parts.length - PARTNER_PROXY_HOPS].slice(0, 64);
+  return sock;
+}
+
+/* true (and answered) when the caller is over a limit */
+function partnerLimited(req, res, ipLimit, tokLimit) {
+  const ok = ipLimit("p|" + partnerClientIp(req)) &&
+    (!PARTNER_TOKEN_RE.test(String(req.params.token || "")) ||
+     tokLimit("p|" + sha256Hex(req.params.token).slice(0, 24)));
+  if (ok) return false;
+  res.set("Retry-After", "60");
+  res.status(429).json({ error: "Too many requests. Please wait a minute and try again." });
+  return true;
+}
+
+/* one clean text field: a string, no control characters, capped */
+function partnerClean(v, max) {
+  return typeof v === "string" ? v.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").trim().slice(0, max) : "";
+}
+
 app.get("/api/partner/:token", async (req, res) => {
+  if (partnerLimited(req, res, partnerReadIp, partnerReadTok)) return;
   if (!MONGODB_URI) return res.status(503).json({ error: "Not configured." });
   try {
     const doc = await loadWorkspaceDoc();
-    const partner = resolvePartnerToken(doc, req.params.token);
-    if (!partner) return res.status(404).json({ error: "This link is not valid, or has been turned off." });
-    const payload = buildPartnerRows(doc.db || {}, partner);
+    const link = resolvePartnerToken(doc, req.params.token);
+    if (!link) return res.status(404).json({ error: "This link is not valid, or has been turned off." });
+    if (link.legacy) console.warn("Partner link served on the label only (no clientId yet): save the workspace once from the dashboard.");
+    const payload = buildPartnerRows(doc.db || {}, link.partner, link.clientId);
     const col = await partnerCommentsCollection();
-    const comments = col ? await col.find({ partner }).sort({ at: 1 }).toArray() : [];
-    payload.comments = comments.map((c) => ({ pid: c.pid, text: c.text, author: c.author, at: c.at }));
+    /* comments follow the tenant key too; ones written before clientId existed
+       are matched on the label, as they always were */
+    const mine = link.clientId
+      ? { $or: [{ clientId: link.clientId }, { partner: link.partner, clientId: { $exists: false } }] }
+      : { partner: link.partner };
+    const comments = col ? await col.find(mine).sort({ at: 1 }).limit(1000).toArray() : [];
+    const visible = new Set(payload.rows.map((r) => r.pid));
+    payload.comments = comments.filter((c) => visible.has(c.pid))
+      .map((c) => ({ pid: c.pid, text: c.text, author: c.author, at: c.at }));
     payload.updatedAt = doc.savedAt || null;
-    res.set("X-Robots-Tag", "noindex, nofollow");
     return res.json({ ok: true, ...payload });
   } catch (err) {
     console.error("GET /api/partner failed:", err.message);
@@ -1218,20 +1474,26 @@ app.get("/api/partner/:token", async (req, res) => {
    partner's comment into it would collide with whoever has the dashboard
    open — and a comment is not worth a save conflict. */
 app.post("/api/partner/:token/comment", async (req, res) => {
+  if (partnerLimited(req, res, partnerWriteIp, partnerWriteTok)) return;
   if (!MONGODB_URI) return res.status(503).json({ error: "Not configured." });
-  const text = String((req.body || {}).text || "").trim().slice(0, 2000);
-  const pid = String((req.body || {}).pid || "");
-  const author = String((req.body || {}).author || "").trim().slice(0, 80);
+  if (Number(req.headers["content-length"] || 0) > 8192) {
+    return res.status(413).json({ error: "That comment is too large." });
+  }
+  const b = req.body || {};
+  const text = partnerClean(b.text, PARTNER_TEXT_MAX);
+  const pid = partnerClean(b.pid, 120);
+  const author = partnerClean(b.author, PARTNER_AUTHOR_MAX);
   if (!text || !pid) return res.status(400).json({ error: "A comment and a row are both required." });
   try {
     const doc = await loadWorkspaceDoc();
-    const partner = resolvePartnerToken(doc, req.params.token);
-    if (!partner) return res.status(404).json({ error: "This link is not valid, or has been turned off." });
+    const link = resolvePartnerToken(doc, req.params.token);
+    if (!link) return res.status(404).json({ error: "This link is not valid, or has been turned off." });
     /* only against a row this partner can actually see */
-    const known = buildPartnerRows(doc.db || {}, partner).rows.some((r) => r.pid === pid);
+    const known = buildPartnerRows(doc.db || {}, link.partner, link.clientId).rows.some((r) => r.pid === pid);
     if (!known) return res.status(400).json({ error: "Unknown row." });
     const col = await partnerCommentsCollection();
-    const entry = { partner, pid, text, author: author || "Partner", at: new Date().toISOString(), read: false };
+    const entry = { partner: link.partner, pid, text, author: author || "Partner", at: new Date().toISOString(), read: false };
+    if (link.clientId) entry.clientId = link.clientId;
     await col.insertOne(entry);
     return res.json({ ok: true, comment: { pid, text, author: entry.author, at: entry.at } });
   } catch (err) {
@@ -1264,7 +1526,6 @@ app.post("/api/partner-comments/read", requireStaff(async (req, res) => {
 }));
 
 app.get("/partner/:token", (req, res) => {
-  res.set("X-Robots-Tag", "noindex, nofollow");
   res.sendFile(path.join(__dirname, "partner.html"));
 });
 

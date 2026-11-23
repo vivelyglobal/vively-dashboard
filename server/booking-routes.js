@@ -40,20 +40,29 @@ const newId = (p) => p + "_" + crypto.randomBytes(9).toString("base64url");
    not matter for what this is defending against. */
 function rateLimiter(opts) {
   const windowMs = opts.windowMs, max = opts.max;
+  const maxKeys = opts.maxKeys || 20000;
   const hits = new Map();
-  return function check(key) {
+  let sweptSlot = -1;
+  const check = function check(key) {
     const now = Date.now();
     const slot = Math.floor(now / windowMs);
-    const k = slot + "|" + key;
-    /* the previous window's keys are dead weight; drop them lazily so
-       there is no timer to leak on a process that never restarts */
-    if (hits.size > 5000) {
+    const k = slot + "|" + String(key).slice(0, 128);
+    /* the previous window's keys are dead weight; drop them lazily (once per
+       window) so there is no timer to leak on a process that never restarts */
+    if (sweptSlot !== slot) {
+      sweptSlot = slot;
       hits.forEach((_, old) => { if (+String(old).split("|")[0] < slot) hits.delete(old); });
     }
+    /* hard cap: inside one window a flood of distinct keys cannot grow the
+       map without bound. Oldest-inserted keys go first (Map keeps insertion
+       order); losing a counter only ever lets that one key start again. */
+    while (hits.size >= maxKeys && !hits.has(k)) hits.delete(hits.keys().next().value);
     const n = (hits.get(k) || 0) + 1;
     hits.set(k, n);
     return n <= max;
   };
+  check.size = () => hits.size;
+  return check;
 }
 
 const ipOf = (req) =>

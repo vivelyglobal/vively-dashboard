@@ -3,19 +3,21 @@
 import express from 'express';
 import fs from 'fs';
 import vm from 'vm';
+import crypto from 'crypto';
 import { chromium } from 'playwright';
 
 const seed = JSON.parse(fs.readFileSync('tmp/seed.json', 'utf8')).db;
 const src = fs.readFileSync('server.js', 'utf8');
-const ctx = vm.createContext({ Object, String, Set, RegExp, Math, console });
+const ctx = vm.createContext({ Object, String, Set, RegExp, Math, console, crypto, Buffer, Map, Number });
 vm.runInContext(src.slice(src.indexOf('const PARTNER_STATUS = {'), src.indexOf('async function partnerCommentsCollection')) +
-  '\nthis.api = { buildPartnerRows };', ctx);
-const { buildPartnerRows } = ctx.api;
+  '\nthis.api = { buildPartnerRows, resolvePartnerToken };', ctx);
+const { buildPartnerRows, resolvePartnerToken } = ctx.api;
 
 const comments = [];
 const app = express();
 app.use(express.json());
-const resolve = (t) => (seed.partnerLinks.find((l) => l.token === t && !l.revokedAt) || {}).partner || null;
+/* the real resolver (expiry, revoke, constant-time); returns the partner label */
+const resolve = (t) => (resolvePartnerToken({ db: seed }, t) || {}).partner || null;
 
 app.get('/api/partner/:token', (q, r) => {
   const partner = resolve(q.params.token);
@@ -65,18 +67,21 @@ await step('it shows only SPLABAB campaigns', async () => {
 
 await step('nothing sensitive is anywhere in the delivered page', async () => {
   const html = await p.content();
-  for (const secret of ['INTERNAL ONLY', '비밀주소', '110-234-5678', 'payout', 'Glowbe'])
+  /* creator emails are in the seed and must not be anywhere in the page */
+  const emails = [...new Set(seed.creators.map((c) => c.email).filter(Boolean))];
+  for (const secret of ['INTERNAL ONLY', '비밀주소', '110-234-5678', 'payout', 'Glowbe', ...emails])
     if (html.includes(secret)) throw new Error(`"${secret}" is present in the page`);
 });
 
 await step('the columns the POC asked for are all there', async () => {
   const heads = await p.$$eval('th', (n) => n.map((x) => x.textContent.replace(/\s+/g, ' ').trim()));
-  for (const want of ['크리에이터', '방문 일정', '예약 시간', '인원수', 'Email', 'IG 팔로워수', '성별', '국적', '참고'])
+  for (const want of ['크리에이터', '방문 일정', '예약 시간', '인원수', 'IG 팔로워수', '참고'])
     if (!heads.some((h) => h.includes(want))) throw new Error('missing column: ' + want + ' | ' + heads.join(' / '));
   /* Other SNS and Notes were empty on every row of a real link, so they
      went — from the page and from the payload behind it. 참고 / Remark is
      the column that carries anything the partner needs to know. */
-  for (const gone of ['Kakao', 'Message', 'Other SNS', 'Notes'])
+  /* Email, gender and nationality left the payload on 2026-11-23 (security review) */
+  for (const gone of ['Kakao', 'Message', 'Other SNS', 'Notes', 'Email', '성별', 'Gender', '국적', 'Nationality'])
     if (heads.some((h) => h.includes(gone))) throw new Error(gone + ' should have been removed');
 });
 
