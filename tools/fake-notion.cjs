@@ -10,11 +10,41 @@ const OPTIONS = ['Waiting Approval', 'Confirmed', 'Brand Rejected', 'Brand Accep
 const pages = {};      // pageId -> { Status }
 const writes = [];
 
+/* Date write-back support. /__page seeds { id, properties:{Name:{type}}, archived? };
+   a date PATCH needs the property to exist and be a date, as the real API does.
+   /__fail makes the next N calls (optionally only one method) answer a status. */
+const pageProps = {};     // pageId -> { archived, properties: { Name: { type, date? } } }
+let failPlan = null;
+app.post('/__page', (q, r) => { const b = q.body || {}; pageProps[b.id] = { archived: !!b.archived, properties: b.properties || {} }; r.json({ ok: true }); });
+app.post('/__fail', (q, r) => { failPlan = q.body && q.body.status ? { status: q.body.status, times: q.body.times || 1, method: q.body.method || null } : null; r.json({ ok: true }); });
+const planned = (q) => {
+  if (!failPlan || (failPlan.method && failPlan.method !== q.method)) return null;
+  const s = failPlan.status; if (--failPlan.times <= 0) failPlan = null; return s;
+};
+app.get('/v1/pages/:id', (q, r) => {
+  const f = planned(q); if (f) return r.status(f).json({ message: 'forced ' + f });
+  const pg = pageProps[q.params.id];
+  if (!pg) return r.status(404).json({ message: 'Could not find page' });
+  r.json({ object: 'page', id: q.params.id, archived: pg.archived, in_trash: false, properties: pg.properties });
+});
+
 app.patch('/v1/pages/:id', (q, r) => {
   const props = (q.body || {}).properties || {};
   const [name, shape] = Object.entries(props)[0] || [];
-  writes.push({ id: q.params.id, name, shape });
+  writes.push({ id: q.params.id, name, shape, names: Object.keys(props) });
   if (!name) return r.status(400).json({ message: 'No property given' });
+  if (shape && shape.date !== undefined) {
+    const f = planned(q); if (f) return r.status(f).json({ message: 'forced ' + f });
+    const pg = pageProps[q.params.id];
+    if (!pg) return r.status(404).json({ message: 'Could not find page' });
+    const cur = pg.properties[name];
+    if (!cur) return r.status(400).json({ message: name + ' is not a property that exists.' });
+    if (cur.type !== 'date') return r.status(400).json({ message: name + ' is expected to be ' + cur.type + '.' });
+    const d = shape.date || {};
+    const seoul = d.time_zone === 'Asia/Seoul' && d.start.length > 10;
+    cur.date = { start: seoul ? d.start + '.000+09:00' : d.start, end: null, time_zone: d.time_zone || null };
+    return r.json({ object: 'page', id: q.params.id });
+  }
   if (shape.select) {
     /* the real API refuses a select payload for a status column */
     return r.status(400).json({ message: `${name} is expected to be status.` });
@@ -89,8 +119,8 @@ app.get('/v1/blocks/:id/children', (q, r) => {
   r.json({ object: 'list', results: slice, has_more: more, next_cursor: more ? String(from + size) : null });
 });
 
-app.get('/__state', (q, r) => r.json({ pages, writes, sources: Object.keys(form) }));
-app.post('/__reset', (q, r) => { Object.keys(pages).forEach((k) => delete pages[k]); writes.length = 0; form = {}; blocks = {}; r.json({ ok: true }); });
+app.get('/__state', (q, r) => r.json({ pages, writes, sources: Object.keys(form), pageProps }));
+app.post('/__reset', (q, r) => { Object.keys(pages).forEach((k) => delete pages[k]); Object.keys(pageProps).forEach((k) => delete pageProps[k]); failPlan = null; writes.length = 0; form = {}; blocks = {}; r.json({ ok: true }); });
 
 /* the port is overridable so a test can pick a free one; 3466 stays the default */
 const PORT = Number(process.env.FAKE_NOTION_PORT) || 3466;

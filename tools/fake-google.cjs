@@ -97,8 +97,77 @@ app.delete('/calendar/v3/calendars/:cal/events/:id', auth, (req, res) => {
 
 /* test-harness hooks, not part of Google's API */
 app.get('/__state', (q, r) => r.json({ count: events.size, ids: [...events.keys()], events: [...events.values()], calls }));
-app.post('/__reset', (q, r) => { events.clear(); calls.length = 0; failNext = null; r.json({ ok: true }); });
+app.post('/__reset', (q, r) => { events.clear(); calls.length = 0; failNext = null; Object.keys(sheets).forEach((k) => delete sheets[k]); sheetLog.reads.length = 0; sheetLog.writes.length = 0; sheetFail = null; r.json({ ok: true }); });
 app.post('/__fail', (q, r) => { failNext = q.body.status; r.json({ ok: true }); });
 app.post('/__seed', (q, r) => { events.set(q.body.id, q.body); r.json({ ok: true }); });
 
-app.listen(3455, () => console.log('fake google on 3455'));
+/* ---- Sheets (date write-back). /__sheet seeds { id, tabs: { Title: [[cell,...],...] } }.
+   Records every read range and every write so a test can prove which cells
+   were touched. Rows are arrays of cells; a column read returns one entry per
+   row, trailing blanks trimmed like the real API. */
+const sheets = {};
+const sheetLog = { reads: [], writes: [] };
+let sheetFail = null;
+app.post('/__sheet', (q, r) => { sheets[q.body.id] = { tabs: q.body.tabs || {} }; r.json({ ok: true }); });
+app.post('/__sheetfail', (q, r) => { sheetFail = q.body && q.body.status ? { status: q.body.status, times: q.body.times || 1, method: q.body.method || null } : null; r.json({ ok: true }); });
+app.get('/__sheetstate', (q, r) => r.json({ sheets, log: sheetLog }));
+const colNum = (L) => L.split('').reduce((a, ch) => a * 26 + ch.charCodeAt(0) - 64, 0);
+const parseRange = (rg) => {
+  const m = String(rg).match(/^'((?:[^']|'')+)'!([A-Z]+)(\d+)?(?::([A-Z]+)(\d+)?)?$/);
+  if (m) return { tab: m[1].replace(/''/g, "'"), col: m[2], row: m[3] ? +m[3] : null, endCol: m[4] || null, endRow: m[5] ? +m[5] : null };
+  const r = String(rg).match(/^'((?:[^']|'')+)'!A(\d+):ZZ(\d+)$/);   // a whole header row
+  return r && r[2] === r[3] ? { tab: r[1].replace(/''/g, "'"), col: "A", row: +r[2], endCol: "ZZ", endRow: +r[2], wholeRow: true } : null;
+};
+const sheetPlanned = (method) => {
+  if (!sheetFail || (sheetFail.method && sheetFail.method !== method)) return null;
+  const s = sheetFail.status; if (--sheetFail.times <= 0) sheetFail = null; return s;
+};
+app.get('/v4/spreadsheets/:id', auth, (req, res) => {
+  const f = sheetPlanned('GET'); if (f) return res.status(f).json({ error: { message: 'forced ' + f } });
+  const sh = sheets[req.params.id];
+  if (!sh) return res.status(404).json({ error: { message: 'Requested entity was not found.' } });
+  res.json({ sheets: Object.keys(sh.tabs).map((t) => ({ properties: { title: t } })) });
+});
+app.get(/^\/v4\/spreadsheets\/([^/]+)\/values:batchGet$/, auth, (req, res) => {
+  const f = sheetPlanned('GET'); if (f) return res.status(f).json({ error: { message: 'forced ' + f } });
+  const sh = sheets[req.params[0]];
+  if (!sh) return res.status(404).json({ error: { message: 'Requested entity was not found.' } });
+  const ranges = [].concat(req.query.ranges || []);
+  const valueRanges = ranges.map((rg) => {
+    sheetLog.reads.push(rg);
+    const p = parseRange(rg);
+    const rows = p && sh.tabs[p.tab];
+    if (!rows) return { range: rg };
+    const ci = colNum(p.col) - 1;
+    if (p.wholeRow || (p.col === "A" && p.endCol === "ZZ" && p.row && p.row === p.endRow)) {            // one row, A..ZZ, trailing blanks trimmed
+      const cells = (rows[p.row - 1] || []).map((c) => (c == null ? "" : String(c)));
+      while (cells.length && cells[cells.length - 1] === "") cells.pop();
+      return cells.length ? { range: rg, majorDimension: "ROWS", values: [cells] } : { range: rg };
+    }
+    if (p.row && !p.endCol) {    // a single cell
+      const v = rows[p.row - 1] && rows[p.row - 1][ci];
+      return v == null || v === "" ? { range: rg } : { range: rg, majorDimension: "ROWS", values: [[String(v)]] };
+    }
+    const col = rows.map((row) => (row[ci] == null ? '' : row[ci]));
+    while (col.length && col[col.length - 1] === '') col.pop();
+    return { range: rg, majorDimension: 'ROWS', values: col.map((c) => (c === '' ? [] : [c])) };
+  });
+  res.json({ spreadsheetId: req.params[0], valueRanges });
+});
+app.put(/^\/v4\/spreadsheets\/([^/]+)\/values\/(.+)$/, auth, (req, res) => {
+  const f = sheetPlanned('PUT'); if (f) return res.status(f).json({ error: { message: 'forced ' + f } });
+  const sh = sheets[req.params[0]];
+  const rg = decodeURIComponent(req.params[1]);
+  sheetLog.writes.push({ id: req.params[0], range: rg, valueInputOption: req.query.valueInputOption, values: (req.body || {}).values });
+  const p = parseRange(rg);
+  if (!sh || !p || !sh.tabs[p.tab] || !p.row) return res.status(400).json({ error: { message: 'Unable to parse range: ' + rg } });
+  const rows = sh.tabs[p.tab];
+  const ci = colNum(p.col) - 1;
+  while (rows.length < p.row) rows.push([]);
+  while (rows[p.row - 1].length <= ci) rows[p.row - 1].push('');
+  rows[p.row - 1][ci] = String(req.body.values[0][0]);
+  res.json({ spreadsheetId: req.params[0], updatedRange: rg, updatedCells: 1 });
+});
+
+const GPORT = Number(process.env.FAKE_GOOGLE_PORT) || 3455;
+app.listen(GPORT, () => console.log('fake google on ' + GPORT));

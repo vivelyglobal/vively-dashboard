@@ -103,6 +103,8 @@ const bookingRoutes = require("./server/booking-routes.js");
 const sheetProxy = require("./server/sheet-proxy.js");
 const notionAutocreate = require("./server/notion-autocreate.js");
 const { writeWorkspaceCas } = require("./server/workspace-cas.js");
+const dateWritebackLib = require("./server/date-writeback.js");
+const sheetsClient = require("./server/sheets-client.js");
 
 /* ------------------------------------------------------------------
    Who is allowed into the workspace.
@@ -221,7 +223,11 @@ async function notionFetch(path, opts) {
   }, opts || {}));
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error((body && body.message) || `Notion responded ${res.status}`);
+    /* the status rides along so a caller can tell a retryable failure (429, 5xx)
+       from a permanent one; the message is unchanged */
+    const err = new Error((body && body.message) || `Notion responded ${res.status}`);
+    err.status = res.status;
+    throw err;
   }
   return body;
 }
@@ -427,14 +433,16 @@ function googleCredentials() {
 const b64url = (buf) => Buffer.from(buf).toString("base64")
   .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
-let gcalToken = null;   // { value, expiresAt }
+const gcalTokens = new Map();   // scope -> { value, expiresAt }
 
 /* Service accounts authenticate by signing a short-lived assertion with
    their private key and trading it for an access token. No library — it
    is a signature and one POST, and this keeps the dependency list at
    express + mongodb. */
-async function googleAccessToken() {
-  if (gcalToken && gcalToken.expiresAt > Date.now() + 60000) return gcalToken.value;
+async function googleAccessToken(scope) {
+  const wantScope = scope || GCAL_SCOPE;
+  const cached = gcalTokens.get(wantScope);
+  if (cached && cached.expiresAt > Date.now() + 60000) return cached.value;
   const key = googleCredentials();
   if (!key) return null;
 
@@ -442,7 +450,7 @@ async function googleAccessToken() {
   const header = b64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
   const claim = b64url(JSON.stringify({
     iss: key.client_email,
-    scope: GCAL_SCOPE,
+    scope: wantScope,
     aud: key.token_uri || "https://oauth2.googleapis.com/token",
     iat: now,
     exp: now + 3600
@@ -464,8 +472,8 @@ async function googleAccessToken() {
     const detail = body.error_description || body.error || `token endpoint responded ${res.status}`;
     throw new Error("Google refused the service account key — " + detail);
   }
-  gcalToken = { value: body.access_token, expiresAt: Date.now() + (body.expires_in || 3600) * 1000 };
-  return gcalToken.value;
+  gcalTokens.set(wantScope, { value: body.access_token, expiresAt: Date.now() + (body.expires_in || 3600) * 1000 });
+  return body.access_token;
 }
 
 async function gcalFetch(path, opts) {
@@ -792,6 +800,10 @@ app.get("/api/workspace/meta", requireStaff(async (req, res) => {
    bookings through it so a stale client cannot un-book anybody. */
 let bookingApi = null;
 
+/* The confirmed-visit-date write-back job (Notion row and campaign Sheet).
+   Null unless a flag switches it on; see the wiring block further down. */
+let dateWriteback = null;
+
 /* The guarded save, shared by the Save button's route and the server-side
    Notion autocreate job, so both go through the same empty-workspace
    guard, revision check, booking projection and partner-link stamping.
@@ -898,6 +910,8 @@ app.post("/api/workspace", requireStaff(async (req, res) => {
   }
 
   const out = await saveWorkspaceDoc(req.body);
+  /* look at visit dates a few seconds from now; not awaited, cannot fail the save */
+  if (out.status === 200 && dateWriteback) { try { dateWriteback.notifySaved(); } catch (e) { /* never affects a save */ } }
   return res.status(out.status).json(out.json);
 }));
 
@@ -1078,6 +1092,137 @@ app.get("/api/notion/autocreate/status", requireStaff(async (req, res) => {
       const row = client && await client.db(MONGODB_DB).collection("notion_autocreate_log").findOne({ _id: "last" });
       last = (row && row.entry) || null;
     } catch (err) { console.error("Notion autocreate status read failed:", err.message); }
+  }
+  return res.json({ ok: true, ...base, last });
+}));
+
+/* ---------------- confirmed visit date: dashboard -> Notion row + Sheet row ----------------
+   Both channels are OFF unless NOTION_DATE_WRITEBACK=1 / SHEET_DATE_WRITEBACK=1.
+   Logic, formats and safety rules are in server/date-writeback.js and
+   server/sheets-client.js; this is only the wiring. The job only READS the
+   workspace (it never saves it) and writes one Notion date property and one
+   Sheet column. It reuses the existing service account (no second credential)
+   for the Sheet and NOTION_TOKEN for Notion. */
+const dwCfg = dateWritebackLib.parseConfig(process.env);
+const dwOff = { notion: "", sheet: "" };
+let dwSheets = null;
+if (dwCfg.notion.requested) {
+  if (!NOTION_TOKEN) dwOff.notion = "NOTION_TOKEN is not set";
+  else if (!MONGODB_URI) dwOff.notion = "MONGODB_URI is not set";
+  else if (dwCfg.notion.propertyError) dwOff.notion = dwCfg.notion.propertyError;
+} else dwOff.notion = "NOTION_DATE_WRITEBACK is not 1";
+if (dwCfg.sheet.requested) {
+  if (!GOOGLE_SERVICE_ACCOUNT) dwOff.sheet = "GOOGLE_SERVICE_ACCOUNT is not set";
+  else if (!MONGODB_URI) dwOff.sheet = "MONGODB_URI is not set";
+  else if (!sheetsClient.parseSpreadsheetId(dwCfg.sheet.spreadsheetRaw)) dwOff.sheet = "SHEET_WRITEBACK_SPREADSHEET_ID is missing or not a spreadsheet id";
+  else {
+    dwSheets = sheetsClient.makeSheetsClient({
+      spreadsheetId: dwCfg.sheet.spreadsheetRaw,
+      apiBase: process.env.GOOGLE_SHEETS_API || "https://sheets.googleapis.com/v4",
+      getToken: (scope) => googleAccessToken(scope)
+    });
+  }
+} else dwOff.sheet = "SHEET_DATE_WRITEBACK is not 1";
+dwCfg.notion.enabled = dwCfg.notion.requested && !dwOff.notion;
+dwCfg.sheet.enabled = dwCfg.sheet.requested && !dwOff.sheet;
+if (dwCfg.notion.requested && dwOff.notion) console.error("Notion date write-back stays off: " + dwOff.notion + ".");
+if (dwCfg.sheet.requested && dwOff.sheet) console.error("Sheet date write-back stays off: " + dwOff.sheet + ".");
+
+if (dwCfg.notion.enabled || dwCfg.sheet.enabled) {
+  const dwCol = async () => { const c = await getMongoClient(); return c ? c.db(MONGODB_DB).collection("date_writeback_log") : null; };
+  dateWriteback = dateWritebackLib.createDateWriteback({
+    config: dwCfg,
+    loadWorkspace: async () => {
+      const doc = await loadWorkspaceDoc();
+      return doc && doc.db ? { db: doc.db } : null;
+    },
+    loadState: async () => { const c = await dwCol(); const row = c && await c.findOne({ _id: "state" }); return (row && row.state) || null; },
+    saveState: async (state) => {
+      const c = await dwCol();
+      if (!c) throw new Error("no database connection");
+      await c.updateOne({ _id: "state" }, { $set: { state } }, { upsert: true });
+    },
+    saveLog: async (entry) => { const c = await dwCol(); if (c) await c.updateOne({ _id: "last" }, { $set: { entry } }, { upsert: true }); },
+    notion: dwCfg.notion.enabled
+      ? (method, path, body) => notionFetch(path, method === "GET" ? undefined : { method, body: JSON.stringify(body) })
+      : null,
+    sheets: dwCfg.sheet.enabled ? dwSheets : null,
+    /* the venue name of the participant's booking, else the campaign's only
+       schedule; anything else is "not derivable" and the date is written alone */
+    venueNames: async (targets) => {
+      const out = new Map();
+      const client = await getMongoClient();
+      if (!client) throw new Error("no database connection");
+      const dbh = client.db(MONGODB_DB);
+      const cids = [...new Set(targets.map((t) => t.campaignId))];
+      const schedules = await dbh.collection("booking_schedules").find({ campaignId: { $in: cids } })
+        .project({ _id: 1, campaignId: 1, venueName: 1 }).toArray();
+      const nameBySchedule = new Map(schedules.map((x) => [String(x._id), String(x.venueName || "").trim()]));
+      const perCampaign = new Map();
+      schedules.forEach((x) => {
+        const n = String(x.venueName || "").trim();
+        if (!perCampaign.has(x.campaignId)) perCampaign.set(x.campaignId, new Set());
+        if (n) perCampaign.get(x.campaignId).add(n);
+      });
+      const bookingIds = targets.map((t) => t.p.bookingId).filter((v) => typeof v === "string" && v);
+      const bks = bookingIds.length
+        ? await dbh.collection("campaign_bookings").find({ _id: { $in: bookingIds } }).project({ _id: 1, scheduleId: 1 }).toArray()
+        : [];
+      const scheduleByBooking = new Map(bks.map((b) => [String(b._id), String(b.scheduleId || "")]));
+      targets.forEach((t) => {
+        const viaBooking = nameBySchedule.get(scheduleByBooking.get(String(t.p.bookingId || "")));
+        const only = perCampaign.get(t.campaignId);
+        out.set(t.id, viaBooking || (only && only.size === 1 ? [...only][0] : ""));
+      });
+      return out;
+    },
+    logger: console
+  });
+  const dwTick = () => dateWriteback.run({ trigger: "poll" })
+    .catch((e) => console.error("Date write-back tick failed:", e && e.status ? "http-" + e.status : "error"));
+  setTimeout(dwTick, 45000).unref();
+  setInterval(dwTick, dwCfg.intervalMs).unref();
+  console.log("Date write-back: ON (notion %s, sheet %s), every %d min; cap %d writes per channel per run.",
+    dwCfg.notion.enabled ? (dwCfg.notion.dryRun ? "dry run" : "live") : "off",
+    dwCfg.sheet.enabled ? (dwCfg.sheet.dryRun ? "dry run" : "live") : "off", dwCfg.intervalMin, dwCfg.maxPerRun);
+}
+
+/* Staff: run now. Body { dryRun?: true, channel?: "notion"|"sheet" }. A dry run
+   reads (the Notion page, the Sheet columns) and writes nothing. A manual live
+   run also re-tries things that were waiting or had given up. */
+app.post("/api/date-writeback/run", requireStaff(async (req, res) => {
+  if (!dateWriteback) return res.status(503).json({ error: "Date write-back is not enabled on this server.", reason: dwOff });
+  const b = req.body || {};
+  /* force: creator ids whose hand-edited value may be overwritten once (live runs only) */
+  const force = Array.isArray(b.force) ? b.force.filter((x) => typeof x === "string" && x.length <= 80).slice(0, 20) : undefined;
+  const entry = await dateWriteback.run({ trigger: "manual", dryRun: b.dryRun ? true : undefined, channel: b.channel, force });
+  return res.json({ ok: true, run: entry });
+}));
+
+app.get("/api/date-writeback/status", requireStaff(async (req, res) => {
+  const on = !!dateWriteback;
+  const base = {
+    enabled: { notion: on && dwCfg.notion.enabled, sheet: on && dwCfg.sheet.enabled },
+    reason: dwOff,
+    dryRun: { notion: dwCfg.notion.dryRun, sheet: dwCfg.sheet.dryRun },
+    notionProperty: dwCfg.notion.property,
+    sheetHeaders: dwCfg.sheet.headers,
+    sheetColumnLetters: dwCfg.sheet.cols,
+    intervalMin: dwCfg.intervalMin
+  };
+  if (dwCfg.sheet.requested) {
+    /* the address to share the sheet with as Editor; it is not a secret */
+    try { const k = googleCredentials(); base.serviceAccountEmail = k ? k.client_email : null; } catch (e) { base.serviceAccountEmail = null; }
+  }
+  if (!on) return res.json({ ok: true, ...base, last: null });
+  try { base.queue = await dateWriteback.stateSummary(); } catch (err) { console.error("Date write-back state read failed."); }
+  let last = dateWriteback.lastRun();
+  if (!last) {
+    try {
+      const client = await getMongoClient();
+      const row = client && await client.db(MONGODB_DB).collection("date_writeback_log").findOne({ _id: "last" });
+      last = (row && row.entry) || null;
+    } catch (err) { console.error("Date write-back status read failed."); }
   }
   return res.json({ ok: true, ...base, last });
 }));
