@@ -101,6 +101,8 @@ const auth = require("./server/auth.js");
 const bookingStore = require("./server/booking-store.js");
 const bookingRoutes = require("./server/booking-routes.js");
 const sheetProxy = require("./server/sheet-proxy.js");
+const notionAutocreate = require("./server/notion-autocreate.js");
+const { writeWorkspaceCas } = require("./server/workspace-cas.js");
 
 /* ------------------------------------------------------------------
    Who is allowed into the workspace.
@@ -790,19 +792,15 @@ app.get("/api/workspace/meta", requireStaff(async (req, res) => {
    bookings through it so a stale client cannot un-book anybody. */
 let bookingApi = null;
 
-app.post("/api/workspace", requireStaff(async (req, res) => {
-  if (!MONGODB_URI) {
-    return res.status(503).json({ error: "Database not configured on the server yet — set MONGODB_URI." });
-  }
-
-  const db = req.body && req.body.db;
-  const dbOk = db && Array.isArray(db.campaigns) && Array.isArray(db.creators) && Array.isArray(db.participants);
-  if (!dbOk) {
-    return res.status(400).json({ error: "Malformed workspace payload." });
-  }
-
-  const clientRevision = Number.isFinite(req.body.revision) ? req.body.revision : 0;
-  const force = !!req.body.force;
+/* The guarded save, shared by the Save button's route and the server-side
+   Notion autocreate job, so both go through the same empty-workspace
+   guard, revision check, booking projection and partner-link stamping.
+   Returns { status, json } instead of touching res. Behaviour is the
+   same as when this lived inside the route. */
+async function saveWorkspaceDoc(body) {
+  const db = body.db;
+  const clientRevision = Number.isFinite(body.revision) ? body.revision : 0;
+  const force = !!body.force;
 
   try {
     const col = await getWorkspaceCollection();
@@ -823,23 +821,23 @@ app.post("/api/workspace", requireStaff(async (req, res) => {
     const guard = wsGuard.guardEmptyReplace({
       incoming: db,
       existing: existing || {},
-      intent: req.body && req.body.intent
+      intent: body.intent
     });
     if (!guard.ok) {
       console.error("POST /api/workspace refused: empty payload over %d campaigns, %d creators, %d participants.",
         guard.existing.campaigns, guard.existing.creators, guard.existing.participants);
-      return res.status(422).json({ error: guard.message, guard: guard.code, existing: guard.existing });
+      return { status: 422, json: { error: guard.message, guard: guard.code, existing: guard.existing } };
     }
     if (guard.reset) {
       console.log("POST /api/workspace: explicit destructive reset requested; the workspace will be emptied.");
     }
 
     if (existing && !force && clientRevision !== currentRevision) {
-      return res.status(409).json({
+      return { status: 409, json: {
         error: "This workspace was saved from elsewhere since you last loaded it.",
         revision: currentRevision,
         savedAt: existing.savedAt
-      });
+      } };
     }
 
     /* A booking owns the time it booked. This client's copy may predate
@@ -870,16 +868,37 @@ app.post("/api/workspace", requireStaff(async (req, res) => {
 
     const savedAt = new Date().toISOString();
     const nextRevision = currentRevision + 1;
-    await col.updateOne(
-      { _id: WORKSPACE_ID },
-      { $set: { db, settings: req.body.settings || {}, savedAt, revision: nextRevision } },
-      { upsert: true }
-    );
-    return res.json({ ok: true, savedAt, revision: nextRevision, bookings: bookingFixes });
+    const wrote = await writeWorkspaceCas(col, WORKSPACE_ID, {
+      db, settings: body.settings || {}, savedAt, nextRevision, currentRevision,
+      existed: !!existing, force
+    });
+    if (wrote.conflict) {
+      return { status: 409, json: {
+        error: "This workspace was saved from elsewhere since you last loaded it.",
+        revision: wrote.revision,
+        savedAt: wrote.savedAt
+      } };
+    }
+    return { status: 200, json: { ok: true, savedAt, revision: nextRevision, bookings: bookingFixes } };
   } catch (err) {
     console.error("POST /api/workspace failed:", err.message);
-    return res.status(502).json({ error: "Could not reach the database." });
+    return { status: 502, json: { error: "Could not reach the database." } };
   }
+}
+
+app.post("/api/workspace", requireStaff(async (req, res) => {
+  if (!MONGODB_URI) {
+    return res.status(503).json({ error: "Database not configured on the server yet — set MONGODB_URI." });
+  }
+
+  const db = req.body && req.body.db;
+  const dbOk = db && Array.isArray(db.campaigns) && Array.isArray(db.creators) && Array.isArray(db.participants);
+  if (!dbOk) {
+    return res.status(400).json({ error: "Malformed workspace payload." });
+  }
+
+  const out = await saveWorkspaceDoc(req.body);
+  return res.status(out.status).json(out.json);
 }));
 
 /* ---------------------------- notion sync ---------------------------- */
@@ -948,6 +967,119 @@ app.get("/api/notion/query", requireStaff(async (req, res) => {
     console.error("GET /api/notion/query failed:", err.message);
     return res.status(502).json({ error: err.message });
   }
+}));
+
+/* ---------------- notion: auto-create campaigns from new pages ----------------
+   OFF unless NOTION_AUTOCREATE_PARENT_ID is set. Logic and rules are in
+   server/notion-autocreate.js; this is only the wiring. Read-only toward
+   Notion (notionFetch is called with no options, i.e. GET), and the
+   workspace is written through saveWorkspaceDoc without `force`. */
+const autocreateCfg = notionAutocreate.parseConfig(process.env);
+let autocreate = null;
+let autocreateOff = "";
+if (!autocreateCfg.requested) autocreateOff = "NOTION_AUTOCREATE_PARENT_ID is not set";
+else if (autocreateCfg.invalid) autocreateOff = "NOTION_AUTOCREATE_PARENT_ID is not a Notion page id";
+else if (!NOTION_TOKEN) autocreateOff = "NOTION_TOKEN is not set";
+else if (!MONGODB_URI) autocreateOff = "MONGODB_URI is not set";
+if (autocreateCfg.requested && autocreateOff) console.error("Notion autocreate stays off: " + autocreateOff + ".");
+
+if (!autocreateOff) {
+  autocreate = notionAutocreate.createAutocreate({
+    parentId: autocreateCfg.parentId,
+    notionGet: (p) => notionFetch(p),
+    loadWorkspace: async () => {
+      const doc = await loadWorkspaceDoc();
+      return doc ? { db: doc.db, settings: doc.settings || {}, revision: doc.revision || 0 } : null;
+    },
+    /* the wrapper lives in notion-autocreate.js so a test can drive it against
+       the real saveWorkspaceDoc; it always passes force:false */
+    saveWorkspace: notionAutocreate.makeSaveWorkspace(saveWorkspaceDoc),
+    loadState: async () => {
+      const client = await getMongoClient();
+      const row = client && await client.db(MONGODB_DB).collection("notion_autocreate_log").findOne({ _id: "state" });
+      return (row && row.state) || null;
+    },
+    saveState: async (state) => {
+      const client = await getMongoClient();
+      if (!client) throw new Error("no database connection");
+      await client.db(MONGODB_DB).collection("notion_autocreate_log")
+        .updateOne({ _id: "state" }, { $set: { state } }, { upsert: true });
+    },
+    saveLog: async (entry) => {
+      const client = await getMongoClient();
+      if (!client) return;
+      await client.db(MONGODB_DB).collection("notion_autocreate_log")
+        .updateOne({ _id: "last" }, { $set: { entry } }, { upsert: true });
+    },
+    newId: () => "cp" + Date.now().toString(36) + crypto.randomUUID().replace(/-/g, "").slice(0, 12),
+    maxCreate: autocreateCfg.maxCreate,
+    maxPerDay: autocreateCfg.maxPerDay,
+    dryRun: autocreateCfg.dryRun
+  });
+  /* first run 30 s after boot so the database connection is up; unref so
+     the timer never keeps a stopping process alive */
+  const tick = () => autocreate.run({ trigger: "poll" }).catch((e) => console.error("Notion autocreate tick failed:", e.message));
+  setTimeout(tick, 30000).unref();
+  setInterval(tick, autocreateCfg.intervalMs).unref();
+  console.log("Notion autocreate: ON, every %d min%s; caps %d per run, %d per day.", autocreateCfg.intervalMin,
+    autocreateCfg.dryRun ? " (dry run: reports only, writes nothing)" : "", autocreateCfg.maxCreate, autocreateCfg.maxPerDay);
+}
+
+app.post("/api/notion/autocreate/run", requireStaff(async (req, res) => {
+  if (!autocreate) return res.status(503).json({ error: "Notion autocreate is not enabled on this server.", reason: autocreateOff });
+  const dry = !!(req.body && req.body.dryRun);
+  const entry = await autocreate.run({ trigger: "manual", dryRun: dry ? true : undefined });
+  return res.json({ ok: true, run: entry });
+}));
+
+/* Staff: keep ONE Notion page from ever being auto-created (or undo that).
+   Body: { pageId } (the id shown in the run log) or { campaignId } (the
+   campaign's stored notionPageId). Deleting an auto-created campaign in the
+   dashboard is also noticed by the job itself; this is the explicit way. */
+async function autocreatePageIdFromBody(body) {
+  const b = body || {};
+  if (b.pageId) return String(b.pageId);
+  if (b.campaignId) {
+    const doc = await loadWorkspaceDoc();
+    const cp = doc && doc.db && Array.isArray(doc.db.campaigns) && doc.db.campaigns.find((c) => c && c.id === String(b.campaignId));
+    return (cp && cp.notionPageId) || "";
+  }
+  return "";
+}
+app.post("/api/notion/autocreate/dismiss", requireStaff(async (req, res) => {
+  if (!autocreate) return res.status(503).json({ error: "Notion autocreate is not enabled on this server.", reason: autocreateOff });
+  const out = await autocreate.dismiss(await autocreatePageIdFromBody(req.body));
+  return res.status(out.ok ? 200 : 400).json(out);
+}));
+app.post("/api/notion/autocreate/undismiss", requireStaff(async (req, res) => {
+  if (!autocreate) return res.status(503).json({ error: "Notion autocreate is not enabled on this server.", reason: autocreateOff });
+  const out = await autocreate.undismiss(await autocreatePageIdFromBody(req.body));
+  return res.status(out.ok ? 200 : 400).json(out);
+}));
+/* Staff: deliberately create (or link) one specific page, for example an
+   older one the baseline left alone. Body: { pageId, dryRun? }. */
+app.post("/api/notion/autocreate/create-page", requireStaff(async (req, res) => {
+  if (!autocreate) return res.status(503).json({ error: "Notion autocreate is not enabled on this server.", reason: autocreateOff });
+  const b = req.body || {};
+  if (!b.pageId) return res.status(400).json({ error: "pageId is required." });
+  const entry = await autocreate.createPage(String(b.pageId), { dryRun: !!b.dryRun });
+  return res.json({ ok: true, run: entry });
+}));
+
+app.get("/api/notion/autocreate/status", requireStaff(async (req, res) => {
+  const base = { enabled: !!autocreate, reason: autocreate ? "" : autocreateOff,
+    intervalMin: autocreate ? autocreateCfg.intervalMin : null, dryRun: autocreate ? autocreateCfg.dryRun : null };
+  if (!autocreate) return res.json({ ok: true, ...base, last: null });
+  try { base.state = await autocreate.stateSummary(); } catch (err) { console.error("Notion autocreate state read failed:", err.message); }
+  let last = autocreate.lastRun();
+  if (!last) {
+    try {
+      const client = await getMongoClient();
+      const row = client && await client.db(MONGODB_DB).collection("notion_autocreate_log").findOne({ _id: "last" });
+      last = (row && row.entry) || null;
+    } catch (err) { console.error("Notion autocreate status read failed:", err.message); }
+  }
+  return res.json({ ok: true, ...base, last });
 }));
 
 /* ---------------------------- google calendar ---------------------------- */

@@ -74,7 +74,24 @@ app.post('/v1/data_sources/:id/query', (q, r) => {
   });
 });
 
-app.get('/__state', (q, r) => r.json({ pages, writes, sources: Object.keys(form) }));
-app.post('/__reset', (q, r) => { Object.keys(pages).forEach((k) => delete pages[k]); writes.length = 0; form = {}; r.json({ ok: true }); });
+/* Block children, for the campaign-page autocreate: a parent page's child
+   pages and a page's child databases. /__blocks sets { <blockOrPageId>: [block,...] };
+   pagination is honoured (page_size and start_cursor as a numeric offset). */
+let blocks = {};
+app.post('/__blocks', (q, r) => { blocks = q.body || {}; r.json({ ok: true, parents: Object.keys(blocks) }); });
+app.get('/v1/blocks/:id/children', (q, r) => {
+  const all = blocks[q.params.id];
+  if (!all) return r.status(404).json({ message: 'Could not find block' });
+  const size = Math.min(Number(q.query.page_size) || 100, 100);
+  const from = Number(q.query.start_cursor) || 0;
+  const slice = all.slice(from, from + size);
+  const more = from + size < all.length;
+  r.json({ object: 'list', results: slice, has_more: more, next_cursor: more ? String(from + size) : null });
+});
 
-app.listen(3466, () => console.log('fake notion on 3466'));
+app.get('/__state', (q, r) => r.json({ pages, writes, sources: Object.keys(form) }));
+app.post('/__reset', (q, r) => { Object.keys(pages).forEach((k) => delete pages[k]); writes.length = 0; form = {}; blocks = {}; r.json({ ok: true }); });
+
+/* the port is overridable so a test can pick a free one; 3466 stays the default */
+const PORT = Number(process.env.FAKE_NOTION_PORT) || 3466;
+app.listen(PORT, () => console.log('fake notion on ' + PORT));

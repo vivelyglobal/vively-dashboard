@@ -2429,7 +2429,7 @@ function barsH(mount, rows, opt) {
     const row = document.createElement('div');
     row.style.cssText = 'display:grid;grid-template-columns:' + (opt.labelWidth || '150px') + ' 1fr auto;gap:12px;align-items:center;';
     row.innerHTML =
-      `<div style="font-size:12.5px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${r.label}">${r.sub ? `<span style="color:var(--text)">${r.label}</span>` : r.label}</div>
+      `<div style="font-size:12.5px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(r.label)}">${r.sub ? `<span style="color:var(--text)">${esc(r.label)}</span>` : esc(r.label)}</div>
        <div style="background:var(--surface-2);border-radius:4px;height:${opt.barH || 18}px;position:relative;">
          <div style="height:100%;width:${(r.value / max * 100).toFixed(2)}%;background:${r.color || 'var(--s1)'};border-radius:4px;min-width:2px;"></div>
        </div>
@@ -2438,7 +2438,7 @@ function barsH(mount, rows, opt) {
     list.appendChild(row);
   });
   wrap.appendChild(list);
-  wrap.appendChild(tableFallback([opt.labelHead || 'Item', opt.valueHead || 'Value'], rows.map((r) => [r.label, num(r.value)])));
+  wrap.appendChild(tableFallback([opt.labelHead || 'Item', opt.valueHead || 'Value'], rows.map((r) => [esc(r.label), num(r.value)])));
   mount.appendChild(wrap);
   return wrap;
 }
@@ -2461,9 +2461,9 @@ function splitBar(mount, parts, opt) {
   wrap.appendChild(bar);
   const lg = document.createElement('div');
   lg.className = 'legend';
-  lg.innerHTML = parts.map((p) => `<span class="li"><span class="sw" style="background:${p.color}"></span>${p.label} <b style="color:var(--text);font-weight:500;margin-left:2px;">${pct(p.value / total, 0)}</b></span>`).join('');
+  lg.innerHTML = parts.map((p) => `<span class="li"><span class="sw" style="background:${p.color}"></span>${esc(p.label)} <b style="color:var(--text);font-weight:500;margin-left:2px;">${pct(p.value / total, 0)}</b></span>`).join('');
   wrap.appendChild(lg);
-  wrap.appendChild(tableFallback([opt.labelHead || 'Segment', 'Value', 'Share'], parts.map((p) => [p.label, num(p.value), pct(p.value / total)])));
+  wrap.appendChild(tableFallback([opt.labelHead || 'Segment', 'Value', 'Share'], parts.map((p) => [esc(p.label), num(p.value), pct(p.value / total)])));
   mount.appendChild(wrap);
   return wrap;
 }

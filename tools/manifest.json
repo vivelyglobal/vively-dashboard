@@ -191,9 +191,10 @@
   ],
   "imports": [
    "import { dLabel } from '../lib/dates.js';",
-   "import { kmb, num, pct } from '../lib/format.js';"
+   "import { kmb, num, pct } from '../lib/format.js';",
+   "import { esc } from '../ui/dom.js';"
   ],
-  "sha256": "ab7b84c020f0d012a971f591387dbf51479f2837e45d389cafbc583a8ab3b2ab"
+  "sha256": "c946f7efd3f98de0fbaceca530e448a28cd8b2764af6c1240f62c4c095f8cc0f"
  },
  {
   "file": "lib/xlsx.js",
