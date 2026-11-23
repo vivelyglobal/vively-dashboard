@@ -655,11 +655,12 @@
    "import { $, $$, esc } from '../ui/dom.js';",
    "import { downloadFile, flagPill, stagePill, statCard, whoHtml } from '../ui/html.js';",
    "import { toast } from '../ui/overlay.js';",
+   "import { nacCardHtml, wireNacCard } from './autocreatePanel.js';",
    "import { settingsCalendar } from './calendar.js';",
    "import { settingsPartners, wireWritebackCard, writebackCardHtml } from './partners.js';",
    "import { settingsSheets } from './sheetsSettings.js';"
   ],
-  "sha256": "1374321176614e3c08bf3b95b5e5eceaebfedc818641e67880afd3b929872f9e"
+  "sha256": "f8c47aa0ee3ed6ab6f2cd84b354b643748c5f924f965394216433014a41629e8"
  },
  {
   "file": "styles.css",
@@ -677,8 +678,8 @@
   "file": "sync/gcal.js",
   "ranges": [
    [
-    12132,
-    12483
+    12379,
+    12730
    ]
   ],
   "imports": [
@@ -694,8 +695,8 @@
   "file": "views/calendar.js",
   "ranges": [
    [
-    12486,
-    12736
+    12733,
+    12983
    ]
   ],
   "imports": [
@@ -745,6 +746,19 @@
   "sha256": "f2b496828328829f9ed359d40e9d86f92c22833fbc24c180d17fdd07af107edf"
  },
  {
+  "file": "views/autocreatePanel.js",
+  "ranges": [
+   [
+    12132,
+    12378
+   ]
+  ],
+  "imports": [
+   "import { $, esc } from '../ui/dom.js';"
+  ],
+  "sha256": "b37239f4a59ac24b5b923f2dade23264311a8bfd687f8ad280acb606e808b3d8"
+ },
+ {
   "file": "sync/notionWriteback.js",
   "ranges": [
    [
@@ -781,8 +795,8 @@
   "file": "model/socialStats.js",
   "ranges": [
    [
-    12738,
-    13037
+    12985,
+    13284
    ]
   ],
   "imports": [
@@ -794,8 +808,8 @@
   "file": "charts/socialViz.js",
   "ranges": [
    [
-    13038,
-    13135
+    13285,
+    13382
    ]
   ],
   "imports": [
@@ -809,8 +823,8 @@
   "file": "views/socialOverview.js",
   "ranges": [
    [
-    13136,
-    13597
+    13383,
+    13844
    ]
   ],
   "imports": [
@@ -829,8 +843,8 @@
   "file": "model/homeStats.js",
   "ranges": [
    [
-    13599,
-    14018
+    13846,
+    14265
    ]
   ],
   "imports": [
@@ -845,8 +859,8 @@
   "file": "views/home.js",
   "ranges": [
    [
-    14020,
-    14387
+    14267,
+    14634
    ]
   ],
   "imports": [
@@ -867,8 +881,8 @@
   "file": "views/booking.js",
   "ranges": [
    [
-    14390,
-    16187
+    14637,
+    16434
    ]
   ],
   "imports": [
@@ -888,8 +902,8 @@
   "file": "views/desk.js",
   "ranges": [
    [
-    16190,
-    17005
+    16437,
+    17252
    ]
   ],
   "imports": [
@@ -909,8 +923,8 @@
   "file": "sync/sheetMetrics.js",
   "ranges": [
    [
-    17008,
-    17722
+    17255,
+    17969
    ]
   ],
   "imports": [

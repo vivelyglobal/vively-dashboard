@@ -9,6 +9,7 @@ import { SM, SM_CONTENT_DEFAULT_MAP, SM_CONTENT_FIELDS, commitSheetMetrics, disc
 import { $, $$, esc } from '../ui/dom.js';
 import { downloadFile, flagPill, stagePill, statCard, whoHtml } from '../ui/html.js';
 import { toast } from '../ui/overlay.js';
+import { nacCardHtml, wireNacCard } from './autocreatePanel.js';
 import { settingsCalendar } from './calendar.js';
 import { settingsPartners, wireWritebackCard, writebackCardHtml } from './partners.js';
 import { settingsSheets } from './sheetsSettings.js';
@@ -36,7 +37,7 @@ export function renderSettings(view, item) {
   if (item === 'blacklist')  return settingsBlacklist(view);
   if (item === 'sheet')      return settingsSheets(view);
   if (item === 'calendar')   return settingsCalendar(view);
-  if (item === 'notion')     { view.innerHTML = `<div class="grid g2">${writebackCardHtml()}</div>`; return wireWritebackCard(); }
+  if (item === 'notion')     { view.innerHTML = `<div class="grid g2">${writebackCardHtml()}${nacCardHtml()}</div>`; wireWritebackCard(); return wireNacCard(); }
   if (item === 'partners')   return settingsPartners(view);
   if (item === 'sources') {
     const dupGroups = duplicateCreatorGroups();
