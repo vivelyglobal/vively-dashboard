@@ -355,8 +355,15 @@ function applyRows(ctx) {
   const budgetReason = ctx.budgetReason || "create-cap";
   const nowIso = ctx.nowIso || new Date().toISOString();
   const snap = ctx.snap && typeof ctx.snap === "object" ? ctx.snap : {};
+  /* tomb: Notion rows staff removed from the roster (pageId -> when noticed). imp:
+     rows known to have been on this campaign's roster (pageId -> 1). */
+  const tomb = ctx.tomb && typeof ctx.tomb === "object" ? ctx.tomb : {};
+  const imp = ctx.imp && typeof ctx.imp === "object" ? ctx.imp : {};
 
   const rep = {
+    tombstoned: [],          // rows skipped because staff removed them
+    newTombs: new Map(),     // pageId -> iso: rows noticed as removed in THIS run
+    impAdd: new Set(),       // page ids of this campaign's roster rows, to remember
     created: [], linked: [], updated: [], already: 0, ambiguous: [], held: [], differs: [], elsewhere: [], edited: [],
     deferred: [], unknown: new Map(), newCreators: 0, changed: false, stopAt: null, processed: 0,
     unresolved: new Map(),   // pageId -> reason, for rows that stay held or ambiguous (uncapped list, for the job state)
@@ -380,6 +387,16 @@ function applyRows(ctx) {
   const addRoster = (p) => { if (!roster.has(p.creatorId)) roster.set(p.creatorId, []); roster.get(p.creatorId).push(p); };
   db.participants.forEach((p) => { if (p && p.campaignId === cp.id) addRoster(p); });
   const usedIds = new Set(db.participants.map((p) => p && p.id));
+
+  /* Removal detection (same idea as notion-autocreate's "created by us but no
+     longer linked -> dismissed"): every roster row of this campaign that
+     carries a Notion page id is remembered. A remembered id that no row on ANY
+     campaign carries any more was removed by staff: it is tombstoned, and a
+     tombstoned row is never created again. A row moved to another campaign
+     still carries its id, so it is not a removal. */
+  db.participants.forEach((p) => { if (p && p.campaignId === cp.id && p.notionPageId) rep.impAdd.add(key(p.notionPageId)); });
+  Object.keys(imp).forEach((pg) => { if (!byPage.has(pg) && !own(tomb, pg)) rep.newTombs.set(pg, nowIso); });
+  rep.newTombs.forEach((v, pg) => rep.impAdd.delete(pg));
 
   const note = (list, item) => { if (list.length < LIST_CAP) list.push(item); };
   const unresolve = (pageId, why) => { if (rep.unresolved.size < UNRESOLVED_CAP) rep.unresolved.set(key(pageId), why); };
@@ -456,6 +473,9 @@ function applyRows(ctx) {
       return;
     }
 
+    /* removed by staff earlier: never created again, never held */
+    if (own(tomb, key(pageId)) || rep.newTombs.has(key(pageId))) { note(rep.tombstoned, { pageId }); return; }
+
     /* not on any roster yet */
     if (!ap.handle) { hold(pageId, "no-handle"); return; }
     if (!known) { hold(pageId, "unknown-status"); return; }
@@ -468,7 +488,7 @@ function applyRows(ctx) {
     if (cands.length === 1) {
       const q = cands[0];
       if (q.notionPageId) { hold(pageId, "duplicate-submission"); return; } // same person applied twice; first submission owns the row
-      q.notionPageId = pageId; byPage.set(key(pageId), q); rep.changed = true;  // link only; nothing else on the row changes
+      q.notionPageId = pageId; byPage.set(key(pageId), q); rep.impAdd.add(key(pageId)); rep.changed = true;  // link only; nothing else on the row changes
       note(rep.linked, { pageId, participantId: q.id });
       return;
     }
@@ -516,7 +536,7 @@ function applyRows(ctx) {
       notionPageId: pageId, content: null
     };
     shared.applyStageDates(np, ap.stage, cp);
-    db.participants.push(np); usedIds.add(id); addRoster(np); byPage.set(key(pageId), np);
+    db.participants.push(np); usedIds.add(id); addRoster(np); byPage.set(key(pageId), np); rep.impAdd.add(key(pageId));
     INTAKE_FIELDS.forEach((k) => patchSnap(pageId, k, np[k]));   // what was imported, for the later fill-only rule
     budget--; rep.changed = true;
     note(rep.created, { pageId, participantId: np.id });
@@ -530,7 +550,11 @@ function applyRows(ctx) {
 const errCode = (e) => (e && e.vcode ? e.vcode : e && e.status ? "http-" + e.status : "error");
 
 const SNAP_CAP = 5000;      // fingerprinted rows per campaign
-const HELD_CAP = 200;       // held rows remembered per campaign
+const HELD_CAP = 200;       // held rows remembered per campaign (past it: nothing is added, a warning is raised)
+const TOMB_CAP = 1000;      // removed-by-staff rows remembered per campaign (past it: nothing is added, a warning is raised)
+const IMP_CAP = 5000;       // roster rows remembered per campaign for removal detection (same rule)
+const BREAKER_DEFAULT = 5;  // consecutive server failures that stop a run
+const SERVER_CODE = /^(timeout|network|http-5\d\d)$/;
 const HELD_EVERY_RUN = 10;  // a held row is retried on every run for this many tries, then at most once an hour
 const HELD_SLOW_MS = 3600000;
 const MAP_RECHECK_MS = 600000; // a form that failed the default mapping check is looked at again after 10 minutes
@@ -558,7 +582,14 @@ function normState(raw) {
         tries: Number.isFinite(Number(h.tries)) ? Math.max(0, Math.floor(Number(h.tries))) : 0
       };
     });
+    const idMap = (o, cap, val) => {
+      const m = {};
+      Object.entries(o && typeof o === "object" ? o : {}).slice(0, cap).forEach(([pg, v]) => { if (normalizeId(pg) === pg) m[pg] = val(v); });
+      return m;
+    };
     out.campaigns[id] = {
+      tomb: idMap(c.tomb, TOMB_CAP, (v) => isoOrNull(v) || ""),
+      imp: idMap(c.imp, IMP_CAP, () => 1),
       ds: typeof c.ds === "string" ? c.ds : "",
       cursor: isoOrNull(c.cursor),
       baselineDone: !!c.baselineDone,
@@ -627,6 +658,9 @@ function createApplicants(deps) {
     maxHeldRetry: Number.isFinite(d.maxHeldRetry) ? d.maxHeldRetry : 20,
     cooldownMs: (Number.isFinite(d.cooldownSec) ? d.cooldownSec : 300) * 1000
   };
+  const heldCap = Number.isFinite(d.heldCap) && d.heldCap > 0 ? Math.floor(d.heldCap) : HELD_CAP;
+  const tombCap = Number.isFinite(d.tombCap) && d.tombCap > 0 ? Math.floor(d.tombCap) : TOMB_CAP;
+  const breakerFailures = Number.isFinite(d.breakerFailures) && d.breakerFailures > 0 ? Math.floor(d.breakerFailures) : BREAKER_DEFAULT;
   const now = d.now || (() => new Date());
   let running = false;
   let last = null;
@@ -646,16 +680,40 @@ function createApplicants(deps) {
 
   async function stateSummary() {
     const s = await readState();
-    const held = [];
-    Object.entries(s.campaigns).forEach(([cid, c]) => Object.entries(c.held).forEach(([pageId, h]) => {
-      if (held.length < 200) held.push({ campaignId: cid, pageId, why: h.why, since: h.since, tries: h.tries });
-    }));
+    const held = [], tombstones = [];
+    let heldTotal = 0, tombTotal = 0;
+    Object.entries(s.campaigns).forEach(([cid, c]) => {
+      Object.entries(c.held).forEach(([pageId, h]) => {
+        heldTotal++;
+        if (held.length < 200) held.push({ campaignId: cid, pageId, why: h.why, since: h.since, tries: h.tries });
+      });
+      Object.entries(c.tomb || {}).forEach(([pageId, at]) => {
+        tombTotal++;
+        if (tombstones.length < 200) tombstones.push({ campaignId: cid, pageId, since: at });
+      });
+    });
     return {
       campaignsTracked: Object.keys(s.campaigns).length,
       baselineDone: Object.values(s.campaigns).filter((c) => c.baselineDone).length,
-      heldRows: held.length, held,
+      heldRows: held.length, held, heldTotal,
+      heldFull: Object.entries(s.campaigns).filter(([, c]) => Object.keys(c.held).length >= heldCap).map(([cid]) => cid),
+      tombstoneCount: tombTotal, tombstones,
+      tombstoneFull: Object.entries(s.campaigns).filter(([, c]) => Object.keys(c.tomb || {}).length >= tombCap).map(([cid]) => cid),
       maxCreatePerRun: cfg.maxCreate, maxRowsPerCampaign: cfg.maxRows, pageSize: cfg.pageSize, maxCampaignsPerRun: cfg.maxCampaigns
     };
+  }
+
+  /* staff: let a removed row come back. It is created again the next time the
+     job reads it (an edit in Notion, or a rescan of the campaign). */
+  async function restore(campaignId, pageId) {
+    const id = normalizeId(pageId);
+    if (!id || typeof campaignId !== "string" || !campaignId || campaignId.length > 80) return { ok: false, error: "bad-request" };
+    return mutateState((s) => {
+      const c = s.campaigns[campaignId];
+      if (!c || !c.tomb || !own(c.tomb, id)) return { ok: true, removed: false };
+      delete c.tomb[id];
+      return { ok: true, removed: true };
+    });
   }
 
   /* rows of one data source since the cursor, bounded by maxRows */
@@ -770,13 +828,24 @@ function createApplicants(deps) {
 
       let createBudget = cfg.maxCreate;
       let visited = 0;
+      let serverFails = 0;   // consecutive campaigns that failed with a timeout, network or 5xx answer
+      const tripped = () => {
+        entry.aborted = "circuit-open";
+        entry.errors.push("circuit open: " + serverFails + " failures in a row (timeout or server error); the run was stopped");
+        entry.remaining.campaignsNotVisited += Math.max(0, eligible.length - visited);
+        logger.error("Notion applicants: " + serverFails + " server failures in a row; the run was stopped.");
+      };
       for (const c of eligible) {
         if (needMap.has(c.id)) {
           let m;
           try { m = await ensureMapping(c, x0); }
           catch (err) { entry.campaigns.push({ campaignId: c.id, status: "error", why: "mapping-failed:" + errCode(err) }); logger.error("Notion applicants: default mapping failed for " + c.id + " (" + errCode(err) + ")"); visited++; continue; }
           if (m.aborted) { abortRun(entry, m.aborted, eligible.length - visited); break; }
-          if (m.skip) { entry.campaigns.push({ campaignId: c.id, status: "skipped", why: m.why, missing: m.missing }); visited++; continue; }
+          if (m.skip) {
+            entry.campaigns.push({ campaignId: c.id, status: "skipped", why: m.why, missing: m.missing }); visited++;
+            if (/^schema-failed:/.test(m.why || "") && SERVER_CODE.test(m.why.slice(14))) { if (++serverFails >= breakerFailures) { tripped(); break; } } else serverFails = 0;
+            continue;
+          }
           x0.mappingNote = x0.mappingNote || {};
           x0.mappingNote[c.id] = m.saved ? "saved" : (dryRun ? "would-save" : "existing");
         }
@@ -789,6 +858,7 @@ function createApplicants(deps) {
         if (rep.moreRows) entry.remaining.campaignsWithMoreRows++;
         if (rep.nearLimit && !entry.warnings.includes("workspace-near-limit")) entry.warnings.push("workspace-near-limit");
         if (rep.aborted) { abortRun(entry, rep.aborted, eligible.length - visited); break; }
+        if (rep.serverFail) { if (++serverFails >= breakerFailures) { tripped(); break; } } else if (rep.fetched) serverFails = 0;
       }
       entry.ok = !entry.errors.length && !entry.aborted && !entry.campaigns.some((x) => x.status === "error");
       return finish(entry);
@@ -809,8 +879,10 @@ function createApplicants(deps) {
     logger.error("Notion applicants: Notion kept answering 429 (too many requests); the run was stopped, resting " + Math.round(wait / 1000) + " s.");
   }
 
+  const key0 = (id) => normalizeId(id) || str(id);
+
   async function syncCampaign(campaignId, x) {
-    const out = { created: 0, deferred: 0, unknown: new Map(), moreRows: false, nearLimit: false, aborted: null, report: { campaignId, status: "error" } };
+    const out = { created: 0, deferred: 0, unknown: new Map(), moreRows: false, nearLimit: false, aborted: null, serverFail: false, fetched: false, report: { campaignId, status: "error" } };
     const R = out.report;
     if (x.mappingNote && x.mappingNote[campaignId]) R.mapping = x.mappingNote[campaignId];
     try {
@@ -834,15 +906,20 @@ function createApplicants(deps) {
         R.status = "error"; R.why = "query-failed:" + errCode(err);
         logger.error("Notion applicants: query failed for " + campaignId + " (" + errCode(err) + ")");
         if (err && err.rateLimited) out.aborted = err;
+        else if (SERVER_CODE.test(errCode(err))) out.serverFail = true;
         return out;
       }
+      out.fetched = true;
       const rows = fetched.rows;
       R.rows = rows.length;
       R.moreRows = fetched.truncated;
       out.moreRows = fetched.truncated;
 
       /* held rows from earlier runs, read again by page id (bounded) */
-      const heldBefore = rescan ? {} : (same && stc ? stc.held : {});
+      /* a rescan reads the table again from the start; it does not forget what is held */
+      const heldBefore = same && stc ? stc.held : {};
+      const tombBefore = stc && stc.tomb ? stc.tomb : {};   // kept whatever the form or the rescan
+      const impBefore = stc && stc.imp ? stc.imp : {};
       const retried = [];
       const inFetched = new Set(rows.map((r) => normalizeId(r.pageId) || str(r.pageId)));
       const gone = [];
@@ -884,7 +961,7 @@ function createApplicants(deps) {
         rep = applyRows({
           db: doc.db, cp, rows: allRows, shared: d.shared.bind(x.startedAt.slice(0, 10)), newId: d.newId,
           nowIso: x.startedAt, baseline, createBudget: nearLimit ? 0 : x.createBudget, budgetReason: nearLimit ? "workspace-near-limit" : "create-cap",
-          snap: same && stc ? stc.snap : {}
+          snap: same && stc ? stc.snap : {}, tomb: tombBefore, imp: impBefore
         });
         if (!rep.changed || x.dryRun) { saved = true; break; }
         const res = await d.saveWorkspace({ db: doc.db, settings: doc.settings || {}, revision: doc.revision || 0 });
@@ -910,6 +987,8 @@ function createApplicants(deps) {
         ambiguous: rep.ambiguous.length, held: rep.held.length, deferred: rep.deferred.length,
         differs: rep.differs.length, elsewhere: rep.elsewhere.length, newCreators: rep.newCreators, edited: rep.edited.length
       };
+      const tombSeen = new Set([...rep.newTombs.keys(), ...rep.tombstoned.map((t) => key0(t.pageId))]);
+      if (tombSeen.size) R.counts.tombstoned = tombSeen.size;
       R.created = rep.created; R.linked = rep.linked; R.updated = rep.updated; R.ambiguous = rep.ambiguous;
       R.held = rep.held; R.deferred = rep.deferred; R.differs = rep.differs; R.elsewhere = rep.elsewhere; R.edited = rep.edited;
       out.created = rep.created.length; out.deferred = rep.deferred.length; out.unknown = rep.unknown;
@@ -939,25 +1018,46 @@ function createApplicants(deps) {
         if (ran) return;                                   // looked at this run: only stays if unresolved (below)
         heldNext[pg] = failedTry.has(pg) ? Object.assign({}, h, { lastTryAt: t1, tries: h.tries + 1 }) : h;   // not due: unchanged
       });
-      rep.unresolved.forEach((why, pg) => {
+      /* Rows already held come first and are always kept. A NEW row is added
+         only while there is room; past the cap it is not remembered, and that
+         is said (a warning, and its page id in the report). Nothing is evicted. */
+      const notRemembered = [];
+      const unresolved = [...rep.unresolved.entries()].sort((a, b) => (heldBefore[a[0]] ? 0 : 1) - (heldBefore[b[0]] ? 0 : 1));
+      unresolved.forEach(([pg, why]) => {
         const prev = heldBefore[pg];
+        if (!prev && Object.keys(heldNext).length >= heldCap) { notRemembered.push({ pageId: pg, why }); return; }
         heldNext[pg] = { why, since: prev && prev.since ? prev.since : t1, lastTryAt: t1, tries: (prev ? prev.tries : 0) + (retriedIds.has(pg) ? 1 : 0) };
       });
-      const heldKeys = Object.keys(heldNext);
-      if (heldKeys.length > HELD_CAP) {
-        heldKeys.sort((a, b) => str(heldNext[a].since).localeCompare(str(heldNext[b].since))).slice(HELD_CAP).forEach((k) => { delete heldNext[k]; });
-        x.entry.warnings.push("held-list-full");
+      if (notRemembered.length) {
+        R.heldNotRemembered = notRemembered.slice(0, LIST_CAP);
+        if (!x.entry.warnings.includes("held-list-full")) x.entry.warnings.push("held-list-full");
       }
       R.heldRemembered = Object.keys(heldNext).length;
 
+      let tombMiss = 0, impMiss = 0;
       if (!x.dryRun) {
         try {
           const mk = (prev) => {
+            /* tombstones and remembered rows come from the freshest state (a staff restore made meanwhile survives) */
+            const tomb = Object.assign({}, prev && prev.tomb ? prev.tomb : {});
+            tombMiss = 0;
+            rep.newTombs.forEach((at, pg) => {
+              if (own(tomb, pg)) return;
+              if (Object.keys(tomb).length >= tombCap) tombMiss++; else tomb[pg] = at;
+            });
+            const impNext = {};
+            Object.keys(prev && prev.imp ? prev.imp : {}).forEach((pg) => { if (!own(tomb, pg)) impNext[pg] = 1; });
+            impMiss = 0;
+            rep.impAdd.forEach((pg) => {
+              if (own(tomb, pg) || own(impNext, pg)) return;
+              if (Object.keys(impNext).length >= IMP_CAP) impMiss++; else impNext[pg] = 1;
+            });
             const snap = Object.assign({}, same && prev ? prev.snap : {});
             rep.snapPatch.forEach((patch, pg) => { snap[pg] = Object.assign({}, snap[pg] || {}, patch); });
             const keys = Object.keys(snap);
             if (keys.length > SNAP_CAP) keys.slice(0, keys.length - SNAP_CAP).forEach((k) => { delete snap[k]; });   // oldest fingerprints go first; a row without one is simply fill-only
             return {
+              tomb, imp: impNext,
               ds: dsKey, cursor: cursor || null,
               baselineDone: complete ? true : (same && stc ? !!stc.baselineDone : false),
               lastRunAt: x.startedAt, snap, held: heldNext
@@ -968,12 +1068,17 @@ function createApplicants(deps) {
             const ids = new Set(((doc0.db && doc0.db.campaigns) || []).map((c) => c && c.id));
             Object.keys(s.campaigns).forEach((k) => { if (!ids.has(k)) delete s.campaigns[k]; });
           });
+          const missT = tombMiss, missI = impMiss;
           x.st.campaigns[campaignId] = mk(x.st.campaigns[campaignId]);
+          tombMiss = missT; impMiss = missI;
         } catch (err) {
           R.status = "error"; R.why = "state-not-saved";
           x.entry.errors.push("could not save the job state for " + campaignId);
         }
       }
+      if (!x.dryRun && tombMiss) { R.tombstoneNotRecorded = tombMiss; if (!x.entry.warnings.includes("tombstone-list-full")) x.entry.warnings.push("tombstone-list-full"); }
+      if (!x.dryRun && impMiss && !x.entry.warnings.includes("roster-memory-full")) x.entry.warnings.push("roster-memory-full");
+      if (x.dryRun && rep.newTombs.size) R.tombstoneWouldRecord = rep.newTombs.size;
       return out;
     } catch (err) {
       R.status = "error"; R.why = "failed:" + errCode(err);
@@ -1002,7 +1107,7 @@ function createApplicants(deps) {
     return entry;
   }
 
-  return { run, stateSummary, lastRun: () => last, isRunning: () => running };
+  return { run, restore, stateSummary, lastRun: () => last, isRunning: () => running };
 }
 
 /* ---------------------------- staff routes ---------------------------- */
@@ -1022,6 +1127,17 @@ function registerRoutes(app, requireStaff, get) {
     if (entry && entry.throttled) return res.status(429).json({ error: "A run was started a moment ago. Wait and try again.", retryAfterSec: entry.retryAfterSec });
     if (entry && entry.skipped === "cooling-down") return res.status(429).json({ error: "Notion asked us to slow down; the job is resting.", retryAfterSec: entry.retryAfterSec });
     return res.json({ ok: true, run: entry });
+  }));
+
+  /* staff only: let a row staff removed be created again on its next read */
+  app.post("/api/notion-applicants/restore", requireStaff(async (req, res) => {
+    const g = get();
+    if (!g.applicants) return res.status(503).json({ error: "Applicant sync is not enabled on this server.", reason: g.off });
+    const b = req.body || {};
+    if (typeof b.campaignId !== "string" || typeof b.pageId !== "string" || b.pageId.length > 80) return res.status(400).json({ error: "campaignId and pageId are needed." });
+    const out = await g.applicants.restore(b.campaignId, b.pageId);
+    if (!out || !out.ok) return res.status(400).json({ error: "That is not a valid page id." });
+    return res.json(out);
   }));
 
   app.get("/api/notion-applicants/status", requireStaff(async (req, res) => {

@@ -1525,3 +1525,198 @@ test('FIX 4: the size is kept up to date inside one run: rows added to the first
   assert.deepEqual(cpReport(r, 'cp2').deferred.map((d) => d.why), ['workspace-near-limit']);
   assert.deepEqual(r.warnings, ['workspace-near-limit']);
 });
+
+
+/* ---------- 10. step 4 follow-ups (security re-check 30): tombstones, held list, circuit breaker ---------- */
+
+const deleteRoster = (store, n) => { store.doc.db.participants = store.doc.db.participants.filter((p) => p.notionPageId !== pid(n)); };
+
+test('TOMBSTONE: a roster row staff deleted does not come back, not even after Notion edits that row; the page id (no personal data) is recorded', async () => {
+  const store = makeStore({ campaigns: [campaign('cp1', DS1)] });
+  const table = makeTable({ [DS1]: [row(1, { edited: edit(1) }), row(2, { edited: edit(2) })] });
+  const clock = clockAt();
+  const j = job(store, table, { now: clock.now });
+  await j.run();
+  assert.equal(rosterOf(store, 'cp1').length, 2);
+  deleteRoster(store, 1);                                       /* staff delete the first applicant */
+  clock.add(120000);
+  const r2 = await j.run();
+  assert.equal(rosterOf(store, 'cp1').length, 1, 'not created again');
+  assert.deepEqual(Object.keys(j.js.value.campaigns.cp1.tomb), [pid(1)]);
+  assert.equal(cpReport(r2, 'cp1').counts.tombstoned, 1);
+  /* Notion edits the deleted row: still not back */
+  table.rows[DS1][0] = row(1, { edited: edit(30), props: { Notes: 'edited later' } });
+  clock.add(120000);
+  await j.run();
+  assert.equal(rosterOf(store, 'cp1').length, 1, 'still gone after a Notion edit');
+  assert.ok(!JSON.stringify(j.js.value).includes('Fake Person'), 'the state holds ids only');
+  /* a fresh job reading the same stored state behaves the same */
+  const j2 = job(store, table, { jobState: j.js, now: clock.now });
+  clock.add(120000); await j2.run({ rescan: ['cp1'] });
+  assert.equal(rosterOf(store, 'cp1').length, 1, 'a rescan does not bring a tombstoned row back');
+});
+
+test('TOMBSTONE: a row the manual import made (never seen by the job) that staff deleted is also not re-created', async () => {
+  const store = makeStore({ campaigns: [campaign('cp1', DS1)], creators: [manualCreator(1), manualCreator(2)], participants: [manualPart(1, 'cp1'), manualPart(2, 'cp1')] });
+  const table = makeTable({ [DS1]: [row(1, { edited: edit(1) }), row(2, { edited: edit(2) })] });
+  const clock = clockAt();
+  const j = job(store, table, { now: clock.now });
+  await j.run();                                                /* baseline: both matched */
+  store.doc.db.participants = store.doc.db.participants.filter((p) => p.id !== 'cp1-crOLD1');
+  table.rows[DS1][0] = row(1, { edited: edit(40) });
+  clock.add(120000); await j.run();
+  assert.equal(rosterOf(store, 'cp1').length, 1);
+  assert.ok(j.js.value.campaigns.cp1.tomb[pid(1)]);
+});
+
+test('TOMBSTONE: a row moved to another campaign by staff is not a deletion', async () => {
+  const store = makeStore({ campaigns: [campaign('cp1', DS1), campaign('cp2', DS2)] });
+  const table = makeTable({ [DS1]: [row(1)], [DS2]: [] });
+  const clock = clockAt();
+  const j = job(store, table, { now: clock.now });
+  await j.run();
+  store.doc.db.participants.forEach((p) => { p.campaignId = 'cp2'; });
+  clock.add(120000); await j.run();
+  assert.deepEqual(j.js.value.campaigns.cp1.tomb || {}, {});
+});
+
+test('TOMBSTONE: staff restore removes the tombstone (staff only) and the row returns on a rescan; unknown ids change nothing', async () => {
+  const store = makeStore({ campaigns: [campaign('cp1', DS1)] });
+  const table = makeTable({ [DS1]: [row(1, { edited: edit(1) })] });
+  const clock = clockAt();
+  const j = job(store, table, { now: clock.now });
+  await j.run(); deleteRoster(store, 1);
+  clock.add(120000); await j.run();
+  assert.ok(j.js.value.campaigns.cp1.tomb[pid(1)]);
+  assert.equal(typeof j.restore, 'function');
+  assert.deepEqual(await j.restore('cp1', 'not-an-id'), { ok: false, error: 'bad-request' });
+  assert.deepEqual(await j.restore('cp1', pid(5)), { ok: true, removed: false });
+  assert.deepEqual(await j.restore('cp1', pid(1)), { ok: true, removed: true });
+  assert.deepEqual(j.js.value.campaigns.cp1.tomb, {});
+  clock.add(120000); await j.run({ rescan: ['cp1'] });
+  assert.equal(rosterOf(store, 'cp1').length, 1, 'back after restore + rescan');
+  /* the route: 401 / 403 / staff 200, and the job is reached only by staff */
+  const seen = [];
+  const get = () => ({ applicants: { restore: async (c, p) => { seen.push([c, p]); return { ok: true, removed: true }; } }, off: '', cfg: {}, logStore: null });
+  await withRoutes(get, async (call) => {
+    assert.equal((await call('POST', '/api/notion-applicants/restore', null, { campaignId: 'cp1', pageId: pid(1) })).status, 401);
+    assert.equal((await call('POST', '/api/notion-applicants/restore', 'someone@example.invalid', { campaignId: 'cp1', pageId: pid(1) })).status, 403);
+    assert.deepEqual(seen, []);
+    const ok = await call('POST', '/api/notion-applicants/restore', 'staff@example.invalid', { campaignId: 'cp1', pageId: pid(1) });
+    assert.equal(ok.status, 200); assert.deepEqual(seen, [['cp1', pid(1)]]);
+    assert.equal((await call('POST', '/api/notion-applicants/restore', 'staff@example.invalid', { campaignId: 5, pageId: {} })).status, 400);
+  });
+});
+
+test('TOMBSTONE: a full list is never trimmed silently: nothing old is dropped, the overflow is reported with a warning', async () => {
+  const store = makeStore({ campaigns: [campaign('cp1', DS1)] });
+  const table = makeTable({ [DS1]: [1, 2, 3].map((n) => row(n, { edited: edit(n) })) });
+  const clock = clockAt();
+  const j = job(store, table, { now: clock.now, tombCap: 2 });
+  await j.run();
+  [1, 2, 3].forEach((n) => deleteRoster(store, n));
+  clock.add(120000);
+  const r = await j.run();
+  assert.equal(Object.keys(j.js.value.campaigns.cp1.tomb).length, 2, 'cap holds');
+  assert.ok(r.warnings.includes('tombstone-list-full'));
+  assert.equal(cpReport(r, 'cp1').tombstoneNotRecorded, 1);
+  assert.equal(rosterOf(store, 'cp1').length, 0, 'none of the three came back in this run');
+  /* the next run does not evict the two already there */
+  const before = Object.keys(j.js.value.campaigns.cp1.tomb).sort();
+  clock.add(120000); await j.run();
+  assert.deepEqual(Object.keys(j.js.value.campaigns.cp1.tomb).sort(), before);
+});
+
+test('TOMBSTONE: a dry run records nothing, and the state is validated on load', async () => {
+  const store = makeStore({ campaigns: [campaign('cp1', DS1)] });
+  const table = makeTable({ [DS1]: [row(1)] });
+  const clock = clockAt();
+  const j = job(store, table, { now: clock.now });
+  await j.run(); deleteRoster(store, 1);
+  const writes = j.js.writes;
+  clock.add(120000);
+  const r = await j.run({ dryRun: true });
+  assert.equal(j.js.writes, writes); assert.equal(cpReport(r, 'cp1').counts.tombstoned, 1);
+  const n = N.normState({ campaigns: { cp1: { tomb: { [pid(1)]: '2026-11-24T10:00:00Z', 'junk<script>': 'x' }, imp: { [pid(3)]: 1, bad: 1 } } } });
+  assert.deepEqual(Object.keys(n.campaigns.cp1.tomb), [pid(1)]);
+  assert.deepEqual(Object.keys(n.campaigns.cp1.imp), [pid(3)]);
+});
+
+test('HELD: past the cap nothing is silently dropped: existing held rows stay, new ones are reported with a warning', async () => {
+  const store = makeStore({ campaigns: [campaign('cp1', DS1)] });
+  const table = makeTable({ [DS1]: [1, 2, 3].map((n) => row(n, { props: { Status: 'Some New Word' }, edited: edit(n) })) });
+  const clock = clockAt();
+  const j = job(store, table, { now: clock.now, heldCap: 2 });
+  const r = await j.run();
+  assert.equal(Object.keys(j.js.value.campaigns.cp1.held).length, 2);
+  assert.ok(r.warnings.includes('held-list-full'));
+  assert.equal(cpReport(r, 'cp1').heldNotRemembered.length, 1);
+  const kept = Object.keys(j.js.value.campaigns.cp1.held).sort();
+  clock.add(120000);
+  table.rows[DS1].push(row(4, { props: { Status: 'Another Word' }, edited: edit(4) }));
+  const r2 = await j.run();
+  assert.deepEqual(Object.keys(j.js.value.campaigns.cp1.held).sort(), kept, 'the same two stay; the newest are never swapped in for them');
+  assert.ok(r2.warnings.includes('held-list-full'));
+  const sum = await j.stateSummary();
+  assert.ok(sum.heldFull.includes('cp1'));
+});
+
+test('HELD: a staff rescan keeps the held list (a row that cannot be read right now is not forgotten)', async () => {
+  const { store, table } = heldWorld();
+  const clock = clockAt();
+  const j = job(store, table, { getPage: table.getPage, now: clock.now });
+  await j.run();
+  const since = j.js.value.campaigns.cp1.held[pid(1)].since;
+  table.rows[DS1] = table.rows[DS1].filter((r) => r.pageId !== pid(1));   /* the query no longer returns it ... */
+  table.pageFail = 500;                                                     /* ... and reading it by id fails */
+  clock.add(120000);
+  await j.run({ trigger: 'manual', rescan: ['cp1'] });
+  const h = j.js.value.campaigns.cp1.held[pid(1)];
+  assert.ok(h, 'still held after the rescan');
+  assert.equal(h.since, since); assert.equal(h.tries, 1);
+});
+
+function manyCampaigns(n, failFor) {
+  const ds = (i) => AC.normalizeId(hex(9100 + i));
+  const cps = [], rows = {};
+  for (let i = 1; i <= n; i++) { cps.push(campaign('cq' + i, ds(i))); rows[ds(i)] = [row(i)]; }
+  const store = makeStore({ campaigns: cps });
+  const table = makeTable(rows);
+  const asked = [];
+  const base = table.query;
+  table.query = async (o) => {
+    asked.push(o.dataSourceId);
+    if (failFor(o.dataSourceId, ds)) { const e = new Error('sentinel-text'); e.status = 503; throw e; }
+    return base(o);
+  };
+  return { store, table, asked, ds };
+}
+
+test('BREAKER: after 5 server failures in a row (default) the run stops, says so, and the rest are counted as not visited', async () => {
+  const w = manyCampaigns(8, () => true);
+  const r = await job(w.store, w.table).run();
+  assert.equal(w.asked.length, 5, 'campaigns 6 to 8 were never asked');
+  assert.equal(r.aborted, 'circuit-open'); assert.equal(r.ok, false);
+  assert.ok(r.errors.some((e) => /circuit/i.test(e)));
+  assert.equal(r.remaining.campaignsNotVisited, 3);
+  assert.equal(r.campaigns.filter((c) => c.why === 'query-failed:http-503').length, 5);
+  assert.ok(!JSON.stringify(r).includes('sentinel-text'));
+  assert.equal(w.store.saves.length, 0);
+});
+
+test('BREAKER: the threshold is configurable; a success resets the count; a 4xx is not a server failure', async () => {
+  const a = manyCampaigns(6, () => true);
+  await job(a.store, a.table, { breakerFailures: 2 }).run();
+  assert.equal(a.asked.length, 2);
+  /* fail, fail, ok, fail, fail, fail with a threshold of 3: only the last three trip it, so all six are asked and the run is not aborted before the end */
+  const pattern = [true, true, false, true, true, false];
+  const b = manyCampaigns(6, (id, ds) => { for (let i = 1; i <= 6; i++) if (id === ds(i)) return pattern[i - 1]; return false; });
+  const rb = await job(b.store, b.table, { breakerFailures: 3 }).run();
+  assert.equal(b.asked.length, 6); assert.equal(rb.aborted, null);
+  /* a permanent error (404) does not count */
+  const c = manyCampaigns(6, () => false);
+  const base = c.table.query;
+  c.table.query = async (o) => { c.asked.push(o.dataSourceId); const e = new Error('x'); e.status = 404; throw e; };
+  const rc = await job(c.store, c.table, { breakerFailures: 2 }).run();
+  assert.equal(c.asked.length, 6); assert.equal(rc.aborted, null);
+});
