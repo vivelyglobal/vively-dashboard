@@ -281,7 +281,7 @@
   "ranges": [
    [
     10488,
-    10739
+    10789
    ]
   ],
   "imports": [
@@ -290,14 +290,14 @@
    "import { $, esc } from '../ui/dom.js';",
    "import { toast } from '../ui/overlay.js';"
   ],
-  "sha256": "1ae533389668173ca9e68c0356724174435c1ab5f464e5927642234bbdae5ec7"
+  "sha256": "104b69333c40cf4dcd22481896ebf23b1d2cf62a19504ee4dee7719eb5357f5f"
  },
  {
   "file": "docs/docx.js",
   "ranges": [
    [
-    10830,
-    10960
+    10880,
+    11010
    ]
   ],
   "imports": [
@@ -311,8 +311,8 @@
   "file": "docs/contracts.js",
   "ranges": [
    [
-    10961,
-    11432
+    11011,
+    11482
    ]
   ],
   "imports": [
@@ -624,8 +624,8 @@
   "file": "views/sheetsSettings.js",
   "ranges": [
    [
-    10740,
-    10829
+    10790,
+    10879
    ]
   ],
   "imports": [
@@ -640,8 +640,8 @@
   "file": "views/contracts.js",
   "ranges": [
    [
-    11433,
-    11764
+    11483,
+    11814
    ]
   ],
   "imports": [
@@ -658,8 +658,8 @@
   "file": "views/settings.js",
   "ranges": [
    [
-    11765,
-    12371
+    11815,
+    12421
    ]
   ],
   "imports": [
@@ -697,8 +697,8 @@
   "file": "sync/gcal.js",
   "ranges": [
    [
-    13297,
-    13648
+    13347,
+    13698
    ]
   ],
   "imports": [
@@ -714,8 +714,8 @@
   "file": "views/calendar.js",
   "ranges": [
    [
-    13651,
-    13901
+    13701,
+    13951
    ]
   ],
   "imports": [
@@ -733,8 +733,8 @@
   "file": "sync/partner.js",
   "ranges": [
    [
-    12586,
-    12691
+    12636,
+    12741
    ]
   ],
   "imports": [
@@ -747,8 +747,8 @@
   "file": "views/partners.js",
   "ranges": [
    [
-    12692,
-    13049
+    12742,
+    13099
    ]
   ],
   "imports": [
@@ -768,8 +768,8 @@
   "file": "views/autocreatePanel.js",
   "ranges": [
    [
-    13050,
-    13296
+    13100,
+    13346
    ]
   ],
   "imports": [
@@ -781,8 +781,8 @@
   "file": "sync/notionWriteback.js",
   "ranges": [
    [
-    12470,
-    12585
+    12520,
+    12635
    ]
   ],
   "imports": [
@@ -797,8 +797,8 @@
   "file": "model/duplicates.js",
   "ranges": [
    [
-    12372,
-    12468
+    12422,
+    12518
    ]
   ],
   "imports": [
@@ -814,8 +814,8 @@
   "file": "model/socialStats.js",
   "ranges": [
    [
-    13903,
-    14202
+    13953,
+    14252
    ]
   ],
   "imports": [
@@ -827,8 +827,8 @@
   "file": "charts/socialViz.js",
   "ranges": [
    [
-    14203,
-    14300
+    14253,
+    14350
    ]
   ],
   "imports": [
@@ -842,8 +842,8 @@
   "file": "views/socialOverview.js",
   "ranges": [
    [
-    14301,
-    14762
+    14351,
+    14812
    ]
   ],
   "imports": [
@@ -862,8 +862,8 @@
   "file": "model/homeStats.js",
   "ranges": [
    [
-    14764,
-    15183
+    14814,
+    15233
    ]
   ],
   "imports": [
@@ -878,8 +878,8 @@
   "file": "views/home.js",
   "ranges": [
    [
-    15185,
-    15552
+    15235,
+    15602
    ]
   ],
   "imports": [
@@ -900,8 +900,8 @@
   "file": "views/booking.js",
   "ranges": [
    [
-    15555,
-    17352
+    15605,
+    17402
    ]
   ],
   "imports": [
@@ -921,8 +921,8 @@
   "file": "views/desk.js",
   "ranges": [
    [
-    17355,
-    18170
+    17405,
+    18220
    ]
   ],
   "imports": [
@@ -942,8 +942,8 @@
   "file": "sync/sheetMetrics.js",
   "ranges": [
    [
-    18173,
-    18887
+    18223,
+    18937
    ]
   ],
   "imports": [

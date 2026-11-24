@@ -10613,6 +10613,53 @@ function gridToEntity(name, grid) {
   });
 }
 
+/* A pull must never drop what the Sheet does not carry. The Sheet only has the
+   SHEET_SCHEMA columns, so notionPageId, notionAutoLinked, source, notionMapping,
+   clientId, partner and anything else added later live only in this browser.
+   Merge by id: a schema column that is in the Sheet's header always comes from the
+   Sheet (a blank cell stays blank); every other field is kept from the existing
+   entity. Rows only in the Sheet are created from the columns as before; entities
+   missing from the Sheet are not carried over (same as before this fix).
+   `kept` counts the fields preserved, so the toast can say so. */
+const PULL_DERIVED = ['thumbTint', 'viral'];
+function mergePulled(name, pulled, existing, header) {
+  const cols = SHEET_SCHEMA[name];
+  const top = new Set(cols.map((c) => c[0]).filter((k) => k.indexOf('.') < 0));
+  const sub = new Set(cols.map((c) => c[0]).filter((k) => k.startsWith('content.')).map((k) => k.slice(8)));
+  const hasHeader = (k) => !header || header.indexOf(k) >= 0;
+  const byId = {};
+  (existing || []).forEach((e) => { if (e && e.id != null && e.id !== '' && !Object.prototype.hasOwnProperty.call(byId, e.id)) byId[e.id] = e; });
+  let kept = 0;
+  const list = pulled.map((p) => {
+    const old = (p.id !== '' && p.id != null && Object.prototype.hasOwnProperty.call(byId, p.id)) ? byId[p.id] : null;
+    if (!old) return p;
+    const out = {};
+    Object.keys(old).forEach((k) => {
+      if (k === 'content' || top.has(k)) return;
+      out[k] = JSON.parse(JSON.stringify(old[k] === undefined ? null : old[k]));
+      kept++;
+    });
+    cols.forEach(([key]) => {
+      if (key.indexOf('.') >= 0) return;
+      if (hasHeader(key)) out[key] = p[key];
+      else if (key in old) out[key] = old[key];
+    });
+    const sheetHasContent = !header || cols.some(([key]) => key.startsWith('content.') && header.indexOf(key) >= 0);
+    if (!sheetHasContent) out.content = old.content == null ? null : JSON.parse(JSON.stringify(old.content));
+    else if (p.content && old.content && typeof old.content === 'object') {
+      const c = Object.assign({}, p.content);
+      Object.keys(old.content).forEach((k) => {
+        if (sub.has(k) || PULL_DERIVED.indexOf(k) >= 0) return;
+        c[k] = JSON.parse(JSON.stringify(old.content[k] === undefined ? null : old.content[k]));
+        kept++;
+      });
+      out.content = c;
+    } else out.content = p.content;
+    return out;
+  });
+  return { list, kept };
+}
+
 /* ------------------------------ transport ------------------------------ */
 /* text/plain keeps the request "simple", so the browser skips the CORS
    preflight that Apps Script cannot answer */
@@ -10638,9 +10685,12 @@ async function sheetPull(opts) {
   try {
     const json = await sheetCall('pull');
     const grids = json.data || {};
-    const campaigns = gridToEntity('campaigns', grids.campaigns);
-    const creators = gridToEntity('creators', grids.creators);
-    const participants = gridToEntity('participants', grids.participants);
+    const hdr = (g) => (g && g.length ? g[0].map((h) => String(h).trim()) : null);
+    const mC = mergePulled('campaigns', gridToEntity('campaigns', grids.campaigns), DB.campaigns, hdr(grids.campaigns));
+    const mR = mergePulled('creators', gridToEntity('creators', grids.creators), DB.creators, hdr(grids.creators));
+    const mP = mergePulled('participants', gridToEntity('participants', grids.participants), DB.participants, hdr(grids.participants));
+    const campaigns = mC.list, creators = mR.list, participants = mP.list;
+    const keptFields = mC.kept + mR.kept + mP.kept;
 
     if (!opts.silent && (DB.campaigns.length || DB.creators.length) &&
         !confirm(`Replace this browser's workspace (${DB.campaigns.length} campaigns, ${DB.creators.length} creators) with the Sheet's (${campaigns.length} campaigns, ${creators.length} creators)?`)) {
@@ -10657,7 +10707,7 @@ async function sheetPull(opts) {
     SYNC.at = new Date(); SYNC.error = null; SYNC.status = 'idle';
     lastPushedJson = JSON.stringify(DB);
     saveSyncConfig(); persist(true);
-    toast(`Pulled ${campaigns.length} campaigns and ${creators.length} creators from the Sheet`);
+    toast(`Pulled ${campaigns.length} campaigns and ${creators.length} creators from the Sheet` + (keptFields ? ` (kept ${keptFields} fields the sheet does not carry)` : ''));
     render();
   } catch (err) {
     SYNC.error = err.message; SYNC.status = 'error';
