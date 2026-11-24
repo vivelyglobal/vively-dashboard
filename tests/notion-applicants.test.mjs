@@ -1303,12 +1303,12 @@ test('FIX 8: buildDefaultMapping needs every required column with its expected t
   const bad = N.buildDefaultMapping(s, FIELD_KEYS);
   assert.equal(bad.mapping, undefined);
   assert.deepEqual(bad.missing.map((m) => [m.property, m.expected, m.found]).sort(), [
-    ['Followers', 'number', 'rich_text'], ['Instagram Link', 'url', 'rich_text'], ['Submission time', 'created_time or date', null], ['Visit Date', 'date', null]].sort());
+    ['Followers', 'number', 'rich_text'], ['Instagram Link', 'url', 'rich_text']].sort());
   /* a look-alike name or type is not accepted */
   assert.ok(N.buildDefaultMapping(Object.assign({}, SCHEMA_OK, { Status: { type: 'rich_text' } }), FIELD_KEYS).missing);
   assert.ok(N.buildDefaultMapping(Object.assign(clone(SCHEMA_OK), { 'full name': { type: 'title' } }), FIELD_KEYS).missing, 'two columns with one name is ambiguous');
-  assert.ok(N.buildDefaultMapping({}, FIELD_KEYS).missing.length === 7);
-  assert.ok(N.buildDefaultMapping(null, FIELD_KEYS).missing.length === 7);
+  assert.ok(N.buildDefaultMapping({}, FIELD_KEYS).missing.length === 5, 'five required columns');
+  assert.ok(N.buildDefaultMapping(null, FIELD_KEYS).missing.length === 5);
 });
 
 test('FIX 8: a campaign with a Responses data source and no mapping gets the default mapping saved (never forced) and its rows come in on the same run', async () => {
@@ -1331,7 +1331,7 @@ test('FIX 8: a campaign with a Responses data source and no mapping gets the def
 });
 
 test('FIX 8: an incomplete form is skipped and the exact missing or wrong-typed property is reported; nothing is saved, no row is read, and it is looked at again only after 10 minutes', async () => {
-  const s = clone(SCHEMA_OK); delete s['Visit Date']; s.Followers = { type: 'rich_text' };
+  const s = clone(SCHEMA_OK); s['Visit Date'] = { type: 'rich_text' }; s.Followers = { type: 'rich_text' };
   const store = makeStore({ campaigns: [unmapped('cp1', DS1)] });
   const table = makeTable({ [DS1]: [row(1)] });
   const sc = schemaDeps({ [DS1]: s });
@@ -1340,7 +1340,7 @@ test('FIX 8: an incomplete form is skipped and the exact missing or wrong-typed 
   const run = await j.run();
   const r = cpReport(run, 'cp1');
   assert.equal(r.status, 'skipped'); assert.equal(r.why, 'mapping-incomplete');
-  assert.deepEqual(r.missing, [{ property: 'Followers', expected: 'number', found: 'rich_text' }, { property: 'Visit Date', expected: 'date', found: null }]);
+  assert.deepEqual(r.missing, [{ property: 'Followers', expected: 'number', found: 'rich_text' }, { property: 'Visit Date', expected: 'date', found: 'rich_text' }]);
   assert.equal(store.saves.length, 0); assert.equal(store.doc.db.campaigns[0].notionMapping, null);
   assert.equal(table.calls.length, 0, 'no rows were read');
   clock.add(120000); const again = await j.run();
@@ -1808,4 +1808,71 @@ test('MASS DELETE: only a staff manual run with the explicit confirm proceeds; t
   });
   assert.equal(seen[0].confirmMassDelete, undefined);
   assert.equal(seen[1].confirmMassDelete, true);
+});
+
+/* ---- report 61: the real campaign tables ---- */
+const REAL = { 'Full Name': { type: 'title' }, Nationality: { type: 'rich_text' }, 'Instagram Link': { type: 'url' }, 'Instagram Follower': { type: 'number' },
+  Status: { type: 'status' }, 'Submission time': { type: 'created_time' }, 'Email Address': { type: 'rich_text' }, Notes: { type: 'rich_text' }, 'Link Content': { type: 'url' } };
+
+test('report 61: the real table (Instagram Follower, no Visit Date) maps; visitAt stays empty; nothing else is mapped', () => {
+  const r = N.buildDefaultMapping(REAL, FIELD_KEYS);
+  assert.equal(r.missing, undefined);
+  assert.deepEqual(Object.entries(r.mapping).filter(([, v]) => v).sort(), [['fullName', 'Full Name'], ['followers', 'Instagram Follower'], ['instagram', 'Instagram Link'], ['nationality', 'Nationality'], ['status', 'Status']].sort());
+  assert.equal(r.mapping.visitAt, null);
+  assert.equal(r.mapping.email, null); assert.equal(r.mapping.contact, null);
+});
+
+test('report 61: every Followers alias works, case-insensitive and trimmed', () => {
+  ['Followers', 'Instagram Follower', 'Instagram Followers', 'IG Followers', 'IG Follower', '  ig FOLLOWER  ', 'INSTAGRAM  follower'].forEach((name) => {
+    const s = clone(REAL); delete s['Instagram Follower']; s[name] = { type: 'number' };
+    const r = N.buildDefaultMapping(s, FIELD_KEYS);
+    assert.equal(r.mapping && r.mapping.followers, name, name);
+  });
+});
+
+test('report 61: two Followers-like columns are followers-ambiguous, never guessed; absent or wrong-typed is reported plainly', () => {
+  const two = Object.assign(clone(REAL), { Followers: { type: 'number' } });
+  const r = N.buildDefaultMapping(two, FIELD_KEYS);
+  assert.equal(r.mapping, undefined);
+  assert.deepEqual(r.missing.map((m) => [m.property, m.reason]), [['Followers', 'followers-ambiguous']]);
+  const txt = Object.assign(clone(REAL), { 'IG Followers': { type: 'rich_text' } });
+  assert.equal(N.buildDefaultMapping(txt, FIELD_KEYS).missing[0].reason, 'followers-ambiguous', 'any two matching columns, whatever the type');
+  const none = clone(REAL); delete none['Instagram Follower'];
+  assert.deepEqual(N.buildDefaultMapping(none, FIELD_KEYS).missing, [{ property: 'Followers', expected: 'number', found: null }]);
+  const wrong = clone(REAL); wrong['Instagram Follower'] = { type: 'rich_text' };
+  assert.deepEqual(N.buildDefaultMapping(wrong, FIELD_KEYS).missing, [{ property: 'Followers', expected: 'number', found: 'rich_text' }]);
+});
+
+test('report 61: still required: Full Name, Nationality, Instagram Link, Status; Submission time is not checked; Visit Date wrong type or twice is reported', () => {
+  ['Full Name', 'Nationality', 'Instagram Link', 'Status'].forEach((c) => {
+    const s = clone(REAL); delete s[c];
+    assert.deepEqual(N.buildDefaultMapping(s, FIELD_KEYS).missing.map((m) => m.property), [c]);
+  });
+  const s = clone(REAL); delete s['Submission time'];
+  assert.ok(N.buildDefaultMapping(s, FIELD_KEYS).mapping);
+  assert.equal(N.buildDefaultMapping(Object.assign(clone(REAL), { 'Visit Date': { type: 'rich_text' } }), FIELD_KEYS).missing[0].found, 'rich_text');
+  assert.equal(N.buildDefaultMapping(Object.assign(clone(REAL), { 'Visit Date': { type: 'date' }, 'visit date': { type: 'date' } }), FIELD_KEYS).missing[0].found, 'several columns with that name');
+});
+
+test('report 61: the nine real Status options land on the intended stage and drop reason on first import; unknown stays held', async () => {
+  const opts = ['Waiting Approval', 'Brand Accepted', 'Confirmed', 'Re-Schedule', 'Waiting Upload', 'Uploaded', 'Declined', 'Brand Rejected', 'Cancelled'];
+  const store = makeStore({ campaigns: [campaign('cp1', DS1)] });
+  const rows = opts.map((o, i) => row(i + 1, { props: { Status: o } })).concat([row(20, { props: { Status: 'Totally New' } })]);
+  const table = makeTable({ [DS1]: rows });
+  const run = await job(store, table, { jobState: makeJobState({ campaigns: { cp1: { ds: DS1, cursor: null, baselineDone: true } } }) }).run();
+  const by = {}; rosterOf(store, 'cp1').forEach((p) => { by[p.importedStatus] = [p.stage, p.dropReason || null]; });
+  assert.deepEqual(by, {
+    'Waiting Approval': ['shortlisted', null], 'Brand Accepted': ['shortlisted', null], Confirmed: ['confirmed', null], 'Re-Schedule': ['confirmed', null],
+    'Waiting Upload': ['shipped', null], Uploaded: ['live', null], Declined: ['dropped', 'Declined'], 'Brand Rejected': ['dropped', 'Brand rejected'], Cancelled: ['dropped', 'Cancelled']
+  });
+  assert.deepEqual(run.unknownStatuses, [{ value: 'unknown', count: 1 }]);
+  assert.equal(rosterOf(store, 'cp1').length, 9, 'the unknown one is held, not created');
+});
+
+test('report 61: a later Notion status change on an existing row is reported as differs, the stage is not touched', async () => {
+  const store = makeStore({ campaigns: [campaign('cp1', DS1)], creators: [manualCreator(1)], participants: [manualPart(1, 'cp1')] });
+  const table = makeTable({ [DS1]: [row(1, { props: { Status: 'Brand Accepted' } })] });
+  const run = await job(store, table, { jobState: makeJobState({ campaigns: { cp1: { ds: DS1, cursor: null, baselineDone: true } } }) }).run();
+  assert.equal(store.doc.db.participants[0].stage, 'confirmed');
+  assert.ok(JSON.stringify(run).includes('differs'));
 });

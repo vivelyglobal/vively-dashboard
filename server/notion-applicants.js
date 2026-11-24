@@ -279,17 +279,23 @@ function makeNotionApi(raw, extractValue, o) {
 /* The columns a form must have for the job to map it by itself. Names are
    compared lower-case with spaces collapsed; the type must be one of the
    listed ones. Nothing is guessed from a similar-looking column or an
-   unexpected type. `key` is the dashboard field (NOTION_FIELD_DEFS); the
-   submission-time column has no field (the job uses the page's own created
-   time, as the manual import does) but must exist. */
+   unexpected type. `key` is the dashboard field (NOTION_FIELD_DEFS).
+   REQUIRED: Full Name, Nationality, Instagram Link, Followers (any one alias
+   in FOLLOWER_NAMES, exactly one column), Status.
+   OPTIONAL: Visit Date. Absent = fine, the requested visit date stays empty;
+   present with the wrong type, or twice, = the form is reported incomplete.
+   No Submission time check any more: the job uses the page's own created
+   time (row.createdTime) for the applied date, as the manual import does, so
+   that column is never read (report 61). Two columns matching Followers
+   carry reason "followers-ambiguous". */
+const FOLLOWER_NAMES = ["followers", "follower", "follower count", "instagram follower", "instagram followers", "ig followers", "ig follower"];
 const DEFAULT_COLUMNS = [
   { key: "fullName", label: "Full Name", names: ["full name"], types: ["title"] },
   { key: "nationality", label: "Nationality", names: ["nationality"], types: ["rich_text", "select"] },
   { key: "instagram", label: "Instagram Link", names: ["instagram link"], types: ["url"] },
-  { key: "followers", label: "Followers", names: ["followers", "follower count", "instagram followers"], types: ["number"] },
+  { key: "followers", label: "Followers", names: FOLLOWER_NAMES, types: ["number"], ambiguous: "followers-ambiguous" },
   { key: "status", label: "Status", names: ["status"], types: ["status", "select"] },
-  { key: null, label: "Submission time", names: ["submission time"], types: ["created_time", "date"] },
-  { key: "visitAt", label: "Visit Date", names: ["visit date"], types: ["date"] }
+  { key: "visitAt", label: "Visit Date", names: ["visit date"], types: ["date"], optional: true }
 ];
 const normName = (s) => String(s == null ? "" : s).trim().toLowerCase().replace(/\s+/g, " ");
 
@@ -307,8 +313,12 @@ function buildDefaultMapping(properties, fieldKeys) {
   DEFAULT_COLUMNS.forEach((col) => {
     const hits = props.filter((p) => col.names.includes(normName(p.name)));
     const expected = col.types.join(" or ");
-    if (!hits.length) { missing.push({ property: col.label, expected, found: null }); return; }
-    if (hits.length > 1) { missing.push({ property: col.label, expected, found: "several columns with that name" }); return; }
+    if (!hits.length) { if (!col.optional) missing.push({ property: col.label, expected, found: null }); return; }
+    if (hits.length > 1) {
+      const m = { property: col.label, expected, found: "several columns with that name" };
+      if (col.ambiguous) m.reason = col.ambiguous;
+      missing.push(m); return;
+    }
     if (!col.types.includes(hits[0].type)) { missing.push({ property: col.label, expected, found: hits[0].type || "unknown type" }); return; }
     if (col.key) mapping[col.key] = hits[0].name;
   });
@@ -349,7 +359,18 @@ const fieldHash = (k, v) => crypto.createHash("sha256").update(k + "\u0000" + st
    "brand" or "cancel" is written back as "Declined"). STATUS_MAP in
    src/import/excel.js has no entry for it, and it is shared with the manual
    import and the browser bundle, so it is not edited here (see report 28). */
-const EXTRA_STATUS = { declined: { stage: "dropped", reason: "Declined" } };
+const EXTRA_STATUS = {
+  declined: { stage: "dropped", reason: "Declined" },
+  /* brand approved, creator not yet confirmed: the job keeps it Shortlisted
+     (the manual import still reads it as Confirmed). Orchestrator decision
+     2026-11-24, reversible: delete this line. */
+  "brand accepted": { stage: "shortlisted" },
+  /* visit being moved: the creator stays Confirmed */
+  "re-schedule": { stage: "confirmed" }
+};
+/* Real option -> stage, the rest from STATUS_MAP: Waiting Approval shortlisted,
+   Confirmed confirmed, Waiting Upload shipped (Shipped / Booked), Uploaded live,
+   Brand Rejected / Cancelled dropped. See report 61. */
 
 /* Put one campaign's rows onto the workspace `db` (mutated in place).
    ctx: { db, cp, rows, shared, newId, nowIso, baseline, createBudget, budgetReason, snap }
@@ -444,7 +465,7 @@ function applyRows(ctx) {
     const lc = raw.toLowerCase();
     const extra = own(EXTRA_STATUS, lc) ? EXTRA_STATUS[lc] : null;
     const known = own(shared.STATUS_MAP, lc) || !!extra;
-    if (extra) { ap.stage = extra.stage; ap.dropReason = extra.reason; }
+    if (extra) { ap.stage = extra.stage; ap.dropReason = extra.reason || null; }
     if (!known) {
       /* The status TEXT is not stored or shown: it is an option name staff
          chose in Notion (INFERRED), but if the column is mapped to a free
