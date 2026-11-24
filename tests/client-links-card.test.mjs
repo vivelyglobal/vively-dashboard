@@ -29,7 +29,7 @@ const HOSTILE = '<img src=x onerror=alert(1)>" onmouseover="alert(2)';
 const reset = () => {
   calls = []; script = []; confirmSeen = []; copied = []; confirmAnswer = true;
   els['#clkBody'] = mkEl(); els['#clkTtl'] = mkEl();
-  els['#toast'] = { textContent: '', classList: { add() {}, remove() {} } };
+  els['#toast'] = { textContent: '', classList: { add() {}, remove() {} }, setAttribute() {} };
   Object.assign(P.CLK, { links: [], projection: null, workspaceRevision: null, ttlDays: 90, loaded: false, error: '', busy: '', shown: null, msg: null });
   DB.campaigns = [{ id: 'c1', brand: 'Brand One', name: 'Sushi Jongno', status: 'live' }, { id: 'c2', brand: HOSTILE, name: HOSTILE, status: 'planning' },
     { id: 'c3', brand: 'Old', name: 'Wrapped One', status: 'wrapped' }];

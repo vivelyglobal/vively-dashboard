@@ -44,7 +44,9 @@ export const SHEET_SCHEMA = {
     ['start','s'],['end','s'],['targetCreators','n'],['minFollowers','n'],['platforms','a'],
     ['deliverables','s'],['budget','n'],['productCostPer','n'],['adSpend','n'],['hashtags','a'],
     ['owner','s'],['note','s'],['createdAt','s'],['fulfilment','s'],['importedFrom','s'],
-    ['notionDatabaseId','s'],['notionSyncedAt','s'],['notionDescription','s'],['storeName','s']
+    ['notionDatabaseId','s'],['notionSyncedAt','s'],['notionDescription','s'],['storeName','s'],
+    /* staff-only links; listed so a pull of the workspace mirror does not drop them */
+    ['sheetUrl','s'],['guidelineUrl','s']
   ],
   creators: [
     ['id','s'],['handle','s'],['name','s'],['platform','s'],['followers','n'],['er','n'],['avgViews','n'],

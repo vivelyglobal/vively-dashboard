@@ -25,7 +25,7 @@
 
   --text:          #e8eaed;
   --text-2:        #9aa0a6;
-  --text-3:        #6f757c;
+  --text-3:        #8f949a;   /* 4.67:1 or better on every dark surface */
 
   /* The one brand accent. Named --blue for history: every rule in the
      file already reads it, so changing the brand is changing these four. */
@@ -82,7 +82,7 @@
 
   --text:          #1c1917;
   --text-2:        #57534e;
-  --text-3:        #8a847d;
+  --text-3:        #6a645d;   /* 4.56:1 or better on every light surface */
 
   --blue:          #5b45e0;
   --blue-hi:       #4733c4;
@@ -315,6 +315,11 @@ body.panel-closed .panel { border-right: 0; }
 .btn.sm { padding: 6px 12px; font-size: 12.5px; border-radius: 8px; }
 .btn.xs { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
 .btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--blue-soft-2); }
+/* One visible keyboard focus ring for everything that can be tabbed to. The
+   inputs keep their own border and glow as well; this adds the outline the
+   browser default drew on some controls and not on others. */
+:focus-visible { outline: 2px solid var(--blue-hi); outline-offset: 2px; }
+input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue-hi); outline-offset: 1px; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 
 /* ---- visit calendar ---- */
@@ -715,6 +720,34 @@ input[type=checkbox] { accent-color: var(--blue); width: 15px; height: 15px; cur
 .bar { height: 6px; border-radius: 99px; background: var(--surface-3); overflow: hidden; }
 .bar > i { display: block; height: 100%; background: var(--blue); border-radius: 99px; }
 
+/* ---- campaign hub ---- */
+.tnum { font-variant-numeric: tabular-nums; }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.card-linked { position: relative; cursor: pointer; }
+.card-linked:hover { border-color: var(--line-strong); }
+.card-link { color: inherit; text-decoration: none; }
+.card-link:hover { text-decoration: none; }
+.card-link::after { content: ''; position: absolute; inset: 0; border-radius: var(--r-lg); }
+.card-link:focus-visible { outline: none; }
+.card-link:focus-visible::after { outline: 2px solid var(--blue-hi); outline-offset: 2px; }
+.hub-summary, .hub-notion { margin-bottom: 14px; }
+.hub-brand { font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
+.hub-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.hub-row .sp { flex: 1; }
+.hub-sub { font-size: 12.5px; color: var(--text-3); margin: 4px 0 8px; line-height: 1.5; }
+.hub-msg { font-size: 13.5px; margin: 10px 0 6px; }
+.hub-next { font-size: 12.5px; color: var(--text-2); margin: 10px 0 0; line-height: 1.5; }
+.hub-counts { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--text-2); margin: 8px 0; }
+.hub-counts strong { color: var(--text); font-weight: 600; }
+.hub-held { margin: 4px 0 4px 18px; padding: 0; font-size: 12.5px; color: var(--text-2); }
+.hub-h { font-size: 14.5px; font-weight: 650; margin: 18px 0 10px; }
+.hub-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.hub-doc h4 { font-size: 13.5px; font-weight: 600; margin: 0 0 4px; }
+.hub-lbl { display: block; font-size: 12px; color: var(--text-2); margin: 6px 0 4px; }
+.hub-err { color: #f08a8a; font-size: 12.5px; min-height: 0; margin: 4px 0; }
+:root[data-theme="light"] .hub-err { color: #b42318; }
+.hub-doc .hub-row { margin-top: 8px; }
+
 /* drawer / modal */
 .scrim {
   position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 100; display: none;
@@ -729,17 +762,22 @@ input[type=checkbox] { accent-color: var(--blue); width: 15px; height: 15px; cur
 .scrim.open { display: block; }
 .drawer {
   position: fixed; top: 0; right: 0; height: 100vh; width: min(560px, 92vw); background: var(--surface);
-  border-left: 1px solid var(--line); z-index: 101; transform: translateX(100%); transition: transform .18s ease;
+  border-left: 1px solid var(--line); z-index: 101; transform: translateX(100%);
+  /* hidden once it has slid away, so Tab cannot walk into a closed drawer */
+  visibility: hidden; transition: transform .18s ease, visibility 0s linear .18s;
   display: flex; flex-direction: column;
 }
-.drawer.open { transform: translateX(0); }
+.drawer.open { transform: translateX(0); visibility: visible; transition: transform .18s ease; }
+#drawerTitle:focus { outline: none; }
 .drawer.wide { width: min(960px, 96vw); }
 .drawer-head { padding: 18px 22px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; }
 .drawer-body { padding: 20px 22px 40px; overflow-y: auto; flex: 1; }
 .icon-btn {
   width: 32px; height: 32px; border-radius: 50%; border: 0; background: none; color: var(--text-2);
-  cursor: pointer; font-size: 17px; display: grid; place-items: center;
+  cursor: pointer; font-size: 17px; display: grid; place-items: center; position: relative;
 }
+/* the circle stays 32px; the clickable area grows to 40px */
+.icon-btn::after { content: ''; position: absolute; inset: -4px; }
 .icon-btn:hover { background: var(--surface-2); color: var(--text); }
 
 /* dropzone */
@@ -760,7 +798,7 @@ tr.preferred-row td:first-child { box-shadow: inset 3px 0 0 var(--good); }
 .toast {
   position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 16px); opacity: 0;
   background: var(--toast-bg); color: var(--toast-fg); font-size: 13px; font-weight: 500;
-  padding: 10px 18px; border-radius: var(--r); z-index: 300; pointer-events: none; transition: all .2s ease;
+  padding: 10px 18px; border-radius: var(--r); z-index: 300; pointer-events: none; transition: opacity .2s ease, transform .2s ease;
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 

@@ -1,4 +1,5 @@
 import { SERIES_HEX, barsH, fitHeight, lineChart, sparkSvg, splitBar } from '../charts/index.js';
+import { CONTRACT_DOCS } from '../docs/contracts.js';
 import { openMetricsImport } from '../import/metrics.js';
 import { campaignsSharingNotionDb, joinSlot, notionLinkedCampaigns, openNotionMappingDrawer, splitSlot, syncAllNotionCampaigns, visitMismatchMark, visitMismatchesIn, visitSlotMoved, visitSlotOf } from '../import/notion.js';
 import { DAY, TODAY, addDays, dLabel, iso } from '../lib/dates.js';
@@ -17,6 +18,7 @@ import { syncStageToNotion } from '../sync/notionWriteback.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { FLAGS, avatarHtml, copyText, daysAgo, downloadFile, emptyState, flagMark, flagPill, flagRowClass, flaggedOnRoster, stagePill, statCard, statusPill, tierPill, toCsv, whoHtml } from '../ui/html.js';
 import { closeDrawer, openDrawer, toast } from '../ui/overlay.js';
+import { nacCall } from './autocreatePanel.js';
 import { BOOKING, bookingTab, inviteParticipantToBook, loadBooking, openStaffMove } from './booking.js';
 import { campaignCalendarTab, renderCampaignCalendar, upcomingVisitsStrip } from './calendarView.js';
 import { openImportWizard } from './excelImport.js';
@@ -24,6 +26,7 @@ import { briefTab, messagesTab } from './messages.js';
 import { openNotionDiagnostic, openNotionSync } from './notionDiag.js';
 import { openNotionImportWizard } from './notionImport.js';
 import { state } from './overview.js';
+import { CLK, clkDetail, clkLinkFor, clkStatusPill } from './partners.js';
 import { plannerTab } from './planner.js';
 import { reportTab } from './report.js';
 
@@ -32,7 +35,7 @@ import { reportTab } from './report.js';
    layer 2 = the campaign list · layer 3 = tabs on one campaign
    ============================================================ */
 export const CAMPAIGN_TABS = [
-  ['planner', 'Planner'], ['roster', 'Roster & pipeline'], ['booking', 'Booking'], ['calendar', 'Visit calendar'], ['content', 'Content review'],
+  ['overview', 'Overview'], ['planner', 'Planner'], ['roster', 'Roster & pipeline'], ['booking', 'Booking'], ['calendar', 'Visit calendar'], ['content', 'Content review'],
   ['performance', 'Performance'], ['creators', 'Creator results'], ['messages', 'Messages'],
   ['brief', 'Brief'], ['report', 'Report']
 ];
@@ -40,6 +43,7 @@ export const CAMPAIGN_TABS = [
    small switch above the page. The URL still names the page itself, so
    #/campaigns/x/booking and every bookmark like it lands where it did. */
 export const CAMPAIGN_GROUPS = [
+  ['overview', 'Overview', ['overview']],
   ['planner', 'Planner', ['planner']],
   ['roster', 'Creators', ['roster']],
   ['booking', 'Schedule', ['booking', 'calendar']],
@@ -60,7 +64,7 @@ export function campaignSubNav(cp, tab) {
 
 export function renderCampaignSection(view, item, tab) {
   if (!item || item === 'all') return renderCampaignGrid(view, tab || 'active');
-  return renderCampaign(view, item, tab || 'roster');
+  return renderCampaign(view, item, tab || 'overview');
 }
 
 /* ------------------------------ all campaigns ------------------------------ */
@@ -92,10 +96,10 @@ export function renderCampaignGrid(view, tab) {
   $('#cpGrid').innerHTML = list.map((cp) => {
     const s = campaignStats(cp);
     const spark = s.views ? sparkSvg(dailySeries([cp], 21).views, SERIES_HEX[0]) : '';
-    return `<div class="card" style="cursor:pointer" onclick="location.hash='#/campaigns/${cp.id}/roster'">
+    return `<div class="card card-linked">
       <div class="card-head" style="align-items:flex-start">
         <div style="min-width:0">
-          <div style="font-size:15px;font-weight:500;">${esc(cp.brand)}</div>
+          <div style="font-size:15px;font-weight:500;"><a class="card-link" href="#/campaigns/${esc(cp.id)}/overview">${esc(cp.brand)}<span class="sr-only"> — ${esc(cp.name)}</span></a></div>
           <div style="font-size:12px;color:var(--text-3);margin-top:2px;">${esc(cp.kind)} · ${esc(cp.market)}</div>
         </div>
         <div class="sp"></div>${statusPill(cp.status)}
@@ -103,11 +107,11 @@ export function renderCampaignGrid(view, tab) {
       <div style="font-size:11.5px;color:var(--text-3);margin:10px 0 12px;">${dLabel(cp.start)} – ${dLabel(cp.end)} · owner ${esc(cp.owner)}${
         cp.notionDatabaseId ? ` · <span title="${cp.notionSyncedAt ? 'Last Notion sync ' + new Date(cp.notionSyncedAt).toLocaleString() : 'Linked to Notion but never synced'}">Notion ${cp.notionSyncedAt ? dLabel(cp.notionSyncedAt.slice(0, 10)) : 'not synced'}</span>` : ''}</div>
       <div class="bar"><i style="width:${(s.progress * 100).toFixed(0)}%"></i></div>
-      <div style="display:flex;gap:14px;font-size:11.5px;color:var(--text-3);margin-top:6px;">
+      <div class="tnum" style="display:flex;gap:14px;font-size:11.5px;color:var(--text-3);margin-top:6px;">
         <span>${s.confirmed}/${cp.targetCreators} confirmed</span><span>${s.delivered} live</span>
       </div>
       ${spark ? `<div style="margin-top:12px">${spark}</div>` : '<div style="height:34px;margin-top:12px"></div>'}
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line);">
+      <div class="tnum" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line);">
         <div><div style="font-size:10.5px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">Views</div><div style="font-size:16px;">${kmb(s.views)}</div></div>
         <div><div style="font-size:10.5px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">ER</div><div style="font-size:16px;">${s.views ? pct(s.er) : '—'}</div></div>
         <div><div style="font-size:10.5px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">CPM</div><div style="font-size:16px;">${s.reach ? money2(s.cpm) : '—'}</div></div>
@@ -194,9 +198,9 @@ export function renderCampaign(view, id, tab) {
       </div>
       <div class="sp"></div>
       ${s.viralCount ? `<span class="pill green">${s.viralCount} viral</span>` : ''}
-      <select id="cpStatus" style="width:145px">${Object.entries(CAMPAIGN_STATUS).map(([k, v]) => `<option value="${k}" ${cp.status === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select>
+      <select id="cpStatus" style="width:145px" aria-label="Campaign stage">${Object.entries(CAMPAIGN_STATUS).map(([k, v]) => `<option value="${k}" ${cp.status === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select>
       <button class="btn sm no-print" id="cpEdit">Edit</button>
-      <button class="icon-btn no-print" id="cpDelete" title="Delete this campaign">&#128465;</button>
+      <button class="icon-btn no-print" id="cpDelete" title="Delete this campaign" aria-label="Delete this campaign">&#128465;</button>
     </div>
 
     ${campaignSubNav(cp, tab)}
@@ -216,9 +220,319 @@ export function renderCampaign(view, id, tab) {
   $('#cpDelete').addEventListener('click', () => confirmDeleteCampaign(cp));
 
   const mount = $('#cpTab');
-  ({ planner: plannerTab, roster: rosterTab, booking: bookingTab, calendar: campaignCalendarTab, content: contentTab,
+  ({ overview: overviewTab, planner: plannerTab, roster: rosterTab, booking: bookingTab, calendar: campaignCalendarTab, content: contentTab,
      performance: campaignPerformanceTab, creators: campaignCreatorsTab, messages: messagesTab,
      brief: briefTab, report: reportTab }[tab] || plannerTab)(mount, cp);
+}
+
+/* ------------------------------ campaign hub (Overview tab) ------------------------------
+   One page that says where this campaign stands and where its documents are.
+   Links only: nothing here creates, copies or reads a Drive or Notion file,
+   and no new Google or Notion permission is involved. The two link fields
+   (sheetUrl, guidelineUrl) are staff-only: they are never part of the
+   partner payload or the brand view, and the Report hand-off file leaves
+   them out (see handoffCampaign). The Notion strip reads the two existing
+   staff-only status endpoints once and shows counts and plain reasons,
+   never a name, handle or e-mail. */
+
+/* what each link field may point at. https only, no user:password@, no port. */
+export const HUB_LINKS = {
+  sheet: {
+    field: 'sheetUrl', label: 'Brand sheet link', hosts: ['docs.google.com', 'drive.google.com'], suffixes: [],
+    error: 'That link is not allowed here. Paste a Google Drive or Docs link: it must start with https:// and be on docs.google.com or drive.google.com.'
+  },
+  guideline: {
+    field: 'guidelineUrl', label: 'Notion guideline link', hosts: ['notion.so', 'www.notion.so', 'notion.site', 'app.notion.com'], suffixes: ['.notion.site'],
+    error: 'That link is not allowed here. Paste a Notion link: it must start with https:// and be on notion.so, notion.site or app.notion.com.'
+  }
+};
+export const HUB_LINK_MAX = 600;
+
+/* -> { ok, value, error }. An empty box is fine and means "clear it". */
+export function hubCheckLink(raw, kind) {
+  const cfg = HUB_LINKS[kind];
+  const text = String(raw == null ? '' : raw).trim();
+  if (!text) return { ok: true, value: '', error: '' };
+  const bad = { ok: false, value: '', error: cfg.error };
+  if (text.length > HUB_LINK_MAX || /[\s\u0000-\u001f\u007f]/.test(text)) return bad;
+  let u;
+  try { u = new URL(text); } catch (e) { return bad; }
+  if (u.protocol !== 'https:' || u.username || u.password || u.port) return bad;
+  const host = u.hostname.toLowerCase();
+  if (!(cfg.hosts.includes(host) || cfg.suffixes.some((x) => host.endsWith(x) && host.length > x.length))) return bad;
+  return { ok: true, value: u.href, error: '' };
+}
+
+/* the value to put on screen: re-checked every time, because a value can also
+   arrive from a Sheet pull or a hand-edited workspace. Anything that fails is
+   treated as empty and never becomes an href. */
+export function hubSafeLink(cp, kind) {
+  const r = hubCheckLink(cp && cp[HUB_LINKS[kind].field], kind);
+  return r.ok ? r.value : '';
+}
+
+/* the page behind campaign.notionPageId, or '' when the id is not a Notion id */
+export function hubNotionPageUrl(cp) {
+  const id = String((cp && cp.notionPageId) || '').replace(/-/g, '');
+  return /^[0-9a-f]{32}$/i.test(id) ? 'https://www.notion.so/' + id.toLowerCase() : '';
+}
+
+/* how this campaign got its Notion link. Auto-create stamps source: 'notion-auto'
+   on campaigns it makes and notionAutoLinked on ones it matched; a form linked
+   by hand carries neither. */
+export function hubNotionOrigin(cp) {
+  if (cp.source === 'notion-auto') return { key: 'auto', text: 'Created automatically from a Notion page' };
+  if (cp.notionAutoLinked) return { key: 'auto-linked', text: 'Linked automatically to a Notion page' };
+  if (cp.notionDatabaseId) return { key: 'manual', text: 'Linked or imported by hand from a Notion form' };
+  if (cp.notionPageId) return { key: 'page', text: 'Linked to a Notion page (how it was linked is not recorded)' };
+  return { key: 'none', text: 'Not linked to Notion' };
+}
+
+export const HUB_HELD_WHY = { 'no-handle': 'no Instagram link yet', 'unknown-status': 'status not recognised' };
+export const hubHeldWhy = (code) => HUB_HELD_WHY[String(code || '')] || 'waiting for the next check';
+export const HUB_SKIP_WHY = {
+  'shared-source': 'another campaign uses the same Notion form',
+  'wrapped': 'the campaign is wrapped',
+  'no-mapping': 'the form fields are not matched to the roster yet'
+};
+
+export const HUB_NOTION_TTL_MS = 30000;
+export const HUB = { at: 0, data: null, promise: null };
+
+/* both answers are staff-only and global; the campaign is picked out in the
+   browser. One fetch is shared for 30 seconds, so reopening tabs does not
+   ask again. */
+export function hubCachedNotion(nowMs) {
+  return HUB.data && (nowMs == null ? Date.now() : nowMs) - HUB.at < HUB_NOTION_TTL_MS ? HUB.data : null;
+}
+export function hubLoadNotion(force) {
+  const hit = force ? null : hubCachedNotion();
+  if (hit) return Promise.resolve(hit);
+  if (HUB.promise) return HUB.promise;
+  HUB.promise = Promise.all([nacCall('/api/notion-applicants/status', 'GET'), nacCall('/api/notion/autocreate/status', 'GET')])
+    .then(([applicants, autocreate]) => { HUB.data = { applicants, autocreate }; HUB.at = Date.now(); return HUB.data; })
+    .finally(() => { HUB.promise = null; });
+  return HUB.promise;
+}
+
+export const hubNum = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Math.floor(Number(v)) : 0);
+export const hubValidTime = (v) => (typeof v === 'string' && v && !isNaN(new Date(v)) ? v : '');
+
+/* Pure: what the Notion strip should say. `data` is null while loading, else
+   { applicants: {status, body}, autocreate: {status, body} } as nacCall returns them. */
+export function hubNotionModel(cp, data) {
+  const origin = hubNotionOrigin(cp);
+  const m = { origin, pageUrl: hubNotionPageUrl(cp), state: 'ok', message: '', counts: null, held: [], last: null, dryRun: false,
+    autocreate: '', intervalMin: 0, next: '' };
+  const manual = hubValidTime(cp.notionSyncedAt);
+  const setLast = (autoAt) => {
+    const a = hubValidTime(autoAt);
+    if (a && (!manual || new Date(a) > new Date(manual))) m.last = { at: a, kind: 'automatic check' };
+    else if (manual) m.last = { at: manual, kind: 'manual sync' };
+  };
+  if (!cp.notionDatabaseId && !cp.notionPageId) {
+    m.state = 'unlinked'; m.message = 'Not linked to Notion yet.';
+    m.next = 'Use Import from Notion on the Campaigns list to link a form, or wait for auto-create to link a page.';
+    return m;
+  }
+  setLast('');
+  if (!data) { m.state = 'loading'; m.message = 'Checking Notion sync...'; return m; }
+
+  const a = data.applicants || { status: 0, body: {} };
+  const problem = (res) => {
+    if (res.status === 401) return ['signin', 'You need to be signed in as staff to see Notion sync.'];
+    if (res.status === 403) return ['forbidden', 'This account is not allowed to see Notion sync. Staff only.'];
+    if (res.status === 0) return ['unreachable', 'Could not reach the server, so Notion sync could not be checked.'];
+    if (res.status !== 200 || !res.body || res.body.ok !== true) return ['unavailable', 'Notion sync status is not available right now.'];
+    return null;
+  };
+  const p = problem(a);
+  if (p) {
+    m.state = p[0]; m.message = p[1];
+    m.next = p[0] === 'signin' ? 'Sign in, then open this page again.' : 'You can still use Sync from Notion on the Creators tab.';
+    return m;
+  }
+  const b = a.body;
+  if (!b.enabled) {
+    m.state = 'off'; m.message = 'Notion sync is switched off.';
+    m.next = 'New applicants are not pulled automatically. Use Sync from Notion on the Creators tab to pull them by hand.';
+    return m;
+  }
+  m.intervalMin = hubNum(b.intervalMin);
+  m.dryRun = !!b.dryRun;
+  const last = b.last && typeof b.last === 'object' ? b.last : null;
+  const entry = last && Array.isArray(last.campaigns) ? last.campaigns.find((c) => c && c.campaignId === cp.id) : null;
+  const pilot = b.pilot && typeof b.pilot === 'object' ? b.pilot : {};
+  const heldAll = b.state && Array.isArray(b.state.held) ? b.state.held : null;
+  const heldHere = heldAll ? heldAll.filter((h) => h && h.campaignId === cp.id) : [];
+  const dashed = String(cp.notionPageId || '').replace(/-/g, '').toLowerCase();
+  const ids = Array.isArray(pilot.ids) ? pilot.ids.map((x) => String(x).replace(/-/g, '').toLowerCase()) : [];
+  const outOfPilot = !entry && (pilot.mode === 'none' || pilot.mode === 'unset' ||
+    (pilot.mode === 'list' && !pilot.idsTruncated && !ids.includes(String(cp.id).toLowerCase()) && !(dashed && ids.includes(dashed))));
+
+  if (entry) setLast(last.at);
+  if (!entry && heldHere.length) m.held = hubHeldSummary(heldHere);
+
+  if (!last && !heldHere.length) {
+    m.state = 'norun'; m.message = 'Notion sync is on, but no check has run yet.';
+  } else if (outOfPilot) {
+    m.state = 'nopilot'; m.message = 'This campaign is not part of the Notion sync pilot yet.';
+    m.next = 'Until it is added to the pilot list, use Sync from Notion on the Creators tab.';
+  } else if (!entry) {
+    m.state = 'notread'; m.message = 'This campaign was not read in the latest check.';
+  } else if (entry.status === 'skipped') {
+    m.state = 'skipped'; m.message = 'Skipped in the latest check: ' + (HUB_SKIP_WHY[entry.why] || 'it was not ready to be read') + '.';
+  } else if (entry.status === 'error') {
+    m.state = 'error'; m.message = 'The latest check hit a problem with this campaign. Nothing was changed.';
+  } else {
+    const c = entry.counts && typeof entry.counts === 'object' ? entry.counts : {};
+    m.counts = { added: hubNum(c.created), waiting: heldAll ? heldHere.length : hubNum(c.held), needsLook: hubNum(c.ambiguous), differs: hubNum(c.differs) };
+    if (heldHere.length) m.held = hubHeldSummary(heldHere);
+    m.message = entry.status === 'dry-run' || m.dryRun ? 'Preview only: the latest check did not change anything.' : 'Notion sync is on for this campaign.';
+  }
+  if (m.state === 'ok' || m.state === 'skipped' || m.state === 'notread' || m.state === 'error') {
+    const waiting = m.counts ? m.counts.waiting : m.held.reduce((n, h) => n + h.n, 0);
+    if (m.dryRun) m.next = 'Sync is in preview mode, so nothing is added to the roster automatically yet.';
+    else if (waiting) m.next = waiting + ' waiting row' + (waiting === 1 ? '' : 's') + ' join the roster once the Instagram link or status is fixed in Notion'
+      + (m.intervalMin ? '; the dashboard looks again about every ' + m.intervalMin + ' minutes.' : '.');
+    else m.next = m.intervalMin ? 'The dashboard looks at Notion about every ' + m.intervalMin + ' minutes and adds new applicants to the roster.'
+      : 'The dashboard looks at Notion regularly and adds new applicants to the roster.';
+  }
+  /* auto-create is global; say so only for a campaign that came through it */
+  if (cp.source === 'notion-auto' || cp.notionAutoLinked) {
+    const n = data.autocreate || { status: 0, body: {} };
+    if (n.status === 200 && n.body && n.body.ok) m.autocreate = !n.body.enabled ? 'Auto-create is switched off.' : n.body.dryRun ? 'Auto-create is in preview mode.' : 'Auto-create is on.';
+    else m.autocreate = 'Auto-create status is not available.';
+  }
+  return m;
+}
+
+export function hubHeldSummary(rows) {
+  const by = {};
+  rows.forEach((h) => { const t = hubHeldWhy(h.why); by[t] = (by[t] || 0) + 1; });
+  return Object.entries(by).map(([why, n]) => ({ why, n })).sort((x, y) => y.n - x.n || x.why.localeCompare(y.why));
+}
+
+export function hubTime(value) {
+  const d = new Date(value);
+  return isNaN(d) ? '' : d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+export function hubNotionBodyHtml(m) {
+  const parts = [];
+  parts.push(`<div class="hub-row"><span class="pill ${m.origin.key === 'none' ? 'grey' : 'blue'}">${esc(m.origin.text)}</span>${
+    m.pageUrl ? `<a class="btn sm" id="hubOpenNotion" href="${esc(m.pageUrl)}" target="_blank" rel="noopener noreferrer">Open in Notion (new tab)</a>` : ''}</div>`);
+  parts.push(`<p class="hub-msg">${esc(m.message)}</p>`);
+  if (m.counts) {
+    const c = m.counts;
+    parts.push(`<div class="hub-counts tnum"><span><strong>${c.added}</strong> added last check</span><span><strong>${c.waiting}</strong> waiting</span>` +
+      `<span><strong>${c.needsLook}</strong> need a look</span><span><strong>${c.differs}</strong> different in Notion</span></div>`);
+  }
+  if (m.held.length) {
+    parts.push(`<ul class="hub-held">${m.held.map((h) => `<li><span class="tnum">${h.n}</span> waiting: ${esc(h.why)}</li>`).join('')}</ul>`);
+  }
+  if (m.last) parts.push(`<p class="hub-sub">Last ${esc(m.last.kind)}: ${esc(hubTime(m.last.at))}</p>`);
+  else if (m.state !== 'unlinked') parts.push(`<p class="hub-sub">Last sync: not yet</p>`);
+  if (m.autocreate) parts.push(`<p class="hub-sub">${esc(m.autocreate)}</p>`);
+  if (m.next) parts.push(`<p class="hub-next"><strong>What happens next.</strong> ${esc(m.next)}</p>`);
+  return parts.join('');
+}
+
+/* one link field in the Documents area: paste, save, open, clear */
+export function hubLinkCardHtml(cp, kind, idBase, title, emptyText) {
+  const cfg = HUB_LINKS[kind];
+  const href = hubSafeLink(cp, kind);
+  return `<div class="card tight hub-doc" id="${idBase}Card">
+    <h4>${esc(title)}</h4>
+    ${href ? `<p class="hub-sub">Saved. Opens in a new tab.</p>` : `<p class="hub-sub">${esc(emptyText)}</p>`}
+    <label for="${idBase}Url" class="hub-lbl">${esc(cfg.label)}</label>
+    <input type="url" id="${idBase}Url" value="${esc(href)}" placeholder="https://" autocomplete="off" maxlength="${HUB_LINK_MAX}" aria-describedby="${idBase}Err"/>
+    <div class="hub-err" id="${idBase}Err" role="alert"></div>
+    <div class="hub-row">
+      <button class="btn sm primary" id="${idBase}Save">Save</button>
+      ${href ? `<a class="btn sm" id="${idBase}Open" href="${esc(href)}" target="_blank" rel="noopener noreferrer">Open</a>
+      <button class="btn sm" id="${idBase}Clear">Clear</button>` : ''}
+    </div>
+  </div>`;
+}
+
+export function hubBrandLinkHtml(cp) {
+  let body;
+  if (CLK.loaded) {
+    const l = clkLinkFor(cp.id), pill = clkStatusPill(l);
+    body = `<p><span class="pill ${esc(pill.tone)}">${esc(pill.label)}</span></p><p class="hub-sub">${esc(clkDetail(l))}</p>`;
+  } else body = `<p class="hub-sub">Status is loaded when you open the Partners page in Setup.</p>`;
+  return `<div class="card tight hub-doc"><h4>Brand view link</h4>${body}
+    <p class="hub-sub">The private link itself is shown once, when it is created, and is not shown here.</p>
+    <a class="btn sm" id="hubBrandLinks" href="#/settings/partners">Open Setup &gt; Partners</a></div>`;
+}
+
+export function hubDocsHtml(cp) {
+  const s = campaignStats(cp);
+  const page = hubNotionPageUrl(cp);
+  return `<div class="hub-grid">
+    ${hubLinkCardHtml(cp, 'sheet', 'hubSheet', 'Brand sheet (Google Drive)', 'No Drive sheet yet. Paste the link so the whole team opens the same file.')}
+    ${hubLinkCardHtml(cp, 'guideline', 'hubGuide', 'Campaign guideline (Notion)', 'No guideline yet. Paste the link to this campaign\'s Notion guideline page.')}
+    <div class="card tight hub-doc"><h4>Notion campaign page</h4>
+      ${page ? `<p class="hub-sub">The page this campaign is linked to.</p><a class="btn sm" id="hubPageLink" href="${esc(page)}" target="_blank" rel="noopener noreferrer">Open in Notion (new tab)</a>`
+        : `<p class="hub-sub">No Notion page linked yet. Auto-create adds it when it makes or matches this campaign.</p>`}</div>
+    <div class="card tight hub-doc"><h4>Brand sheet (.xlsx)</h4>
+      <p class="hub-sub">The creator list in the brand template layout: <span class="tnum">${s.confirmed}</span> confirmed so far. Brand-safe by default.</p>
+      <button class="btn sm" id="hubBrandSheet">Make brand sheet (.xlsx)</button></div>
+    <div class="card tight hub-doc"><h4>Contract documents</h4>
+      <p class="hub-sub">Written in the browser from the Contracts page. The dashboard does not yet keep a list of which ones were made for this campaign.</p>
+      <div class="hub-row">${Object.values(CONTRACT_DOCS).map((d) => `<a class="btn sm" href="#/contracts/${esc(d.id)}">${esc(d.label)}</a>`).join('')}</div></div>
+    ${hubBrandLinkHtml(cp)}
+  </div>`;
+}
+
+export function overviewTab(mount, cp) {
+  const s = campaignStats(cp);
+  const cached = hubCachedNotion();
+  const linked = !!(cp.notionDatabaseId || cp.notionPageId);
+  mount.innerHTML = `
+    <section class="card hub-summary" aria-labelledby="hubTitle">
+      <div class="hub-row">
+        <div>
+          <div class="hub-brand" id="hubTitle">${esc(cp.brand)}</div>
+          <div class="hub-sub">${esc(cp.name)}</div>
+        </div>
+        <div class="sp"></div>
+        ${statusPill(cp.status)}
+      </div>
+      <p class="hub-sub tnum">${dLabel(cp.start)} &ndash; ${dLabel(cp.end)} &middot; ${esc(cp.market)} &middot; ${esc(cp.deliverables)} &middot; owner ${esc(cp.owner)}</p>
+      <div class="hub-counts tnum"><span><strong>${s.confirmed}</strong> / ${hubNum(cp.targetCreators)} confirmed</span><span><strong>${s.delivered}</strong> posts live</span>
+        <a href="#/campaigns/${esc(cp.id)}/roster">Open the creators</a></div>
+    </section>
+    <section class="card hub-notion" aria-labelledby="hubNotionTitle">
+      <div class="card-head"><h3 id="hubNotionTitle">Notion</h3><div class="sp"></div>
+        ${linked ? '<button class="btn xs" id="hubNotionRefresh">Check again</button>' : ''}</div>
+      <div id="hubNotionBody" role="status" aria-live="polite" data-cid="${esc(cp.id)}">${hubNotionBodyHtml(hubNotionModel(cp, linked ? cached : null))}</div>
+    </section>
+    <section aria-labelledby="hubDocsTitle">
+      <h3 class="hub-h" id="hubDocsTitle">Documents</h3>
+      ${hubDocsHtml(cp)}
+    </section>`;
+
+  const paint = (data) => {
+    const el = $('#hubNotionBody');
+    if (el && el.dataset.cid === cp.id) el.innerHTML = hubNotionBodyHtml(hubNotionModel(cp, data));
+  };
+  if (linked) {
+    if (!cached) hubLoadNotion().then(paint);
+    $('#hubNotionRefresh').addEventListener('click', () => { paint(null); hubLoadNotion(true).then(paint); });
+  }
+  [['sheet', 'hubSheet'], ['guideline', 'hubGuide']].forEach(([kind, id]) => {
+    $('#' + id + 'Save').addEventListener('click', () => {
+      const r = hubCheckLink($('#' + id + 'Url').value, kind);
+      if (!r.ok) { $('#' + id + 'Err').textContent = r.error; $('#' + id + 'Url').focus(); return; }
+      if (r.value) cp[HUB_LINKS[kind].field] = r.value; else delete cp[HUB_LINKS[kind].field];
+      toast(r.value ? 'Link saved' : 'Link cleared'); notify();
+    });
+    const clr = $('#' + id + 'Clear');
+    if (clr) clr.addEventListener('click', () => { delete cp[HUB_LINKS[kind].field]; toast('Link cleared'); notify(); });
+  });
+  $('#hubBrandSheet').addEventListener('click', () => openBrandSheetExport(cp));
 }
 
 /* ------------------------------ edit & delete ------------------------------ */
@@ -253,6 +567,12 @@ export function campaignFormHtml(cp) {
       <div class="field"><label>Venue address</label><input type="text" id="ecVenue" placeholder="서울 종로구 …" value="${esc(cp.venue || '')}"/></div>
       <div class="field"><label>Timezone</label><input type="text" id="ecTz" placeholder="${esc(GCAL_PREFS.defaultTz)}" value="${esc(cp.timezone || '')}"/></div>
     </div>
+    <div class="field"><label for="ecSheetUrl">Brand sheet link (Google Drive or Docs)</label>
+      <input type="url" id="ecSheetUrl" placeholder="https://docs.google.com/..." maxlength="600" autocomplete="off" value="${esc(hubSafeLink(cp, 'sheet'))}"/></div>
+    <div class="field"><label for="ecGuideUrl">Notion guideline link</label>
+      <input type="url" id="ecGuideUrl" placeholder="https://www.notion.so/..." maxlength="600" autocomplete="off" value="${esc(hubSafeLink(cp, 'guideline'))}"/>
+      <div class="hub-err" id="ecLinkErr" role="alert"></div>
+      <div style="font-size:11px;color:var(--text-3);margin-top:3px">Staff only. These two links are never shown to partners or brands.</div></div>
     <div class="field"><label>Deliverables</label><input type="text" id="ecDeliv" value="${esc(cp.deliverables || '')}"/></div>
     <div class="field"><label>Platforms (comma separated)</label><input type="text" id="ecPlatforms" value="${esc((cp.platforms || []).join(', '))}"/></div>
     <div class="field"><label>Hashtags (comma separated)</label><input type="text" id="ecHashtags" value="${esc((cp.hashtags || []).join(', '))}"/></div>
@@ -290,6 +610,11 @@ export function readCampaignForm(cp) {
   cp.platforms = list($('#ecPlatforms').value);
   cp.hashtags = list($('#ecHashtags').value);
   cp.note = $('#ecNote').value;
+  /* checked by the caller before this runs; re-checked here so no other caller can store a bad link */
+  [['sheet', '#ecSheetUrl'], ['guideline', '#ecGuideUrl']].forEach(([kind, sel]) => {
+    const r = hubCheckLink($(sel).value, kind);
+    if (r.ok && r.value) cp[HUB_LINKS[kind].field] = r.value; else delete cp[HUB_LINKS[kind].field];
+  });
 }
 
 export function openEditCampaign(cp) {
@@ -301,6 +626,8 @@ export function openEditCampaign(cp) {
       <button class="btn" id="ecDelete" style="color:#f08a8a;border-color:rgba(208,59,59,.4)">Delete campaign</button>
     </div>`, true);
   $('#ecSave').addEventListener('click', () => {
+    const bad = [['sheet', '#ecSheetUrl'], ['guideline', '#ecGuideUrl']].map(([k, sel]) => [hubCheckLink($(sel).value, k), sel]).find(([r]) => !r.ok);
+    if (bad) { $('#ecLinkErr').textContent = bad[0].error; $(bad[1]).focus(); return; }
     readCampaignForm(cp);
     closeDrawer(); notify(); toast('Campaign updated');
   });
@@ -550,8 +877,8 @@ export function rosterTab(mount, cp) {
       <button class="btn sm" id="rosterBrandSheet" title="The creator list in the brand-sheet template layout (.xlsx)">Brand sheet (.xlsx)</button>
       <button class="btn sm" id="rosterMetrics" title="Update views / likes / comments / shares from a spreadsheet">Update metrics</button>
       <button class="btn sm" id="notionSync" title="${cp.notionSyncedAt ? 'Last synced ' + new Date(cp.notionSyncedAt).toLocaleString() : "Pull submissions from this campaign's Notion form"}">Sync from Notion</button>
-      ${cp.notionDatabaseId ? `<button class="icon-btn sm" id="notionConfig" title="Change Notion database or field mapping">&#9881;</button>
-      <button class="icon-btn sm" id="notionDiag" title="Show exactly what Notion returns and what the sync makes of it">&#128269;</button>` : ''}
+      ${cp.notionDatabaseId ? `<button class="icon-btn sm" id="notionConfig" title="Change Notion database or field mapping" aria-label="Notion field mapping">&#9881;</button>
+      <button class="icon-btn sm" id="notionDiag" title="Show exactly what Notion returns and what the sync makes of it" aria-label="Check what Notion returns">&#128269;</button>` : ''}
       <button class="btn primary sm" id="addCreators">+ Add creators</button>
     </div>
     ${sharedNotionFormBanner(cp)}

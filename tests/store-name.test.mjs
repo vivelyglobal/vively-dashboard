@@ -326,7 +326,7 @@ const mustEscape = (html0) => { assert.ok(!html0.includes('<img src=x'), 'raw ta
 
 test('escaping: the campaign form shows the store name and the project-name placeholder escaped', () => {
   const body = grab(campaignsSrc, 'campaignFormHtml');
-  const deps = { esc, DB: { campaigns: [] }, CATEGORIES: ['A'], COUNTRIES: ['KR'], CAMPAIGN_STATUS: { active: { label: 'Active' } }, GCAL_PREFS: { defaultTz: 'Asia/Seoul' } };
+  const deps = { esc, DB: { campaigns: [] }, CATEGORIES: ['A'], COUNTRIES: ['KR'], CAMPAIGN_STATUS: { active: { label: 'Active' } }, GCAL_PREFS: { defaultTz: 'Asia/Seoul' }, hubSafeLink: () => '' };
   const fn = new Function(...Object.keys(deps), body + '\nreturn campaignFormHtml;')(...Object.values(deps));
   const out = fn({ id: 'cp1', brand: 'B', name: EVIL, storeName: EVIL, status: 'active', kind: 'Seeding', category: 'A', market: 'KR' });
   mustEscape(out);

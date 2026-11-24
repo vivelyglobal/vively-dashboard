@@ -51,6 +51,14 @@ export function executiveSummary(cp) {
   ].filter((x) => x !== undefined).join('\n');
 }
 
+/* The campaign as it goes into the hand-off file, which is sent to a brand or
+   a partner. The staff-only document links stay behind: the Drive sheet, the
+   Notion guideline and the Notion page the campaign is linked to. */
+export function handoffCampaign(cp) {
+  const { sheetUrl, guidelineUrl, notionPageId, ...rest } = cp;
+  return rest;
+}
+
 export function reportTab(mount, cp) {
   const s = campaignStats(cp);
   const rows = toolkitRows(cp);
@@ -129,7 +137,7 @@ export function reportTab(mount, cp) {
   $('#rpCsv').addEventListener('click', () => downloadFile(toCsv(TOOLKIT_FIELDS, rows),
     `vively-${cp.brand.toLowerCase().replace(/\W+/g, '-')}-report.csv`, 'text/csv;charset=utf-8'));
   $('#rpJson').addEventListener('click', () => downloadFile(JSON.stringify({
-    campaign: cp, stats: s, summary: $('#rpSum').value,
+    campaign: handoffCampaign(cp), stats: s, summary: $('#rpSum').value,
     participants: partsOf(cp.id).map((p) => {
       /* the hand-off goes to a brand or a partner — never with a bank account in it */
       const { payout, ...creator } = byCreator[p.creatorId] || {};
