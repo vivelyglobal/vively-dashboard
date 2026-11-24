@@ -28,8 +28,8 @@ class Col {
   constructor(name, spy) { this.name = name; this.docs = new Map(); this.unique = []; this.spy = spy; this.failUpdate = false; this.n = 0; }
   _t(op) { this.spy.touched.add(this.name); this.spy.ops.push(this.name + '.' + op); }
   _m(d, f) {
-    return Object.entries(f).every(([k, v]) => (v && typeof v === 'object' && '$lt' in v)
-      ? d[k] !== undefined && d[k] < v.$lt : d[k] === v);
+    return Object.entries(f).every(([k, v]) => (v && typeof v === 'object' && ('$lt' in v || '$lte' in v))
+      ? d[k] !== undefined && ('$lt' in v ? d[k] < v.$lt : d[k] <= v.$lte) : d[k] === v);
   }
   async createIndex(spec, o) { this._t('createIndex'); if (o && o.unique) this.unique.push(Object.keys(spec)[0]); }
   _checkUnique(doc, exceptId) {
@@ -690,26 +690,66 @@ test('HANDLE: good handles pass; a leading @ is stripped and re-added; a profile
   assert.ok(!stringify(v).includes('SECRET'));
 });
 
-test('HANDLE: labels are numbered per campaign, stable when other rows change status', () => {
+test('HANDLE: labels are numbered per campaign among the shown creators only (review 37 #4 below)', () => {
   const db = handleDb(['Kim Minji', 'Lee Joon', 'Park Soo']);
   const first = CV.buildClientView(db, CAMP, helpers).rows.map((r) => r.handle).sort();
   assert.deepEqual(first, ['Creator 1', 'Creator 2', 'Creator 3']);
   db.participants[0].importedStatus = 'Declined'; db.participants[0].stage = 'dropped';   /* creator 1 leaves the brand's list */
   const later = CV.buildClientView(db, CAMP, helpers).rows.map((r) => r.handle).sort();
-  assert.deepEqual(later, ['Creator 2', 'Creator 3'], 'the others keep their numbers');
+  assert.deepEqual(later, ['Creator 1', 'Creator 2'], 'numbers close up: no gap where a hidden row was');
 });
 
 test('URLS: post links must be http(s) on a known social host; query, fragment and credentials are dropped', () => {
   const mk = (url) => { const db = handleDb(['@ok']); db.socialContent = [{ participantId: 'pp0', url, postUrl: url }]; return CV.buildClientView(db, CAMP, helpers).rows[0].contentUrl; };
   assert.equal(mk('https://www.instagram.com/reel/abc123/?igsh=TOKEN123#frag'), 'https://www.instagram.com/reel/abc123/');
-  assert.equal(mk('https://vt.tiktok.com/ZS123/?k=1'), 'https://vt.tiktok.com/ZS123/');
+  assert.equal(mk('https://www.tiktok.com/@some.user_1/video/7301234567890123456?is_from_webapp=1'), 'https://www.tiktok.com/@some.user_1/video/7301234567890123456');
   assert.equal(mk('https://www.youtube.com/watch?v=abcDEF12345&token=SECRET&list=x'), 'https://www.youtube.com/watch?v=abcDEF12345');
   assert.equal(mk('https://youtu.be/abcDEF12345?si=SECRET'), 'https://youtu.be/abcDEF12345');
+  assert.equal(mk('https://www.youtube.com/shorts/abcDEF12345?feature=share'), 'https://www.youtube.com/shorts/abcDEF12345');
   for (const bad of ['https://example.test/post', 'https://evil.test/instagram.com/p/x', 'https://instagram.com.evil.test/p/x',
     'https://user:pass@www.instagram.com/p/x/', 'javascript:alert(1)', 'ftp://www.instagram.com/p/x', 'https://www.notion.so/abc', 'https://notinstagram.com/p/x']) {
     assert.equal(mk(bad), '', 'accepted: ' + bad);
   }
   assert.equal(mk('https://www.instagram.com/p/' + 'a'.repeat(400) + '/'), '', 'over-long link dropped');
+});
+
+test('URLS (review 37 #3): the path is rebuilt from a per-platform pattern; text in the path, extra segments and other shapes are dropped', () => {
+  const mk = (url) => { const db = handleDb(['@ok']); db.socialContent = [{ participantId: 'pp0', url, postUrl: url }]; return CV.buildClientView(db, CAMP, helpers).rows[0].contentUrl; };
+  assert.equal(mk('https://instagram.com/p/Cabc123_-x/'), 'https://instagram.com/p/Cabc123_-x/');
+  assert.equal(mk('https://www.instagram.com/reel/Cabc123/'), 'https://www.instagram.com/reel/Cabc123/');
+  assert.equal(mk('https://www.instagram.com/tv/Cabc123'), 'https://www.instagram.com/tv/Cabc123/', 'trailing slash normalised');
+  assert.equal(mk('https://www.youtube.com/watch?v=abcDEF12345&t=5s'), 'https://www.youtube.com/watch?v=abcDEF12345');
+  assert.equal(mk('https://m.youtube.com/shorts/abcDEF12345'), 'https://m.youtube.com/shorts/abcDEF12345');
+  assert.equal(mk('https://youtu.be/abcDEF12345'), 'https://youtu.be/abcDEF12345');
+  for (const bad of ['https://instagram.com/Kim%20Minji', 'https://www.instagram.com/Kim_Minji/', 'https://www.instagram.com/p/Cabc123/Kim%20Minji/',
+    'https://www.instagram.com/kimminji/reel/Cabc123/', 'https://www.instagram.com/p/', 'https://www.instagram.com/p/Cab%20123/', 'https://www.instagram.com/stories/kim/123/',
+    'https://www.tiktok.com/@kim%20minji/video/7301234567890', 'https://www.tiktok.com/@kim.minji/video/abc', 'https://www.tiktok.com/@kim.minji', 'https://vt.tiktok.com/ZS123/',
+    'https://www.tiktok.com/@kim.minji/video/7301234567890/extra',
+    'https://www.youtube.com/watch', 'https://www.youtube.com/watch?v=bad%20id', 'https://www.youtube.com/@KimMinji', 'https://www.youtube.com/playlist?list=PLabc',
+    'https://www.youtube.com/shorts/', 'https://youtu.be/', 'https://youtu.be/abc/Kim%20Minji', 'https://evil.instagram.com/p/Cabc123/']) {
+    assert.equal(mk(bad), '', 'accepted: ' + bad);
+  }
+  for (const ok of ['https://www.instagram.com/p/Cabc123/?igsh=SECRETQ#f', 'https://www.tiktok.com/@a.b/video/7301234567890?x=SECRETQ#f', 'https://youtu.be/abcDEF12345?si=SECRETQ#f',
+    'https://www.youtube.com/shorts/abcDEF12345?si=SECRETQ#f', 'https://www.youtube.com/watch?v=abcDEF12345&si=SECRETQ#f']) {
+    const r = mk(ok); assert.ok(r && !/SECRETQ|#/.test(r), 'query kept: ' + r);
+  }
+});
+
+test('HANDLE (review 37 #4): "Creator N" is numbered only among shown rows; hidden rows change no number and leave no gap', () => {
+  const hidden = (db, i) => { db.participants[i].importedStatus = 'Brand Rejected'; db.participants[i].stage = 'dropped'; };
+  const labels = (db) => CV.buildClientView(db, CAMP, helpers).rows.map((r) => r.handle).sort();
+  const a = handleDb(['Kim A', 'Kim B', 'Kim C', 'Kim D', 'Kim E']); [0, 2, 3].forEach((i) => hidden(a, i));
+  assert.deepEqual(labels(a), ['Creator 1', 'Creator 2'], 'two shown rows are Creator 1 and 2, not 2 and 5');
+  const b = handleDb(['Kim A', 'Kim B', 'Kim C', 'Kim D', 'Kim E']); [0, 2, 3].forEach((i) => hidden(b, i));
+  b.participants.push({ id: 'pph1', campaignId: CAMP, creatorId: 'crh1', stage: 'dropped', importedStatus: 'Declined' },
+    { id: 'pph2', campaignId: CAMP, creatorId: 'crh2', stage: 'contacted' });
+  b.participants.unshift({ id: 'pph0', campaignId: CAMP, creatorId: 'crh0', stage: 'contacted' });
+  assert.deepEqual(labels(b), labels(a), 'adding hidden rows before or after changes nothing');
+  /* which creator gets which number does not depend on the hidden rows either */
+  const who = (db) => Object.fromEntries(CV.buildClientView(db, CAMP, helpers).rows.map((r) => [r.visitTime, r.handle]));
+  assert.deepEqual(who(b), who(a));
+  const only = handleDb(['Kim A', 'Kim B', 'Kim C']); hidden(only, 0); hidden(only, 1);
+  assert.deepEqual(labels(only), ['Creator 1']);
 });
 
 test('CAMPAIGN NAME: capped, control and invisible characters removed, email addresses masked', () => {
@@ -811,4 +851,48 @@ test('CAMPAIGN NAME: phone-like digit runs (7+ digits) and URLs with credentials
   assert.equal(nameOf(undefined), 'Campaign');
   /* nothing digit-heavy survives into the brand view as JSON either */
   assert.ok(!JSON.stringify(CV.buildClientView((() => { const d = handleDb(['@ok']); d.campaigns[0].name = 'X 010-1234-5678'; return d; })(), CAMP, helpers)).includes('5678'));
+});
+
+
+/* ---------- security review 37, finding 7: a forced Rebuild never overwrites a newer view ---------- */
+
+test('REBUILD (force): never overwrites a view built at a NEWER revision; the skip is counted and reported; a same-revision view is still replaced', async () => {
+  const h = await harness();
+  try {
+    const a = await h.create(CAMP), b = await h.create(OTHER);        /* both views at revision 5 */
+    const views = h.m.cols.client_views.docs;
+    const campView = [...views.values()].find((d) => d.campaignId === CAMP);
+    campView.builtRevision = 9; campView.payload.counts.posted = 777;  /* a save at revision 9 landed after Rebuild read revision 5 */
+    const otherView = [...views.values()].find((d) => d.campaignId === OTHER);
+    otherView.payload.counts.posted = 888;                             /* same revision (5): Rebuild may replace this */
+    const r = await h.call('/api/client-links/rebuild', { method: 'POST' });
+    assert.equal(r.status, 200);
+    assert.equal(r.json.ok, true);
+    assert.equal(r.json.skipped, 1, 'the skip is reported');
+    assert.equal(r.json.written, 1);
+    assert.match(r.json.note || '', /newer save/);
+    assert.equal((await h.brand('/api/client/' + a.json.token)).json.counts.posted, 777, 'the newer view stays');
+    assert.equal(campView.builtRevision, 9);
+    assert.notEqual((await h.brand('/api/client/' + b.json.token)).json.counts.posted, 888, 'a same-revision view is replaced');
+    assert.equal(h.cv.state.lastCounts.skipped, 1);
+    assert.equal(h.cv.state.lastRevision, null, 'the older read does not become the last good revision');
+  } finally { h.close(); }
+});
+
+test('REBUILD (force): when anything was skipped, views of links that look stale are kept (the read is older than the store)', async () => {
+  const h = await harness();
+  try {
+    await h.create(CAMP); const b = await h.create(OTHER);
+    const views = h.m.cols.client_views.docs;
+    [...views.values()].find((d) => d.campaignId === CAMP).builtRevision = 9;
+    const db = h.getDb(); db.campaigns = db.campaigns.filter((c) => c.id !== OTHER);   /* the old read lacks OTHER */
+    const r = await h.call('/api/client-links/rebuild', { method: 'POST' });
+    assert.equal(r.json.skipped, 1);
+    assert.equal(views.size, 2, 'nothing deleted on an outdated read');
+    assert.equal((await h.brand('/api/client/' + b.json.token)).status, 200);
+    [...views.values()].find((d) => d.campaignId === CAMP).builtRevision = 5;
+    const r2 = await h.call('/api/client-links/rebuild', { method: 'POST' });
+    assert.equal(r2.json.skipped, 0);
+    assert.equal(views.size, 1, 'with no skip the existing delete behaviour is unchanged');
+  } finally { h.close(); }
 });

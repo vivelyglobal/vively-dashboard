@@ -119,6 +119,9 @@ export function clkCardHtml() {
     'and can be turned off at any time.</p><div id="clkBody"></div></div>';
 }
 
+/* shown above the Create link buttons: a plain check before a link is shared */
+export const CLK_REMINDER = 'Before sharing: open the link yourself and check handles, campaign name and post links look right. Brands see handles only.';
+
 export function clkBodyHtml() {
   const parts = [];
   if (CLK.msg) parts.push('<div class="note ' + (CLK.msg.tone === 'bad' ? 'bad' : CLK.msg.tone === 'ok' ? '' : 'warn') + '" style="margin:10px 0">' + esc(CLK.msg.text) + '</div>');
@@ -136,6 +139,7 @@ export function clkBodyHtml() {
     (CLK.busy ? '<span style="font-size:12px;color:var(--text-3)">Working…</span>' : '') + '</div>');
   const camps = DB.campaigns.filter((c) => c.status !== 'wrapped' || clkLinkFor(c.id));
   if (!camps.length) { parts.push('<p class="card-sub">No campaigns yet.</p>'); return parts.join(''); }
+  parts.push('<p class="card-sub" id="clkReminder" style="margin:10px 0">' + esc(CLK_REMINDER) + '</p>');
   parts.push('<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Campaign</th><th>Link</th><th></th></tr></thead><tbody>' +
     camps.map((c) => {
       const l = clkLinkFor(c.id), pill = clkStatusPill(l), id = esc(c.id);
@@ -195,7 +199,8 @@ export async function clkAction(kind, id, cid) {
       await clkLoad();
     } else if (kind === 'rebuild') {
       const res = await clkCall('/api/client-links/rebuild', 'POST', {});
-      CLK.msg = res.status === 200 && res.body.ok ? { tone: 'ok', text: 'Rebuilt ' + (res.body.written || 0) + ' brand view' + (res.body.written === 1 ? '' : 's') + '.' }
+      CLK.msg = res.status === 200 && res.body.ok ? { tone: res.body.skipped ? 'warn' : 'ok', text: 'Rebuilt ' + (res.body.written || 0) + ' brand view' + (res.body.written === 1 ? '' : 's') + '.' +
+        (res.body.skipped ? ' ' + res.body.skipped + ' left as they were because a newer save is already shown. Press Rebuild now again.' : '') }
         : { tone: 'bad', text: res.status === 200 ? 'Some views could not be written. Try again.' : clkProblem(res) };
       await clkLoad();
     }

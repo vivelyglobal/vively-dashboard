@@ -126,3 +126,25 @@ test('errors: 401, 403 and 503 are plain sentences; a failed create changes noth
 test('importing the card makes no request (passive until staff open the page)', () => {
   assert.equal(callsAtImport, 0);
 });
+
+
+/* ---------- review 37 low findings: staff reminder, and Rebuild skips ---------- */
+test('reminder: the one-line check before sharing renders above the Create link buttons, as escaped text', async () => {
+  reset(); script = [list([link()])];
+  await P.clkLoad();
+  const html = P.clkBodyHtml();
+  const text = 'Before sharing: open the link yourself and check handles, campaign name and post links look right. Brands see handles only.';
+  assert.ok(html.includes(text), 'reminder text missing');
+  assert.ok(html.indexOf(text) < html.indexOf('data-clk="create"'), 'reminder is above the Create link button');
+  assert.match(html, /<p class="card-sub" id="clkReminder"[^>]*>Before sharing:[^<]*<\/p>/, 'plain text paragraph, no inner markup');
+  assert.equal(P.CLK_REMINDER, text);
+});
+
+test('rebuild: a skipped view is reported to staff, not hidden', async () => {
+  reset(); script = [list([link()]), { status: 200, json: { ok: true, written: 1, skipped: 2 } }, list([link()])];
+  await P.clkLoad();
+  await P.clkAction('rebuild', '', '');
+  assert.match(P.CLK.msg.text, /Rebuilt 1 brand view\./);
+  assert.match(P.CLK.msg.text, /2 left as they were because a newer save is already shown/);
+  assert.equal(P.CLK.msg.tone, 'warn');
+});

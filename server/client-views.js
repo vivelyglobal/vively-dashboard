@@ -107,10 +107,19 @@ function igHandle(raw) {
   return s;
 }
 
-/* A post link: http(s), a known social host, no credentials or port, no
-   fragment. The query string is dropped, except the video id YouTube needs.
-   The result is rebuilt from the parsed parts, never passed through. */
-const POST_HOSTS = ["instagram.com", "tiktok.com", "youtube.com", "youtu.be"];
+/* A post link: https or http, one of three platforms, no credentials, port,
+   fragment or query. The path must match that platform's post shape and is
+   REBUILT from the matched id, never passed through, so text cannot ride
+   along in the path (instagram.com/Kim%20Minji is dropped). Only YouTube's
+   "v" id survives from the query. Anything else returns "". */
+const IG_HOSTS = new Set(["instagram.com", "www.instagram.com"]);
+const TT_HOSTS = new Set(["tiktok.com", "www.tiktok.com", "m.tiktok.com"]);
+const YT_HOSTS = new Set(["youtube.com", "www.youtube.com", "m.youtube.com"]);
+const IG_PATH_RE = /^\/(p|reel|tv)\/([A-Za-z0-9_-]{5,40})\/?$/;
+const TT_PATH_RE = /^\/@([A-Za-z0-9._]{1,40})\/video\/(\d{5,25})\/?$/;
+const YT_SHORTS_RE = /^\/shorts\/([A-Za-z0-9_-]{6,20})\/?$/;
+const YT_ID_RE = /^[A-Za-z0-9_-]{6,20}$/;
+const YTBE_PATH_RE = /^\/([A-Za-z0-9_-]{6,20})\/?$/;
 function postUrl(u, safeUrl) {
   const s = safeUrl(u);
   if (!s) return "";
@@ -118,14 +127,16 @@ function postUrl(u, safeUrl) {
     const url = new URL(s);
     if (url.protocol !== "https:" && url.protocol !== "http:") return "";
     if (url.username || url.password || url.port) return "";
-    const host = url.hostname.toLowerCase();
-    if (!POST_HOSTS.some((d) => host === d || host.endsWith("." + d))) return "";
-    let out = url.protocol + "//" + host + url.pathname;
-    if (/(^|\.)youtube\.com$/.test(host) && url.pathname === "/watch") {
-      const v = url.searchParams.get("v");
-      if (v && /^[A-Za-z0-9_-]{6,20}$/.test(v)) out += "?v=" + v;
-    }
-    return out.length <= 300 ? out : "";
+    const host = url.hostname.toLowerCase(), path = url.pathname;
+    const base = url.protocol + "//" + host;
+    let m, out = "";
+    if (IG_HOSTS.has(host)) { m = path.match(IG_PATH_RE); if (m) out = base + "/" + m[1] + "/" + m[2] + "/"; }
+    else if (TT_HOSTS.has(host)) { m = path.match(TT_PATH_RE); if (m) out = base + "/@" + m[1] + "/video/" + m[2]; }
+    else if (YT_HOSTS.has(host)) {
+      if (path === "/watch") { const v = url.searchParams.get("v"); if (v && YT_ID_RE.test(v)) out = base + "/watch?v=" + v; }
+      else if ((m = path.match(YT_SHORTS_RE))) out = base + "/shorts/" + m[1];
+    } else if (host === "youtu.be") { m = path.match(YTBE_PATH_RE); if (m) out = base + "/" + m[1]; }
+    return out && out.length <= 300 ? out : "";
   } catch (e) { return ""; }
 }
 
@@ -143,18 +154,21 @@ function buildClientView(db, campaignId, h) {
   const byCreator = Object.fromEntries(((db && db.creators) || []).filter(Boolean).map((c) => [c.id, c]));
 
   const inCampaign = ((db && db.participants) || []).filter((p) => p && p.campaignId === campaignId);
-  /* "Creator N": numbered by first appearance among ALL of this campaign's
-     participants (shown or not), so a status change elsewhere does not
-     renumber anyone. Removing an earlier participant can still shift it. */
-  const labelOf = new Map();
-  inCampaign.forEach((p) => { const k = String(p.creatorId || p.id || ""); if (!labelOf.has(k)) labelOf.set(k, "Creator " + (labelOf.size + 1)); });
+  /* "Creator N": numbered ONLY among the creators this brand is shown, in a
+     fixed order (by internal key), so a number never reveals how many rows
+     were hidden or where they sit. A hidden row appearing or disappearing
+     changes no number. A shown creator joining or leaving can shift others. */
+  const keyOf = (p) => String(p.creatorId || p.id || "");
+  const shownKeys = [...new Set(inCampaign.filter((p) => BUCKET_BY_STATUS_EN[(h.statusOf(p) || {}).en]).map(keyOf))]
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const labelOf = new Map(shownKeys.map((k, i) => [k, "Creator " + (i + 1)]));
 
   const rows = inCampaign.map((p) => {
     const bucket = BUCKET_BY_STATUS_EN[(h.statusOf(p) || {}).en];
     if (!bucket) return null;
     const cr = byCreator[p.creatorId] || {};
     const bare = igHandle(cr.handle);
-    const handle = bare ? "@" + bare : labelOf.get(String(p.creatorId || p.id || "")) || "Creator";
+    const handle = bare ? "@" + bare : labelOf.get(keyOf(p)) || "Creator";
     const m = String(h.visitSlot(p) || "").match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{1,2}:\d{2}))?/);
     const people = Math.floor(Number(p.headcount));
     return pick({
@@ -212,7 +226,7 @@ function createClientViews(deps) {
   const state = {
     attempts: 0, failures: 0,
     lastAttemptAt: null, lastOkAt: null, lastRevision: null,
-    lastError: null, lastCounts: { links: 0, written: 0, removed: 0, failed: 0, deferred: 0 }
+    lastError: null, lastCounts: { links: 0, written: 0, removed: 0, failed: 0, deferred: 0, skipped: 0 }
   };
 
   let indexed = false;
@@ -233,18 +247,20 @@ function createClientViews(deps) {
   }
 
   /* One view write. The filter makes a slow older save unable to replace a
-     newer view: when the stored builtRevision is not lower, nothing matches
-     and the upsert's insert hits the duplicate _id, which is ignored. */
+     newer view: when the stored builtRevision is higher, nothing matches and
+     the upsert's insert hits the duplicate _id, which is ignored. Returns
+     true when written, false when skipped because a newer view is there. */
   async function writeView(views, linkId, built, revision, savedAt, force) {
     const doc = { campaignId: built.campaignId, builtRevision: revision, builtAt: new Date(now()).toISOString(),
       sourceSavedAt: savedAt || null, payload: { campaign: built.campaign, counts: built.counts, rows: built.rows } };
     try {
-      /* force (staff Rebuild): replace whatever is there, in one upsert, so a
-         failure leaves the previous copy in place */
-      await views.updateOne(force ? { _id: linkId } : { _id: linkId, builtRevision: { $lt: revision } }, { $set: doc }, { upsert: true });
+      /* force (staff Rebuild): may replace a view of the SAME revision, but
+         never a newer one (a save may have landed since Rebuild read the
+         workspace). One upsert, so a failure leaves the previous copy. */
+      await views.updateOne({ _id: linkId, builtRevision: force ? { $lte: revision } : { $lt: revision } }, { $set: doc }, { upsert: true });
       return true;
     } catch (err) {
-      if (err && err.code === 11000) return true;          /* a newer view is already there */
+      if (err && err.code === 11000) return false;         /* a newer view is already there */
       throw err;
     }
   }
@@ -253,10 +269,10 @@ function createClientViews(deps) {
      or as just read by Rebuild). Dead links lose their view. */
   async function rebuildFromDb(db, revision, savedAt, opts) {
     const c = await cols();
-    if (!c) return { links: 0, written: 0, removed: 0, failed: 0, deferred: 0, skipped: true };
+    if (!c) return { links: 0, written: 0, removed: 0, failed: 0, deferred: 0, skipped: 0, notConfigured: true };
     const force = !!(opts && opts.force);
     const links = await c.links.find({}).toArray();
-    const out = { links: links.length, written: 0, removed: 0, failed: 0, deferred: 0 };
+    const out = { links: links.length, written: 0, removed: 0, failed: 0, deferred: 0, skipped: 0 };
     const stale = [];
     /* pass 1: upsert every live view, one document at a time. Nothing is
        deleted here, so a failure midway cannot take a brand page down. */
@@ -266,13 +282,15 @@ function createClientViews(deps) {
         const built = live ? buildClientView(db, l.campaignId, h) : null;
         if (!built) { stale.push(l); continue; }
         built.campaignId = l.campaignId;
-        await writeView(c.views, l._id, built, revision, savedAt, force);
-        out.written++;
+        if (await writeView(c.views, l._id, built, revision, savedAt, force)) out.written++;
+        else out.skipped++;                                 /* a newer view is already stored */
       } catch (err) { out.failed++; }
     }
     /* pass 2: stale views go only after every upsert succeeded. (A revoked
        link is refused by resolveLink whether or not its copy is still here.) */
-    if (out.failed) { out.deferred = stale.length; return out; }
+    /* A skip means this read of the workspace is older than a stored view, so
+       "no longer buildable" may only be old news: keep every view then. */
+    if (out.failed || out.skipped) { out.deferred = stale.length; return out; }
     for (const l of stale) {
       try { await c.views.deleteOne({ _id: l._id }); out.removed++; } catch (err) { out.failed++; }
     }
@@ -293,7 +311,7 @@ function createClientViews(deps) {
     try {
       if (!db || !Array.isArray(db.campaigns)) return;
       const r = await withTimeout(rebuildFromDb(db, revision, savedAt), writeTimeoutMs);
-      state.lastCounts = { links: r.links, written: r.written, removed: r.removed, failed: r.failed, deferred: r.deferred || 0 };
+      state.lastCounts = { links: r.links, written: r.written, removed: r.removed, failed: r.failed, deferred: r.deferred || 0, skipped: r.skipped || 0 };
       if (r.failed) {
         state.failures++; state.lastError = r.failed + " view write(s) failed";
         log.error("Client views: %d of %d view write(s) failed; will retry on the next save.", r.failed, r.links);
@@ -539,10 +557,14 @@ function createClientViews(deps) {
            upsert and nothing is cleared first, so a failure keeps the old copy. */
         const r = await rebuildFromDb(doc.db, rev, doc.savedAt, { force: true });
         state.attempts++; state.lastAttemptAt = t0;
-        state.lastCounts = { links: r.links, written: r.written, removed: r.removed, failed: r.failed, deferred: r.deferred || 0 };
+        state.lastCounts = { links: r.links, written: r.written, removed: r.removed, failed: r.failed, deferred: r.deferred || 0, skipped: r.skipped || 0 };
         if (r.failed) { state.failures++; state.lastError = r.failed + " view write(s) failed"; }
-        else { state.lastOkAt = t0; state.lastRevision = rev; state.lastError = null; }
-        return res.json({ ok: !r.failed, ...state.lastCounts, error: state.lastError });
+        else {
+          state.lastOkAt = t0; state.lastError = null;
+          if (!r.skipped) state.lastRevision = rev;          /* skipped: newer views exist, keep the higher mark */
+        }
+        return res.json({ ok: !r.failed, ...state.lastCounts, error: state.lastError,
+          note: r.skipped ? r.skipped + " view(s) left as they were: a newer save is already shown. Press Rebuild now again." : null });
       } catch (err) {
         log.error("POST /api/client-links/rebuild failed:", err && err.message);
         return res.status(502).json({ error: "Could not rebuild." });
