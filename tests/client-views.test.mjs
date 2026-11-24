@@ -42,6 +42,7 @@ class Col {
   async updateOne(f, u, o) {
     this._t('updateOne');
     if (this.failUpdate) throw new Error('boom');
+    if (this.failNth && --this.failNth === 0) throw new Error('boom once');
     for (const [id, d] of this.docs) if (this._m(d, f)) {
       const next = Object.assign({}, d, structuredClone(u.$set)); this._checkUnique(next, id); this.docs.set(id, next); return { matchedCount: 1 };
     }
@@ -654,5 +655,126 @@ test('SAVE: with real failing view writes the save is still 200, the failure is 
     assert.equal(h.cv.state.lastError, null);
     assert.equal(h.cv.state.lastRevision, 7);
     assert.equal((await h.brand('/api/client/' + a.json.token)).status, 200);
+  } finally { h.close(); }
+});
+
+
+/* ================= 9. step 5 fixes (security review 35) ================= */
+function handleDb(handleValues) {
+  /* one confirmed creator per handle value, all in campaign CAMP */
+  const db = { campaigns: [{ id: CAMP, name: 'Sushi Jongno', status: 'live' }], creators: [], participants: [], socialContent: [] };
+  handleValues.forEach((hv, i) => {
+    db.creators.push({ id: 'cr' + i, handle: hv, name: 'Real Name ' + i });
+    db.participants.push({ id: 'pp' + i, campaignId: CAMP, creatorId: 'cr' + i, stage: 'confirmed', importedStatus: 'Confirmed',
+      confirmedVisitAt: '2026-12-05 1' + (i % 10) + ':00' });
+  });
+  return db;
+}
+
+test('HANDLE: a real full name or any non-handle text in the handle field never reaches the brand', () => {
+  const bad = ['Kim Minji', '김민지', 'Minji Kim (kim.minji@example.test)', 'a b', '@' + 'x'.repeat(31), 'https://example.test/kim',
+    'https://www.instagram.com/p/abc/', '@@twice', '', '   ', '<img src=x>', 'name@domain.test', '...', '@'];
+  const v = CV.buildClientView(handleDb(bad), CAMP, helpers);
+  assert.equal(v.rows.length, bad.length);
+  const out = stringify(v);
+  for (const b of bad) if (b.trim().length > 3) assert.ok(!out.includes(b), 'leaked: ' + b);
+  assert.ok(!/Real Name|Kim|김민지|kim\.minji|example\.test/.test(out), 'a name-like value reached the projection');
+  v.rows.forEach((r) => { assert.match(r.handle, /^Creator \d+$/); assert.equal(r.igUrl, ''); });
+  assert.equal(new Set(v.rows.map((r) => r.handle)).size, bad.length, 'labels are distinct per creator');
+});
+
+test('HANDLE: good handles pass; a leading @ is stripped and re-added; a profile URL yields its handle only', () => {
+  const v = CV.buildClientView(handleDb(['@one_handle', 'two.handle', 'https://www.instagram.com/three3/?igsh=SECRET#x', 'instagram.com/four.4/', 'x'.repeat(30)]), CAMP, helpers);
+  assert.deepEqual(v.rows.map((r) => r.handle).sort(), ['@one_handle', '@two.handle', '@three3', '@four.4', '@' + 'x'.repeat(30)].sort());
+  assert.equal(v.rows.find((r) => r.handle === '@three3').igUrl, 'https://www.instagram.com/three3/');
+  assert.ok(!stringify(v).includes('SECRET'));
+});
+
+test('HANDLE: labels are numbered per campaign, stable when other rows change status', () => {
+  const db = handleDb(['Kim Minji', 'Lee Joon', 'Park Soo']);
+  const first = CV.buildClientView(db, CAMP, helpers).rows.map((r) => r.handle).sort();
+  assert.deepEqual(first, ['Creator 1', 'Creator 2', 'Creator 3']);
+  db.participants[0].importedStatus = 'Declined'; db.participants[0].stage = 'dropped';   /* creator 1 leaves the brand's list */
+  const later = CV.buildClientView(db, CAMP, helpers).rows.map((r) => r.handle).sort();
+  assert.deepEqual(later, ['Creator 2', 'Creator 3'], 'the others keep their numbers');
+});
+
+test('URLS: post links must be http(s) on a known social host; query, fragment and credentials are dropped', () => {
+  const mk = (url) => { const db = handleDb(['@ok']); db.socialContent = [{ participantId: 'pp0', url, postUrl: url }]; return CV.buildClientView(db, CAMP, helpers).rows[0].contentUrl; };
+  assert.equal(mk('https://www.instagram.com/reel/abc123/?igsh=TOKEN123#frag'), 'https://www.instagram.com/reel/abc123/');
+  assert.equal(mk('https://vt.tiktok.com/ZS123/?k=1'), 'https://vt.tiktok.com/ZS123/');
+  assert.equal(mk('https://www.youtube.com/watch?v=abcDEF12345&token=SECRET&list=x'), 'https://www.youtube.com/watch?v=abcDEF12345');
+  assert.equal(mk('https://youtu.be/abcDEF12345?si=SECRET'), 'https://youtu.be/abcDEF12345');
+  for (const bad of ['https://example.test/post', 'https://evil.test/instagram.com/p/x', 'https://instagram.com.evil.test/p/x',
+    'https://user:pass@www.instagram.com/p/x/', 'javascript:alert(1)', 'ftp://www.instagram.com/p/x', 'https://www.notion.so/abc', 'https://notinstagram.com/p/x']) {
+    assert.equal(mk(bad), '', 'accepted: ' + bad);
+  }
+  assert.equal(mk('https://www.instagram.com/p/' + 'a'.repeat(400) + '/'), '', 'over-long link dropped');
+});
+
+test('CAMPAIGN NAME: capped, control and invisible characters removed, email addresses masked', () => {
+  const db = handleDb(['@ok']); db.campaigns[0].name = 'Sushi​ ‮gnojgnoj\n  Jongno ' + 'z'.repeat(300) + ' kim@example.test';
+  const n = CV.buildClientView(db, CAMP, helpers).campaign.name;
+  assert.ok(n.length <= 100 && !/[​‮\n]/.test(n) && !n.includes('example.test'), n);
+});
+
+test('STAFF: create and regenerate responses carrying the raw token are no-store', async () => {
+  const h = await harness();
+  try {
+    const a = await h.create();
+    const r = await h.call('/api/client-links/' + a.json.link.id + '/regenerate', { method: 'POST' });
+    for (const x of [a, r]) {
+      assert.ok(x.json.token);
+      assert.match(x.headers.get('cache-control') || '', /no-store/);
+      assert.equal(x.headers.get('pragma'), 'no-cache');
+    }
+    assert.match((await h.call('/api/client-links')).headers.get('cache-control') || '', /no-store/);
+  } finally { h.close(); }
+});
+
+test('REBUILD: a write that fails midway leaves every brand page up; the failure shows on the staff status endpoint', async () => {
+  const h = await harness();
+  try {
+    const t = [];
+    for (const id of [CAMP, OTHER, CLIENTX]) t.push((await h.create(id)).json.token);
+    h.setRev(6);
+    h.m.cols.client_views.failNth = 2;                       /* the second upsert of the rebuild throws */
+    const r = await h.call('/api/client-links/rebuild', { method: 'POST' });
+    assert.equal(r.json.ok, false);
+    assert.equal(r.json.failed, 1);
+    assert.equal(h.m.cols.client_views.docs.size, 3, 'no view was taken down');
+    for (const tok of t) assert.equal((await h.brand('/api/client/' + tok)).status, 200);
+    const st = (await h.call('/api/client-links/status')).json;
+    assert.match(st.projection.lastError, /failed/);
+    assert.equal(st.projection.lastCounts.failed, 1);
+    /* the retry heals it */
+    const again = await h.call('/api/client-links/rebuild', { method: 'POST' });
+    assert.deepEqual([again.json.ok, again.json.failed, again.json.written], [true, 0, 3]);
+    assert.equal((await h.call('/api/client-links/status')).json.projection.lastError, null);
+  } finally { h.close(); }
+});
+
+test('REBUILD: stale views are deleted only after every upsert succeeded', async () => {
+  const h = await harness();
+  try {
+    const a = await h.create(CAMP), b = await h.create(OTHER);
+    const db = h.getDb(); db.campaigns = db.campaigns.filter((c) => c.id !== OTHER);   /* OTHER is gone from the workspace */
+    h.m.cols.client_views.failNth = 1;
+    await h.cv.afterSave(db, 6, 'x');                       /* the CAMP upsert fails */
+    assert.equal(h.m.cols.client_views.docs.size, 2, 'nothing deleted while an upsert failed');
+    await h.cv.afterSave(db, 7, 'y');
+    assert.equal(h.m.cols.client_views.docs.size, 1, 'deleted once all upserts succeed');
+    assert.equal((await h.brand('/api/client/' + a.json.token)).status, 200);
+    assert.equal((await h.brand('/api/client/' + b.json.token)).status, 404);
+  } finally { h.close(); }
+});
+
+test('REBUILD: Rebuild still replaces a view of the same revision (no clear-first needed)', async () => {
+  const h = await harness();
+  try {
+    const a = await h.create();
+    const doc = [...h.m.cols.client_views.docs.values()][0]; doc.payload.counts.posted = 99;
+    await h.call('/api/client-links/rebuild', { method: 'POST' });
+    assert.equal((await h.brand('/api/client/' + a.json.token)).json.counts.posted, 1);
   } finally { h.close(); }
 });

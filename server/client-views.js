@@ -70,15 +70,51 @@ const clean = (v, max) => typeof v === "string"
   ? v.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").trim().slice(0, max) : "";
 const isoDay = (v) => { const m = String(v || "").match(/^(\d{4}-\d{2}-\d{2})/); return m ? m[1] : ""; };
 const pick = (obj, fields) => { const o = {}; fields.forEach((k) => { if (obj[k] !== undefined) o[k] = obj[k]; }); return o; };
-/* a post link must be http(s) and must not point into the internal Notion workspace */
+/* Free text a brand must not receive unchecked. Invisible and direction
+   characters are removed as well as control characters. */
+const INVISIBLE_RE = /[​-‏‪-‮⁠-⁤﻿]/g;
+const EMAIL_RE = /[^\s@]+@[^\s@]+\.[^\s@]+/g;
+function plainText(v, max) {
+  if (typeof v !== "string") return "";
+  return clean(v.replace(INVISIBLE_RE, "").replace(/\s+/g, " ").replace(EMAIL_RE, "").trim(), max).trim();
+}
+
+/* Instagram handle: letters, digits, dots, underscores, 1 to 30. A leading @
+   is stripped; an instagram.com profile link is reduced to its handle.
+   Anything else (a name with a space, Hangul, an email, a post link) returns
+   "" and the caller shows a neutral label instead. */
+const HANDLE_RE = /^[A-Za-z0-9._]{1,30}$/;
+const IG_RESERVED = new Set(["p", "reel", "reels", "tv", "stories", "explore", "accounts", "direct", "about", "web"]);
+function igHandle(raw) {
+  let s = typeof raw === "string" ? raw.replace(INVISIBLE_RE, "").trim() : "";
+  if (!s || s.length > 300) return "";
+  const m = s.match(/^(?:https?:\/\/)?(?:www\.|m\.)?instagram\.com\/([^/?#\s]+)\/?(?:[?#].*)?$/i);
+  if (m) s = m[1];
+  s = s.replace(/^@/, "");
+  if (!HANDLE_RE.test(s) || !/[A-Za-z0-9]/.test(s) || IG_RESERVED.has(s.toLowerCase())) return "";
+  return s;
+}
+
+/* A post link: http(s), a known social host, no credentials or port, no
+   fragment. The query string is dropped, except the video id YouTube needs.
+   The result is rebuilt from the parsed parts, never passed through. */
+const POST_HOSTS = ["instagram.com", "tiktok.com", "youtube.com", "youtu.be"];
 function postUrl(u, safeUrl) {
   const s = safeUrl(u);
   if (!s) return "";
   try {
-    const host = new URL(s).hostname.toLowerCase();
-    if (/(^|\.)notion\.(so|site)$/.test(host)) return "";
+    const url = new URL(s);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return "";
+    if (url.username || url.password || url.port) return "";
+    const host = url.hostname.toLowerCase();
+    if (!POST_HOSTS.some((d) => host === d || host.endsWith("." + d))) return "";
+    let out = url.protocol + "//" + host + url.pathname;
+    if (/(^|\.)youtube\.com$/.test(host) && url.pathname === "/watch") {
+      const v = url.searchParams.get("v");
+      if (v && /^[A-Za-z0-9_-]{6,20}$/.test(v)) out += "?v=" + v;
+    }
+    return out.length <= 300 ? out : "";
   } catch (e) { return ""; }
-  return s.slice(0, 500);
 }
 
 /* ---- the projection (pure) ----------------------------------------
@@ -94,17 +130,24 @@ function buildClientView(db, campaignId, h) {
   const cp = same[0];
   const byCreator = Object.fromEntries(((db && db.creators) || []).filter(Boolean).map((c) => [c.id, c]));
 
-  const rows = ((db && db.participants) || []).filter((p) => p && p.campaignId === campaignId).map((p) => {
+  const inCampaign = ((db && db.participants) || []).filter((p) => p && p.campaignId === campaignId);
+  /* "Creator N": numbered by first appearance among ALL of this campaign's
+     participants (shown or not), so a status change elsewhere does not
+     renumber anyone. Removing an earlier participant can still shift it. */
+  const labelOf = new Map();
+  inCampaign.forEach((p) => { const k = String(p.creatorId || p.id || ""); if (!labelOf.has(k)) labelOf.set(k, "Creator " + (labelOf.size + 1)); });
+
+  const rows = inCampaign.map((p) => {
     const bucket = BUCKET_BY_STATUS_EN[(h.statusOf(p) || {}).en];
     if (!bucket) return null;
     const cr = byCreator[p.creatorId] || {};
-    const handle = clean(typeof cr.handle === "string" ? cr.handle : "", 60);
-    const bare = handle.replace(/^@/, "");
+    const bare = igHandle(cr.handle);
+    const handle = bare ? "@" + bare : labelOf.get(String(p.creatorId || p.id || "")) || "Creator";
     const m = String(h.visitSlot(p) || "").match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{1,2}:\d{2}))?/);
     const people = Math.floor(Number(p.headcount));
     return pick({
       handle,
-      igUrl: bare ? "https://www.instagram.com/" + encodeURIComponent(bare) + "/" : "",
+      igUrl: bare ? "https://www.instagram.com/" + bare + "/" : "",
       bucket,
       visitDate: m ? m[1] : "",
       visitTime: m && m[2] ? m[2] : "",
@@ -122,7 +165,7 @@ function buildClientView(db, campaignId, h) {
   const sb = CAMPAIGN_BUCKET[cp.status] || CAMPAIGN_BUCKET.planning;
   return {
     campaign: pick({
-      name: clean(typeof cp.name === "string" ? cp.name : "", 120),
+      name: plainText(cp.name, 100),
       start: isoDay(cp.start),
       end: isoDay(cp.end),
       status: { key: sb.key, en: sb.en, ko: sb.ko },
@@ -157,7 +200,7 @@ function createClientViews(deps) {
   const state = {
     attempts: 0, failures: 0,
     lastAttemptAt: null, lastOkAt: null, lastRevision: null,
-    lastError: null, lastCounts: { links: 0, written: 0, removed: 0, failed: 0 }
+    lastError: null, lastCounts: { links: 0, written: 0, removed: 0, failed: 0, deferred: 0 }
   };
 
   let indexed = false;
@@ -180,11 +223,13 @@ function createClientViews(deps) {
   /* One view write. The filter makes a slow older save unable to replace a
      newer view: when the stored builtRevision is not lower, nothing matches
      and the upsert's insert hits the duplicate _id, which is ignored. */
-  async function writeView(views, linkId, built, revision, savedAt) {
+  async function writeView(views, linkId, built, revision, savedAt, force) {
     const doc = { campaignId: built.campaignId, builtRevision: revision, builtAt: new Date(now()).toISOString(),
       sourceSavedAt: savedAt || null, payload: { campaign: built.campaign, counts: built.counts, rows: built.rows } };
     try {
-      await views.updateOne({ _id: linkId, builtRevision: { $lt: revision } }, { $set: doc }, { upsert: true });
+      /* force (staff Rebuild): replace whatever is there, in one upsert, so a
+         failure leaves the previous copy in place */
+      await views.updateOne(force ? { _id: linkId } : { _id: linkId, builtRevision: { $lt: revision } }, { $set: doc }, { upsert: true });
       return true;
     } catch (err) {
       if (err && err.code === 11000) return true;          /* a newer view is already there */
@@ -194,20 +239,30 @@ function createClientViews(deps) {
 
   /* Rebuild every live link's view from `db` (the workspace as just saved,
      or as just read by Rebuild). Dead links lose their view. */
-  async function rebuildFromDb(db, revision, savedAt) {
+  async function rebuildFromDb(db, revision, savedAt, opts) {
     const c = await cols();
-    if (!c) return { links: 0, written: 0, removed: 0, failed: 0, skipped: true };
+    if (!c) return { links: 0, written: 0, removed: 0, failed: 0, deferred: 0, skipped: true };
+    const force = !!(opts && opts.force);
     const links = await c.links.find({}).toArray();
-    const out = { links: links.length, written: 0, removed: 0, failed: 0 };
+    const out = { links: links.length, written: 0, removed: 0, failed: 0, deferred: 0 };
+    const stale = [];
+    /* pass 1: upsert every live view, one document at a time. Nothing is
+       deleted here, so a failure midway cannot take a brand page down. */
     for (const l of links) {
       try {
         const live = linkStatus(l, now()) === "active";
         const built = live ? buildClientView(db, l.campaignId, h) : null;
-        if (!built) { await c.views.deleteOne({ _id: l._id }); out.removed++; continue; }
+        if (!built) { stale.push(l); continue; }
         built.campaignId = l.campaignId;
-        await writeView(c.views, l._id, built, revision, savedAt);
+        await writeView(c.views, l._id, built, revision, savedAt, force);
         out.written++;
       } catch (err) { out.failed++; }
+    }
+    /* pass 2: stale views go only after every upsert succeeded. (A revoked
+       link is refused by resolveLink whether or not its copy is still here.) */
+    if (out.failed) { out.deferred = stale.length; return out; }
+    for (const l of stale) {
+      try { await c.views.deleteOne({ _id: l._id }); out.removed++; } catch (err) { out.failed++; }
     }
     return out;
   }
@@ -226,7 +281,7 @@ function createClientViews(deps) {
     try {
       if (!db || !Array.isArray(db.campaigns)) return;
       const r = await withTimeout(rebuildFromDb(db, revision, savedAt), writeTimeoutMs);
-      state.lastCounts = { links: r.links, written: r.written, removed: r.removed, failed: r.failed };
+      state.lastCounts = { links: r.links, written: r.written, removed: r.removed, failed: r.failed, deferred: r.deferred || 0 };
       if (r.failed) {
         state.failures++; state.lastError = r.failed + " view write(s) failed";
         log.error("Client views: %d of %d view write(s) failed; will retry on the next save.", r.failed, r.links);
@@ -322,6 +377,11 @@ function createClientViews(deps) {
     app.get("/c/:token", (req, res) => { res.sendFile(deps.pageFile); });
 
     /* ---------------- staff side ---------------- */
+    /* create and regenerate carry the raw token: nothing may cache them */
+    app.use("/api/client-links", (req, res, next) => {
+      res.set({ "Cache-Control": "no-store, max-age=0", "Pragma": "no-cache" });
+      next();
+    });
     const needDb = (res) => {
       if (deps.MONGODB_URI) return false;
       res.status(503).json({ error: "Database not configured on the server yet." });
@@ -463,15 +523,14 @@ function createClientViews(deps) {
         const rev = Number(doc.revision || 0);
         const t0 = new Date(now()).toISOString();
         const c = await cols();
-        /* a rebuild is allowed to replace a same-revision view: clear first */
-        const links = await c.links.find({}).toArray();
-        for (const l of links) await c.views.deleteOne({ _id: l._id });
-        const r = await rebuildFromDb(doc.db, rev, doc.savedAt);
+        /* force: a rebuild may replace a same-revision view. Each view is one
+           upsert and nothing is cleared first, so a failure keeps the old copy. */
+        const r = await rebuildFromDb(doc.db, rev, doc.savedAt, { force: true });
         state.attempts++; state.lastAttemptAt = t0;
-        state.lastCounts = { links: r.links, written: r.written, removed: r.removed, failed: r.failed };
+        state.lastCounts = { links: r.links, written: r.written, removed: r.removed, failed: r.failed, deferred: r.deferred || 0 };
         if (r.failed) { state.failures++; state.lastError = r.failed + " view write(s) failed"; }
         else { state.lastOkAt = t0; state.lastRevision = rev; state.lastError = null; }
-        return res.json({ ok: !r.failed, ...state.lastCounts });
+        return res.json({ ok: !r.failed, ...state.lastCounts, error: state.lastError });
       } catch (err) {
         log.error("POST /api/client-links/rebuild failed:", err && err.message);
         return res.status(502).json({ error: "Could not rebuild." });
