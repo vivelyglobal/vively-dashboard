@@ -106,6 +106,7 @@ const { writeWorkspaceCas } = require("./server/workspace-cas.js");
 const dateWritebackLib = require("./server/date-writeback.js");
 const sheetsClient = require("./server/sheets-client.js");
 const notionApplicants = require("./server/notion-applicants.js");
+const clientViewsLib = require("./server/client-views.js");
 
 /* ------------------------------------------------------------------
    Who is allowed into the workspace.
@@ -803,6 +804,10 @@ app.get("/api/workspace/meta", requireStaff(async (req, res) => {
    bookings through it so a stale client cannot un-book anybody. */
 let bookingApi = null;
 
+/* The brand-view projection (server/client-views.js). Mounted with the partner
+   routes below; null until then. */
+let clientViews = null;
+
 /* The confirmed-visit-date write-back job (Notion row and campaign Sheet).
    Null unless a flag switches it on; see the wiring block further down. */
 let dateWriteback = null;
@@ -894,6 +899,11 @@ async function saveWorkspaceDoc(body) {
         savedAt: wrote.savedAt
       } };
     }
+    /* Brand views are rebuilt from the workspace that was JUST written, after
+       the compare-and-set succeeded. afterSave never throws or rejects: a
+       failed projection is counted, shown on /api/client-links/status and
+       retried by the next save. It must not cost anybody their save. */
+    if (clientViews) { try { await clientViews.afterSave(db, nextRevision, savedAt); } catch (e) { /* never affects a save */ } }
     return { status: 200, json: { ok: true, savedAt, revision: nextRevision, bookings: bookingFixes } };
   } catch (err) {
     console.error("POST /api/workspace failed:", err.message);
@@ -1879,6 +1889,25 @@ app.post("/api/partner-comments/read", requireStaff(async (req, res) => {
 app.get("/partner/:token", (req, res) => {
   res.sendFile(path.join(__dirname, "partner.html"));
 });
+
+/* ---------------------------- brand view (per campaign) ----------------
+   Passive until staff create a link (Setup, Partners). Everything it serves
+   comes from its own two collections, never from the workspace document;
+   see server/client-views.js. Reuses the partner limiter, proxy-hop IP rule
+   and token regex. */
+async function getWorkspaceRevision() {
+  const col = await getWorkspaceCollection();
+  const d = col && await col.findOne({ _id: WORKSPACE_ID }, { projection: { revision: 1 } });
+  return (d && d.revision) || 0;
+}
+clientViews = clientViewsLib.createClientViews({
+  getMongoClient, MONGODB_DB, MONGODB_URI, loadWorkspaceDoc, getWorkspaceRevision, requireStaff,
+  rateLimiter: bookingRoutes.rateLimiter, clientIp: partnerClientIp,
+  helpers: { statusOf: partnerStatusOf, visitSlot: partnerVisitSlot, contentUrl: partnerContentUrl, safeUrl: partnerSafeUrl },
+  pageFile: path.join(__dirname, "client.html"),
+  ttlDays: process.env.CLIENT_LINK_TTL_DAYS || PARTNER_LINK_TTL_DAYS
+});
+clientViews.mount(app);
 
 /* The creator's booking page. Three shapes, one file — the page reads
    the token off the last path segment and the API resolves which kind it

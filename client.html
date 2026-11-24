@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="robots" content="noindex, nofollow" />
+<meta name="referrer" content="no-referrer" />
+<title>VIVELY</title>
+<style>
+:root{--bg:#f7f7f8;--card:#fff;--line:#e3e3e6;--text:#1a1a1c;--text-2:#55555c;--text-3:#6f6f78;
+ --green:#1e7f58;--amber:#9a6a00;--blue:#2f6fd6;--grey:#6f6f78;--accent:#1a1a1c}
+@media (prefers-color-scheme:dark){:root{--bg:#131315;--card:#1b1b1e;--line:#2c2c31;--text:#eeeef1;
+ --text-2:#b4b4bd;--text-3:#9a9aa4;--green:#4cc38f;--amber:#e0ac3a;--blue:#7aa8f7;--accent:#eeeef1}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Malgun Gothic','Apple SD Gothic Neo',sans-serif}
+header{padding:20px 20px 14px;border-bottom:1px solid var(--line);background:var(--card)}
+.top{display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap}
+h1{margin:0 0 4px;font-size:20px;font-weight:600;letter-spacing:-.01em;overflow-wrap:anywhere}
+.sub{color:var(--text-3);font-size:14px}
+.lang{margin-left:auto;display:flex;gap:6px}
+.lang button{border:1px solid var(--line);background:var(--card);color:var(--text-2);border-radius:20px;padding:6px 14px;font-size:14px;min-height:36px;cursor:pointer}
+.lang button[aria-pressed=true]{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+main{padding:16px 20px 60px;max-width:1100px;margin:0 auto}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:14px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.tile b{display:block;font-size:24px;font-weight:600;line-height:1.2}
+.tile span{color:var(--text-3);font-size:13.5px}
+.wrap{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:auto}
+table{border-collapse:collapse;width:100%;font-size:14.5px;white-space:nowrap}
+th{text-align:left;font-weight:500;font-size:12.5px;color:var(--text-3);padding:10px 12px;border-bottom:1px solid var(--line)}
+td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+.pill{display:inline-block;padding:2px 10px;border-radius:20px;font-size:13px;border:1px solid}
+.green{color:var(--green);border-color:currentColor}
+.amber{color:var(--amber);border-color:currentColor}
+.blue{color:var(--blue);border-color:currentColor}
+.grey{color:var(--grey);border-color:var(--line)}
+a{color:var(--blue)}
+a:focus-visible,button:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
+.note{border:1px solid var(--line);border-radius:8px;padding:12px 14px;color:var(--text-2);background:var(--card)}
+.cal{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px 16px;margin-bottom:14px;max-width:720px}
+.cal-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.cal-title{font-size:16px;font-weight:600}
+.cal-nav{margin-left:auto;display:flex;gap:6px}
+.cal-nav button{border:1px solid var(--line);background:var(--card);color:var(--text-2);border-radius:6px;width:44px;height:44px;font-size:18px;line-height:1;cursor:pointer}
+.cal-nav button:disabled{opacity:.3;cursor:default}
+.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.cal-dow{font-size:12px;color:var(--text-3);padding:0 0 4px 6px}
+.cal-d{border:1px solid transparent;border-radius:8px;min-height:52px;padding:5px 6px 6px;background:none;color:var(--text-3);
+ font:inherit;font-size:13px;text-align:left;display:flex;flex-direction:column;gap:3px}
+.cal-d.pad{visibility:hidden}
+.cal-d.has{background:var(--bg);border-color:var(--line);color:var(--text);cursor:pointer}
+.cal-d.today{border-color:var(--blue)}
+.cal-d.on{background:var(--accent);border-color:var(--accent);color:var(--bg)}
+.cal-d .n{font-weight:600}
+.cal-d .who{font-size:11.5px;line-height:1.25;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.cal-d .cnt{display:none;font-size:11.5px}
+.cal-foot{display:flex;align-items:center;gap:10px;margin-top:10px;font-size:14px;color:var(--text-3);flex-wrap:wrap}
+.cal-clear{border:1px solid var(--line);background:var(--card);color:var(--text-2);border-radius:6px;padding:8px 12px;font-size:14px;min-height:44px;cursor:pointer}
+@media (max-width:640px){.cal-d{min-height:44px}.cal-d .who{display:none}.cal-d .cnt{display:block}}
+footer{color:var(--text-3);font-size:13px;padding:16px 20px;text-align:center}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<header>
+  <div class="top">
+    <div>
+      <h1 id="title">VIVELY</h1>
+      <div class="sub" id="sub"></div>
+    </div>
+    <div class="lang" role="group" aria-label="Language">
+      <button type="button" id="langEn" aria-pressed="true">EN</button>
+      <button type="button" id="langKo" aria-pressed="false">한국어</button>
+    </div>
+  </div>
+</header>
+<main>
+  <div id="live" role="status" aria-live="polite"></div>
+  <div class="tiles" id="tiles"></div>
+  <div id="cal"></div>
+  <div id="body"></div>
+</main>
+<footer id="foot"></footer>
+
+<script>
+/* Read-only by construction: this page has no write path at all. The server
+   decided what a brand may see before sending it, and every value below is
+   escaped before it goes into the page. */
+const TOKEN = location.pathname.split('/').filter(Boolean).pop();
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+/* a link only ever opens as http(s), whatever the payload says */
+const safeHref = (u) => /^https?:\/\//i.test(String(u || '')) ? String(u) : '';
+
+const T = {
+  en: {
+    loading: 'Loading…',
+    bad: 'This link is not valid, or has been turned off. Ask your Vively contact for a new one.',
+    busy: 'Too many requests. Please wait a minute and try again.',
+    err: 'Something went wrong. Please try again in a moment.',
+    updated: 'Last updated', planned: 'planned',
+    creators: 'Creators', confirmed: 'Confirmed', waiting: 'Waiting to post', posted: 'Posted',
+    colCreator: 'Creator', colStatus: 'Status', colVisit: 'Visit date', colTime: 'Time', colPeople: 'People',
+    colProfile: 'Profile', colPost: 'Post',
+    open: 'Open', view: 'View',
+    none: 'No creators to show yet.', noDay: 'No visits on this day.',
+    noVisit: 'No visits this month', visits: 'visit day(s)', people: 'people',
+    showAll: 'Show all days', prev: 'Previous month', next: 'Next month',
+    dow: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+    month: (y, m) => ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][m - 1] + ' ' + y,
+    foot: 'View only. Changes are made by VIVELY. Please do not forward this link.',
+    unit: ''
+  },
+  ko: {
+    loading: '불러오는 중…',
+    bad: '이 링크는 유효하지 않거나 사용이 중지되었습니다. VIVELY 담당자에게 새 링크를 요청해 주세요.',
+    busy: '요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.',
+    err: '문제가 발생했습니다. 잠시 후 다시 시도해 주세요.',
+    updated: '마지막 업데이트', planned: '예정',
+    creators: '크리에이터', confirmed: '확정', waiting: '게시 대기', posted: '게시 완료',
+    colCreator: '크리에이터', colStatus: '상태', colVisit: '방문일', colTime: '시간', colPeople: '인원',
+    colProfile: '프로필', colPost: '게시물',
+    open: '열기', view: '보기',
+    none: '아직 표시할 크리에이터가 없습니다.', noDay: '이 날에는 방문 일정이 없습니다.',
+    noVisit: '이 달에는 방문 일정이 없습니다', visits: '일 방문', people: '명',
+    showAll: '전체 날짜 보기', prev: '이전 달', next: '다음 달',
+    dow: ['일', '월', '화', '수', '목', '금', '토'],
+    month: (y, m) => y + '년 ' + m + '월',
+    foot: '보기 전용입니다. 변경은 VIVELY에서 진행합니다. 이 링크를 다른 분께 전달하지 말아 주세요.',
+    unit: '명'
+  }
+};
+const TONE = { confirmed: 'blue', waiting: 'amber', posted: 'green' };
+
+let DATA = null, calMonth = null, calDay = null, problem = null;
+let lang = /^ko/i.test(navigator.language || '') ? 'ko' : 'en';
+const t = () => T[lang];
+
+const todayIso = () => {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+};
+const monthKey = (iso) => String(iso || '').slice(0, 7);
+const shiftMonth = (key, by) => {
+  const [y, m] = key.split('-').map(Number);
+  const d = new Date(y, m - 1 + by, 1);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+};
+
+function visitsByDay(rows) {
+  const by = {};
+  rows.forEach((r) => { if (r.visitDate) (by[r.visitDate] = by[r.visitDate] || []).push(r); });
+  return by;
+}
+function defaultMonth(by) {
+  const days = Object.keys(by).sort();
+  if (!days.length) return monthKey(todayIso());
+  const now = todayIso();
+  return monthKey(days.find((d) => d >= now) || days[days.length - 1]);
+}
+
+function renderCalendar(rows) {
+  const by = visitsByDay(rows);
+  const days = Object.keys(by).sort();
+  const mount = document.getElementById('cal');
+  if (!days.length) { mount.innerHTML = ''; calDay = null; return; }
+  if (!calMonth) calMonth = defaultMonth(by);
+  const months = [...new Set(days.map(monthKey))].sort();
+  const [y, m] = calMonth.split('-').map(Number);
+  const lead = new Date(y, m - 1, 1).getDay();
+  const len = new Date(y, m, 0).getDate();
+  const today = todayIso();
+  const inMonth = days.filter((d) => monthKey(d) === calMonth);
+  const booked = inMonth.reduce((a, d) => a + by[d].reduce((s, r) => s + (r.people || 1), 0), 0);
+  const L = t();
+
+  const cells = [];
+  for (let i = 0; i < lead; i++) cells.push('<div class="cal-d pad"></div>');
+  for (let n = 1; n <= len; n++) {
+    const iso = calMonth + '-' + String(n).padStart(2, '0');
+    const list = by[iso] || [];
+    const cls = ['cal-d'];
+    if (list.length) cls.push('has');
+    if (iso === today) cls.push('today');
+    if (iso === calDay) cls.push('on');
+    const who = list.length === 1 ? (list[0].handle || '—') : list.length + L.unit;
+    const tip = list.map((r) => (r.visitTime ? r.visitTime + ' ' : '') + (r.handle || '—')).join(', ');
+    cells.push(list.length
+      ? '<button type="button" class="' + cls.join(' ') + '" data-day="' + esc(iso) + '" title="' + esc(tip) + '" aria-pressed="' + (iso === calDay) + '">' +
+        '<span class="n">' + n + '</span><span class="who">' + esc(who) + '</span><span class="cnt">' + list.length + '</span></button>'
+      : '<div class="' + cls.join(' ') + '"><span class="n">' + n + '</span></div>');
+  }
+
+  mount.innerHTML = '<div class="cal"><div class="cal-head">' +
+    '<div class="cal-title">' + esc(L.month(y, m)) + '</div>' +
+    '<div class="cal-nav">' +
+    '<button type="button" data-mv="-1"' + (calMonth <= months[0] ? ' disabled' : '') + ' aria-label="' + esc(L.prev) + '">&#8249;</button>' +
+    '<button type="button" data-mv="1"' + (calMonth >= months[months.length - 1] ? ' disabled' : '') + ' aria-label="' + esc(L.next) + '">&#8250;</button>' +
+    '</div></div><div class="cal-grid">' +
+    L.dow.map((d) => '<div class="cal-dow">' + esc(d) + '</div>').join('') + cells.join('') +
+    '</div><div class="cal-foot"><span>' +
+    (inMonth.length ? esc(inMonth.length + ' ' + L.visits + ' · ' + booked + ' ' + L.people) : esc(L.noVisit)) + '</span>' +
+    (calDay ? '<button type="button" class="cal-clear" id="calClear">' + esc(calDay) + ' · ' + esc(L.showAll) + '</button>' : '') +
+    '</div></div>';
+
+  mount.querySelectorAll('[data-mv]').forEach((b) =>
+    b.addEventListener('click', () => { calMonth = shiftMonth(calMonth, +b.dataset.mv); calDay = null; render(); }));
+  mount.querySelectorAll('[data-day]').forEach((b) =>
+    b.addEventListener('click', () => { calDay = calDay === b.dataset.day ? null : b.dataset.day; render(); }));
+  const clear = document.getElementById('calClear');
+  if (clear) clear.addEventListener('click', () => { calDay = null; render(); });
+}
+
+function setLang(l) {
+  lang = l;
+  document.documentElement.lang = l;
+  document.getElementById('langEn').setAttribute('aria-pressed', String(l === 'en'));
+  document.getElementById('langKo').setAttribute('aria-pressed', String(l === 'ko'));
+  if (DATA || problem) render(); else document.getElementById('foot').textContent = t().foot;
+}
+document.getElementById('langEn').addEventListener('click', () => setLang('en'));
+document.getElementById('langKo').addEventListener('click', () => setLang('ko'));
+
+function showProblem(msg) {
+  document.getElementById('tiles').innerHTML = '';
+  document.getElementById('cal').innerHTML = '';
+  document.getElementById('sub').textContent = '';
+  document.getElementById('body').innerHTML = '<div class="note">' + esc(msg) + '</div>';
+}
+
+async function load() {
+  document.getElementById('foot').textContent = t().foot;
+  document.getElementById('live').textContent = t().loading;
+  try {
+    const res = await fetch('/api/client/' + encodeURIComponent(TOKEN), { cache: 'no-store', credentials: 'omit' });
+    const body = await res.json().catch(() => ({}));
+    document.getElementById('live').textContent = '';
+    if (!res.ok || !body || !body.ok) {
+      problem = res.status === 429 ? 'busy' : (res.status === 404 ? 'bad' : 'err');
+      return showProblem(t()[problem]);
+    }
+    DATA = body;
+    render();
+  } catch (e) {
+    document.getElementById('live').textContent = '';
+    problem = 'err';
+    showProblem(t().err);
+  }
+}
+
+function render() {
+  const L = t();
+  if (!DATA) { if (problem) showProblem(L[problem]); return; }
+  const cp = DATA.campaign || {}, c = DATA.counts || {}, rows = DATA.rows || [];
+  document.title = (cp.name || 'VIVELY') + ' · VIVELY';
+  document.getElementById('title').textContent = cp.name || 'VIVELY';
+  const st = cp.status ? (cp.status[lang] || cp.status.en || '') : '';
+  const dates = cp.start ? cp.start + (cp.end ? ' – ' + cp.end : '') : '';
+  const upd = DATA.updatedAt ? new Date(DATA.updatedAt) : null;
+  const updTxt = upd && !isNaN(upd) ? upd.toLocaleString(lang === 'ko' ? 'ko-KR' : 'en-GB') : '';
+  document.getElementById('sub').textContent =
+    [st, dates, updTxt ? L.updated + ' ' + updTxt : ''].filter(Boolean).join(' · ');
+
+  document.getElementById('tiles').innerHTML =
+    [['creators', c.total, cp.headcount ? ' / ' + cp.headcount + ' ' + L.planned : ''],
+     ['confirmed', c.confirmed, ''], ['waiting', c.waiting, ''], ['posted', c.posted, '']]
+      .map(([k, v, extra]) => '<div class="tile"><b>' + esc(Number(v) || 0) + '</b><span>' + esc(L[k] + extra) + '</span></div>').join('');
+
+  renderCalendar(rows);
+  const shown = calDay ? rows.filter((r) => r.visitDate === calDay) : rows;
+
+  document.getElementById('body').innerHTML = !shown.length
+    ? '<div class="note">' + esc(calDay ? L.noDay : L.none) + '</div>'
+    : '<div class="wrap"><table><thead><tr>' +
+      [L.colCreator, L.colStatus, L.colVisit, L.colTime, L.colPeople, L.colProfile, L.colPost]
+        .map((h) => '<th scope="col">' + esc(h) + '</th>').join('') + '</tr></thead><tbody>' +
+      shown.map((r) => '<tr><td><b>' + esc(r.handle || '—') + '</b></td>' +
+        '<td><span class="pill ' + esc(TONE[r.bucket] || 'grey') + '">' + esc(L[r.bucket] || r.bucket || '') + '</span></td>' +
+        '<td>' + esc(r.visitDate || '—') + '</td><td>' + esc(r.visitTime || '—') + '</td>' +
+        '<td>' + esc(r.people || '—') + '</td>' +
+        '<td>' + (safeHref(r.igUrl) ? '<a href="' + esc(safeHref(r.igUrl)) + '" target="_blank" rel="noopener noreferrer">' + esc(L.open) + '</a>' : '—') + '</td>' +
+        '<td>' + (safeHref(r.contentUrl) ? '<a href="' + esc(safeHref(r.contentUrl)) + '" target="_blank" rel="noopener noreferrer">' + esc(L.view) + '</a>' : '—') + '</td></tr>').join('') +
+      '</tbody></table></div>';
+  document.getElementById('foot').textContent = L.foot;
+}
+
+setLang(lang);
+load();
+</script>
+</body>
+</html>

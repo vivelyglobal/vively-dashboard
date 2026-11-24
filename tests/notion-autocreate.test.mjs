@@ -634,11 +634,11 @@ function realSaveWorkspaceDoc(col) {
   const b = src.indexOf('\n}\n', a);
   assert.ok(a > 0 && b > a, 'saveWorkspaceDoc found in server.js');
   const fn = new Function('getWorkspaceCollection', 'WORKSPACE_ID', 'wsGuard', 'bookingApi', 'bookingStore',
-    'stampPartnerClients', 'PARTNER_LINK_TTL_DAYS', 'console', 'writeWorkspaceCas',
+    'stampPartnerClients', 'PARTNER_LINK_TTL_DAYS', 'console', 'writeWorkspaceCas', 'clientViews',
     'return (' + src.slice(a, b + 2) + ');');
   return fn(async () => col, 'shared', require('../server/workspace-guard.js'), null, {},
     () => ({ revokedKept: 0 }), 90, { error() {}, log() {}, warn() {} },
-    require('../server/workspace-cas.js').writeWorkspaceCas);
+    require('../server/workspace-cas.js').writeWorkspaceCas, null);
 }
 function fakeCollection(doc) {
   const c = { doc, updates: 0, hooks: [] };

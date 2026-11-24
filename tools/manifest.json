@@ -694,8 +694,8 @@
   "file": "sync/gcal.js",
   "ranges": [
    [
-    12705,
-    13056
+    12881,
+    13232
    ]
   ],
   "imports": [
@@ -711,8 +711,8 @@
   "file": "views/calendar.js",
   "ranges": [
    [
-    13059,
-    13309
+    13235,
+    13485
    ]
   ],
   "imports": [
@@ -745,7 +745,7 @@
   "ranges": [
    [
     12281,
-    12457
+    12633
    ]
   ],
   "imports": [
@@ -759,14 +759,14 @@
    "import { toast } from '../ui/overlay.js';",
    "import { showParticipant } from './campaigns.js';"
   ],
-  "sha256": "f2b496828328829f9ed359d40e9d86f92c22833fbc24c180d17fdd07af107edf"
+  "sha256": "7897eee1fb99352a1e5b81718eec58acb969529c52bc17c7fc61af604b3edd29"
  },
  {
   "file": "views/autocreatePanel.js",
   "ranges": [
    [
-    12458,
-    12704
+    12634,
+    12880
    ]
   ],
   "imports": [
@@ -811,8 +811,8 @@
   "file": "model/socialStats.js",
   "ranges": [
    [
-    13311,
-    13610
+    13487,
+    13786
    ]
   ],
   "imports": [
@@ -824,8 +824,8 @@
   "file": "charts/socialViz.js",
   "ranges": [
    [
-    13611,
-    13708
+    13787,
+    13884
    ]
   ],
   "imports": [
@@ -839,8 +839,8 @@
   "file": "views/socialOverview.js",
   "ranges": [
    [
-    13709,
-    14170
+    13885,
+    14346
    ]
   ],
   "imports": [
@@ -859,8 +859,8 @@
   "file": "model/homeStats.js",
   "ranges": [
    [
-    14172,
-    14591
+    14348,
+    14767
    ]
   ],
   "imports": [
@@ -875,8 +875,8 @@
   "file": "views/home.js",
   "ranges": [
    [
-    14593,
-    14960
+    14769,
+    15136
    ]
   ],
   "imports": [
@@ -897,8 +897,8 @@
   "file": "views/booking.js",
   "ranges": [
    [
-    14963,
-    16760
+    15139,
+    16936
    ]
   ],
   "imports": [
@@ -918,8 +918,8 @@
   "file": "views/desk.js",
   "ranges": [
    [
-    16763,
-    17578
+    16939,
+    17754
    ]
   ],
   "imports": [
@@ -939,8 +939,8 @@
   "file": "sync/sheetMetrics.js",
   "ranges": [
    [
-    17581,
-    18295
+    17757,
+    18471
    ]
   ],
   "imports": [
