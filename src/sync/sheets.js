@@ -138,7 +138,10 @@ export function gridToEntity(name, grid) {
    Sheet (a blank cell stays blank); every other field is kept from the existing
    entity. Rows only in the Sheet are created from the columns as before; entities
    missing from the Sheet are not carried over (same as before this fix).
-   `kept` counts the fields preserved, so the toast can say so. */
+   `kept` counts the fields preserved, so the toast can say so.
+   Only the FIRST row per id merges; a later row with the same id gets the schema
+   columns only, so two entities never share one notionPageId/clientId. `dups`
+   counts those later rows. */
 export const PULL_DERIVED = ['thumbTint', 'viral'];
 export function mergePulled(name, pulled, existing, header) {
   const cols = SHEET_SCHEMA[name];
@@ -147,9 +150,13 @@ export function mergePulled(name, pulled, existing, header) {
   const hasHeader = (k) => !header || header.indexOf(k) >= 0;
   const byId = {};
   (existing || []).forEach((e) => { if (e && e.id != null && e.id !== '' && !Object.prototype.hasOwnProperty.call(byId, e.id)) byId[e.id] = e; });
-  let kept = 0;
+  let kept = 0, dups = 0;
+  const seen = new Set();
   const list = pulled.map((p) => {
-    const old = (p.id !== '' && p.id != null && Object.prototype.hasOwnProperty.call(byId, p.id)) ? byId[p.id] : null;
+    const hasId = p.id !== '' && p.id != null;
+    let first = true;
+    if (hasId) { if (seen.has(p.id)) { first = false; dups++; } else seen.add(p.id); }
+    const old = (first && hasId && Object.prototype.hasOwnProperty.call(byId, p.id)) ? byId[p.id] : null;
     if (!old) return p;
     const out = {};
     Object.keys(old).forEach((k) => {
@@ -175,7 +182,7 @@ export function mergePulled(name, pulled, existing, header) {
     } else out.content = p.content;
     return out;
   });
-  return { list, kept };
+  return { list, kept, dups };
 }
 
 /* ------------------------------ transport ------------------------------ */
@@ -209,6 +216,7 @@ export async function sheetPull(opts) {
     const mP = mergePulled('participants', gridToEntity('participants', grids.participants), DB.participants, hdr(grids.participants));
     const campaigns = mC.list, creators = mR.list, participants = mP.list;
     const keptFields = mC.kept + mR.kept + mP.kept;
+    const dupIds = mC.dups + mR.dups + mP.dups;
 
     if (!opts.silent && (DB.campaigns.length || DB.creators.length) &&
         !confirm(`Replace this browser's workspace (${DB.campaigns.length} campaigns, ${DB.creators.length} creators) with the Sheet's (${campaigns.length} campaigns, ${creators.length} creators)?`)) {
@@ -225,7 +233,7 @@ export async function sheetPull(opts) {
     SYNC.at = new Date(); SYNC.error = null; SYNC.status = 'idle';
     lastPushedJson = JSON.stringify(DB);
     saveSyncConfig(); persist(true);
-    toast(`Pulled ${campaigns.length} campaigns and ${creators.length} creators from the Sheet` + (keptFields ? ` (kept ${keptFields} fields the sheet does not carry)` : ''));
+    toast(`Pulled ${campaigns.length} campaigns and ${creators.length} creators from the Sheet` + (keptFields ? ` (kept ${keptFields} fields the sheet does not carry)` : '') + (dupIds ? ` — duplicate ids in sheet: ${dupIds}` : ''));
     notify();
   } catch (err) {
     SYNC.error = err.message; SYNC.status = 'error';

@@ -157,3 +157,50 @@ test('index.html (production) carries the same merge and the toast note', () => 
   const body = (t) => t.slice(t.indexOf('function mergePulled'), t.indexOf('/* ------------------------------ transport'));
   assert.equal(body(html).replace(/^export /gm, ''), body(src).replace(/^export /gm, ''));
 });
+
+/* ---- 13 linked campaigns: each keeps ITS OWN Notion page id, and duplicate sheet ids ---- */
+const pageId = (n) => '00000000-0000-4000-8000-' + String(n).padStart(12, '0');
+const thirteen = () => Array.from({ length: 13 }, (_, i) => camp({
+  id: 'c' + (i + 1), name: 'Fake ' + (i + 1), notionPageId: pageId(i + 1), clientId: 'cl_' + (i + 1), partner: { slug: 'fp' + (i + 1) }
+}));
+
+test('13 linked campaigns: after a pull each keeps its own notionPageId, clientId and partner', async () => {
+  install(thirteen());
+  const g = grids();
+  for (let r = 1; r <= 13; r++) setCell(g.campaigns, r, 'name', 'Sheet ' + r);
+  await pullWith(g);
+  assert.equal(DB.campaigns.length, 13);
+  DB.campaigns.forEach((c, i) => {
+    assert.equal(c.name, 'Sheet ' + (i + 1));
+    assert.equal(c.notionPageId, pageId(i + 1), c.id + ' keeps its own page id');
+    assert.equal(c.clientId, 'cl_' + (i + 1));
+    assert.deepEqual(c.partner, { slug: 'fp' + (i + 1) });
+  });
+  assert.equal(new Set(DB.campaigns.map((c) => c.notionPageId)).size, 13, 'no page id is shared');
+});
+
+test('duplicate ids in the sheet: only the first row merges, no shared notionPageId, count is reported', async () => {
+  install(thirteen());
+  const g = grids();
+  const dup = g.campaigns[0].map((h) => (h === 'id' ? 'c1' : h === 'name' ? 'Second Row Same Id' : ''));
+  g.campaigns.push(dup.slice(), dup.slice()); /* c1 appears 3 times in total */
+  const toasts = await pullWith(g);
+  const c1s = DB.campaigns.filter((c) => c.id === 'c1');
+  assert.equal(c1s.length, 3);
+  assert.equal(c1s[0].notionPageId, pageId(1), 'first row keeps the kept fields');
+  for (const d of c1s.slice(1)) {
+    assert.equal(d.name, 'Second Row Same Id');
+    for (const k of NON_SCHEMA) assert.ok(!(k in d), k + ' must not be copied onto a duplicate row');
+  }
+  const ids = DB.campaigns.map((c) => c.notionPageId).filter(Boolean);
+  assert.equal(new Set(ids).size, ids.length, 'no notionPageId on two entities');
+  assert.ok(toasts.some((t) => /duplicate ids in sheet: 2/.test(t)), JSON.stringify(toasts));
+});
+
+test('mergePulled reports dups only for repeated non-empty ids', () => {
+  const pulled = [{ id: 'a' }, { id: 'a' }, { id: '' }, { id: '' }, { id: 'b' }];
+  const m = S.mergePulled('campaigns', pulled, [{ id: 'a', notionPageId: 'n1' }], null);
+  assert.equal(m.dups, 1);
+  assert.equal(m.list[0].notionPageId, 'n1');
+  assert.ok(!('notionPageId' in m.list[1]));
+});

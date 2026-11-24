@@ -52,11 +52,15 @@ export function executiveSummary(cp) {
 }
 
 /* The campaign as it goes into the hand-off file, which is sent to a brand or
-   a partner. The staff-only document links stay behind: the Drive sheet, the
-   Notion guideline and the Notion page the campaign is linked to. */
+   a partner. Staff-only fields stay behind: the document links (Drive sheet,
+   Notion guideline), every internal Notion field (any key starting "notion":
+   page id, mapping, database id, auto-link flag, synced-at, description, and
+   anything added later), the client/partner link ids and the link provenance. */
+export const HANDOFF_STRIP = ['sheetUrl', 'guidelineUrl', 'clientId', 'partner', 'source'];
 export function handoffCampaign(cp) {
-  const { sheetUrl, guidelineUrl, notionPageId, ...rest } = cp;
-  return rest;
+  const out = {};
+  Object.keys(cp).forEach((k) => { if (HANDOFF_STRIP.indexOf(k) < 0 && k.indexOf('notion') !== 0) out[k] = cp[k]; });
+  return out;
 }
 
 export function reportTab(mount, cp) {
