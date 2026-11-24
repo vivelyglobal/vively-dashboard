@@ -74,9 +74,21 @@ const pick = (obj, fields) => { const o = {}; fields.forEach((k) => { if (obj[k]
    characters are removed as well as control characters. */
 const INVISIBLE_RE = /[​-‏‪-‮⁠-⁤﻿]/g;
 const EMAIL_RE = /[^\s@]+@[^\s@]+\.[^\s@]+/g;
+/* A URL carrying credentials (scheme://user:pass@host/...) is removed whole.
+   A phone-number-like run is 7 or more digits with optional spaces, dashes,
+   dots, parentheses and a leading plus. Numbers under 7 digits ("Gangnam 12")
+   stay, and so do plain dates (2026-11-24, 2026 11 24, 24.11.2026). */
+const USERINFO_URL_RE = /\b[a-z][a-z0-9+.-]*:\/\/[^\s/?#@]*@\S*/gi;
+const PHONE_OR_DATE_RE = /(\b\d{4}[-./ ]\d{1,2}[-./ ]\d{1,2}\b|\b\d{1,2}[-./]\d{1,2}[-./]\d{4}\b)|([+(]?\d(?:[\s.\-()]*\d){6,})/g;
+const EDGE_JUNK_RE = /^[\s\-–—:,;/|·]+|[\s\-–—:,;/|·]+$/g;
 function plainText(v, max) {
   if (typeof v !== "string") return "";
-  return clean(v.replace(INVISIBLE_RE, "").replace(/\s+/g, " ").replace(EMAIL_RE, "").trim(), max).trim();
+  let s = v.slice(0, 2000).replace(INVISIBLE_RE, "").replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/\s+/g, " ");
+  s = s.replace(USERINFO_URL_RE, " ").replace(EMAIL_RE, " ").replace(/\s+/g, " ");
+  const before = s;
+  s = s.replace(PHONE_OR_DATE_RE, (m, date) => (date ? m : ""));
+  if (s !== before) s = s.replace(/\s+/g, " ").replace(EDGE_JUNK_RE, "");
+  return clean(s.trim(), max).trim();
 }
 
 /* Instagram handle: letters, digits, dots, underscores, 1 to 30. A leading @
@@ -165,7 +177,7 @@ function buildClientView(db, campaignId, h) {
   const sb = CAMPAIGN_BUCKET[cp.status] || CAMPAIGN_BUCKET.planning;
   return {
     campaign: pick({
-      name: plainText(cp.name, 100),
+      name: plainText(cp.name, 100) || "Campaign",
       start: isoDay(cp.start),
       end: isoDay(cp.end),
       status: { key: sb.key, en: sb.en, ko: sb.ko },

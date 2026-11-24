@@ -1580,8 +1580,8 @@ test('TOMBSTONE: a row moved to another campaign by staff is not a deletion', as
   assert.deepEqual(j.js.value.campaigns.cp1.tomb || {}, {});
 });
 
-test('TOMBSTONE: staff restore removes the tombstone (staff only) and the row returns on a rescan; unknown ids change nothing', async () => {
-  const store = makeStore({ campaigns: [campaign('cp1', DS1)] });
+test('TOMBSTONE: staff restore removes the tombstone (staff only) and the row returns on a rescan; unknown ids change nothing', async () => { /* a bystander row elsewhere keeps the workspace participant list non-empty (an empty list is held back by the mass-delete guard) */
+  const store = makeStore({ campaigns: [campaign('cp1', DS1)], creators: [manualCreator(50)], participants: [manualPart(50, 'cpOther')] });
   const table = makeTable({ [DS1]: [row(1, { edited: edit(1) })] });
   const clock = clockAt();
   const j = job(store, table, { now: clock.now });
@@ -1609,7 +1609,7 @@ test('TOMBSTONE: staff restore removes the tombstone (staff only) and the row re
 });
 
 test('TOMBSTONE: a full list is never trimmed silently: nothing old is dropped, the overflow is reported with a warning', async () => {
-  const store = makeStore({ campaigns: [campaign('cp1', DS1)] });
+  const store = makeStore({ campaigns: [campaign('cp1', DS1)], creators: [manualCreator(50)], participants: [manualPart(50, 'cpOther')] });
   const table = makeTable({ [DS1]: [1, 2, 3].map((n) => row(n, { edited: edit(n) })) });
   const clock = clockAt();
   const j = job(store, table, { now: clock.now, tombCap: 2 });
@@ -1628,7 +1628,7 @@ test('TOMBSTONE: a full list is never trimmed silently: nothing old is dropped, 
 });
 
 test('TOMBSTONE: a dry run records nothing, and the state is validated on load', async () => {
-  const store = makeStore({ campaigns: [campaign('cp1', DS1)] });
+  const store = makeStore({ campaigns: [campaign('cp1', DS1)], creators: [manualCreator(50)], participants: [manualPart(50, 'cpOther')] });
   const table = makeTable({ [DS1]: [row(1)] });
   const clock = clockAt();
   const j = job(store, table, { now: clock.now });
@@ -1719,4 +1719,93 @@ test('BREAKER: the threshold is configurable; a success resets the count; a 4xx 
   c.table.query = async (o) => { c.asked.push(o.dataSourceId); const e = new Error('x'); e.status = 404; throw e; };
   const rc = await job(c.store, c.table, { breakerFailures: 2 }).run();
   assert.equal(c.asked.length, 6); assert.equal(rc.aborted, null);
+});
+
+
+/* ---------- 11. mass-delete guard (security review 37, finding 1) ---------- */
+
+const bystander = () => ({ creators: [manualCreator(50)], participants: [manualPart(50, 'cpOther')] });
+async function seeded(n, extra) {
+  const store = makeStore(Object.assign({ campaigns: [campaign('cp1', DS1)] }, bystander()));
+  const table = makeTable({ [DS1]: Array.from({ length: n }, (_, i) => row(i + 1, { edited: edit(i + 1) })) });
+  const clock = clockAt();
+  const j = job(store, table, Object.assign({ now: clock.now, maxCreate: 100 }, extra || {}));
+  await j.run();
+  assert.equal(rosterOf(store, 'cp1').length, n, 'seeded');
+  return { store, table, clock, j };
+}
+const delRows = (store, from, to) => { for (let i = from; i <= to; i++) deleteRoster(store, i); };
+
+test('MASS DELETE: more than 20 removals in one run: nothing is tombstoned, the run says mass-delete-suspected with counts, and the rows are not re-created', async () => {
+  const { store, clock, j } = await seeded(25);
+  delRows(store, 1, 25);
+  clock.add(120000);
+  const r = await j.run();
+  assert.deepEqual(j.js.value.campaigns.cp1.tomb, {}, 'no tombstone written');
+  assert.equal(Object.keys(j.js.value.campaigns.cp1.imp).length, 25, 'the remembered ids are kept');
+  const c = cpReport(r, 'cp1');
+  assert.equal(c.status, 'mass-delete-suspected');
+  assert.deepEqual(c.massDelete, { wouldTombstone: 25, remembered: 25, maxPerRun: 20, reason: 'too-many' });
+  assert.equal(c.counts.massDeleteSuspected, 25);
+  assert.ok(r.warnings.includes('mass-delete-suspected'));
+  assert.equal(r.counts.campaignsMassDeleteSuspected, 1);
+  clock.add(120000); await j.run({ rescan: ['cp1'] });
+  assert.equal(rosterOf(store, 'cp1').length, 0, 'the rows read again are not re-created while the guard holds');
+  assert.deepEqual(j.js.value.campaigns.cp1.tomb, {});
+});
+
+test('MASS DELETE: more than half of the remembered rows (10 remembered, 6 gone) is held back; exactly half (5 of 10) is allowed', async () => {
+  const a = await seeded(10);
+  delRows(a.store, 1, 6); a.clock.add(120000);
+  const ra = await a.j.run();
+  assert.deepEqual(a.j.js.value.campaigns.cp1.tomb, {});
+  assert.equal(cpReport(ra, 'cp1').massDelete.wouldTombstone, 6);
+  const b = await seeded(10);
+  delRows(b.store, 1, 5); b.clock.add(120000);
+  const rb = await b.j.run();
+  assert.equal(Object.keys(b.j.js.value.campaigns.cp1.tomb).length, 5);
+  assert.equal(cpReport(rb, 'cp1').massDelete, undefined);
+  assert.ok(!rb.warnings.includes('mass-delete-suspected'));
+});
+
+test('MASS DELETE: an empty participants list never tombstones, and an empty Notion read never tombstones', async () => {
+  const { store, table, clock, j } = await seeded(3);
+  store.doc.db.participants = [];                                  /* e.g. a workspace restored from an old or empty backup */
+  clock.add(120000);
+  const r = await j.run();
+  assert.deepEqual(j.js.value.campaigns.cp1.tomb, {});
+  assert.equal(cpReport(r, 'cp1').massDelete.reason, 'no-participants');
+  assert.equal(Object.keys(j.js.value.campaigns.cp1.imp).length, 3);
+  const s2 = await seeded(3);
+  s2.table.rows[DS1] = [];                                         /* Notion returned no rows at all */
+  s2.clock.add(120000); await s2.j.run({ rescan: ['cp1'] });
+  assert.deepEqual(s2.j.js.value.campaigns.cp1.tomb || {}, {});
+  assert.equal(rosterOf(s2.store, 'cp1').length, 3);
+});
+
+test('MASS DELETE: only a staff manual run with the explicit confirm proceeds; the poll and a plain manual run never do; a dry run only reports', async () => {
+  const { store, clock, j } = await seeded(25);
+  delRows(store, 1, 25);
+  clock.add(120000); await j.run({ trigger: 'poll', confirmMassDelete: true });
+  assert.deepEqual(j.js.value.campaigns.cp1.tomb, {}, 'the poll ignores the confirm');
+  clock.add(120000); await j.run({ trigger: 'manual' });
+  assert.deepEqual(j.js.value.campaigns.cp1.tomb, {}, 'a manual run without the confirm is held back');
+  clock.add(120000); const dry = await j.run({ trigger: 'manual', confirmMassDelete: true, dryRun: true });
+  assert.deepEqual(j.js.value.campaigns.cp1.tomb, {}, 'a dry run writes nothing');
+  assert.equal(cpReport(dry, 'cp1').counts.tombstoned, 25);
+  clock.add(120000); const ok = await j.run({ trigger: 'manual', confirmMassDelete: true });
+  assert.equal(Object.keys(j.js.value.campaigns.cp1.tomb).length, 25);
+  assert.equal(cpReport(ok, 'cp1').massDelete, undefined);
+  /* the route passes the confirm only when it is exactly true, and only after requireStaff */
+  const seen = [];
+  const fake = { run: async (o) => { seen.push(o); return { ok: true, campaigns: [] }; } };
+  await withRoutes(() => ({ applicants: fake, off: '', cfg: {}, logStore: null }), async (call) => {
+    assert.equal((await call('POST', '/api/notion-applicants/run', null, { confirmMassDelete: true })).status, 401);
+    assert.equal((await call('POST', '/api/notion-applicants/run', 'someone@example.invalid', { confirmMassDelete: true })).status, 403);
+    assert.deepEqual(seen, []);
+    await call('POST', '/api/notion-applicants/run', 'staff@example.invalid', { confirmMassDelete: 'yes' });
+    await call('POST', '/api/notion-applicants/run', 'staff@example.invalid', { confirmMassDelete: true });
+  });
+  assert.equal(seen[0].confirmMassDelete, undefined);
+  assert.equal(seen[1].confirmMassDelete, true);
 });

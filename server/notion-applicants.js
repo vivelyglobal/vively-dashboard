@@ -318,6 +318,13 @@ const hasAnyMapping = (cp) => !!cp && !!cp.notionMapping && typeof cp.notionMapp
 const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const str = (v) => (v == null ? "" : String(v));
 const LIST_CAP = 100;
+/* Mass-delete guard: one run tombstones at most this many rows, and (once at
+   least MASS_MIN_REMEMBERED rows are remembered) never more than half of them.
+   Past either limit, or when the workspace has no participants at all while
+   rows are remembered (an empty or restored-from-backup list), nothing is
+   tombstoned and the run says "mass-delete-suspected". */
+const MASS_MAX = 20;
+const MASS_MIN_REMEMBERED = 5;
 const UNRESOLVED_CAP = 500;
 
 /* What the job fills in from Notion on a roster row. After the row exists
@@ -363,6 +370,8 @@ function applyRows(ctx) {
   const rep = {
     tombstoned: [],          // rows skipped because staff removed them
     newTombs: new Map(),     // pageId -> iso: rows noticed as removed in THIS run
+    suspect: new Set(),      // remembered ids the mass-delete guard held back from tombstoning
+    massDelete: null,        // { wouldTombstone, remembered, maxPerRun, reason } when the guard fired
     impAdd: new Set(),       // page ids of this campaign's roster rows, to remember
     created: [], linked: [], updated: [], already: 0, ambiguous: [], held: [], differs: [], elsewhere: [], edited: [],
     deferred: [], unknown: new Map(), newCreators: 0, changed: false, stopAt: null, processed: 0,
@@ -395,7 +404,17 @@ function applyRows(ctx) {
      tombstoned row is never created again. A row moved to another campaign
      still carries its id, so it is not a removal. */
   db.participants.forEach((p) => { if (p && p.campaignId === cp.id && p.notionPageId) rep.impAdd.add(key(p.notionPageId)); });
-  Object.keys(imp).forEach((pg) => { if (!byPage.has(pg) && !own(tomb, pg)) rep.newTombs.set(pg, nowIso); });
+  const wouldTomb = Object.keys(imp).filter((pg) => !byPage.has(pg) && !own(tomb, pg));
+  const impTotal = Object.keys(imp).length;
+  const emptyList = db.participants.length === 0 && impTotal > 0;
+  const tooMany = wouldTomb.length > MASS_MAX || (impTotal >= MASS_MIN_REMEMBERED && wouldTomb.length * 2 > impTotal);
+  if (wouldTomb.length && (emptyList || tooMany) && ctx.confirmMassDelete !== true) {
+    /* tombstone NOTHING; the ids stay remembered, and a row read now for one of them is neither created nor tombstoned */
+    rep.massDelete = { wouldTombstone: wouldTomb.length, remembered: impTotal, maxPerRun: MASS_MAX, reason: emptyList ? "no-participants" : "too-many" };
+    wouldTomb.forEach((pg) => rep.suspect.add(pg));
+  } else {
+    wouldTomb.forEach((pg) => rep.newTombs.set(pg, nowIso));
+  }
   rep.newTombs.forEach((v, pg) => rep.impAdd.delete(pg));
 
   const note = (list, item) => { if (list.length < LIST_CAP) list.push(item); };
@@ -475,6 +494,8 @@ function applyRows(ctx) {
 
     /* removed by staff earlier: never created again, never held */
     if (own(tomb, key(pageId)) || rep.newTombs.has(key(pageId))) { note(rep.tombstoned, { pageId }); return; }
+    /* held back by the mass-delete guard: not created again, not tombstoned */
+    if (rep.suspect.has(key(pageId))) return;
 
     /* not on any roster yet */
     if (!ap.handle) { hold(pageId, "no-handle"); return; }
@@ -824,7 +845,7 @@ function createApplicants(deps) {
       /* workspace size, measured once and kept up to date from what this run adds */
       const docBytes = { n: sizeOf({ db: first.db, settings: first.settings || {} }) };
       const limit = Math.floor(cfg.docLimitBytes * cfg.docLimitFraction);
-      const x0 = { st, rescan, dryRun, entry, startedAt, docBytes, limit, virtual: {}, heldUsed: { n: 0 }, fieldKeys: d.shared.bind(startedAt.slice(0, 10)).NOTION_FIELD_DEFS.map((f) => f.key) };
+      const x0 = { st, rescan, dryRun, confirmMassDelete: manual && o.confirmMassDelete === true, entry, startedAt, docBytes, limit, virtual: {}, heldUsed: { n: 0 }, fieldKeys: d.shared.bind(startedAt.slice(0, 10)).NOTION_FIELD_DEFS.map((f) => f.key) };
 
       let createBudget = cfg.maxCreate;
       let visited = 0;
@@ -961,7 +982,8 @@ function createApplicants(deps) {
         rep = applyRows({
           db: doc.db, cp, rows: allRows, shared: d.shared.bind(x.startedAt.slice(0, 10)), newId: d.newId,
           nowIso: x.startedAt, baseline, createBudget: nearLimit ? 0 : x.createBudget, budgetReason: nearLimit ? "workspace-near-limit" : "create-cap",
-          snap: same && stc ? stc.snap : {}, tomb: tombBefore, imp: impBefore
+          snap: same && stc ? stc.snap : {}, tomb: tombBefore, imp: impBefore,
+          confirmMassDelete: x.confirmMassDelete === true
         });
         if (!rep.changed || x.dryRun) { saved = true; break; }
         const res = await d.saveWorkspace({ db: doc.db, settings: doc.settings || {}, revision: doc.revision || 0 });
@@ -989,6 +1011,13 @@ function createApplicants(deps) {
       };
       const tombSeen = new Set([...rep.newTombs.keys(), ...rep.tombstoned.map((t) => key0(t.pageId))]);
       if (tombSeen.size) R.counts.tombstoned = tombSeen.size;
+      if (rep.massDelete) {
+        if (!x.dryRun) R.status = "mass-delete-suspected";
+        R.massDelete = rep.massDelete;
+        R.counts.massDeleteSuspected = rep.massDelete.wouldTombstone;
+        if (!x.entry.warnings.includes("mass-delete-suspected")) x.entry.warnings.push("mass-delete-suspected");
+        logger.error("Notion applicants: mass-delete-suspected for " + campaignId + " (" + rep.massDelete.wouldTombstone + " of " + rep.massDelete.remembered + " remembered rows); nothing tombstoned.");
+      }
       R.created = rep.created; R.linked = rep.linked; R.updated = rep.updated; R.ambiguous = rep.ambiguous;
       R.held = rep.held; R.deferred = rep.deferred; R.differs = rep.differs; R.elsewhere = rep.elsewhere; R.edited = rep.edited;
       out.created = rep.created.length; out.deferred = rep.deferred.length; out.unknown = rep.unknown;
@@ -1096,6 +1125,7 @@ function createApplicants(deps) {
       campaignsSynced: entry.campaigns.filter((c) => c.status === "ok" || c.status === "dry-run").length,
       campaignsSkipped: entry.campaigns.filter((c) => c.status === "skipped").length,
       campaignsFailed: entry.campaigns.filter((c) => c.status === "error").length,
+      campaignsMassDeleteSuspected: entry.campaigns.filter((c) => c.massDelete).length,
       created: sum("created"), linked: sum("linked"), updated: sum("updated"), already: sum("already"),
       ambiguous: sum("ambiguous"), held: sum("held"), deferred: sum("deferred"), differs: sum("differs"), edited: sum("edited"),
       unknownStatusRows: entry.unknownStatuses.reduce((n, u) => n + u.count, 0), errors: entry.errors.length, warnings: entry.warnings.length
@@ -1123,7 +1153,9 @@ function registerRoutes(app, requireStaff, get) {
     const b = req.body || {};
     const rescan = Array.isArray(b.rescan) ? b.rescan.filter((x) => typeof x === "string" && x.length <= 80).slice(0, 20) : undefined;
     const campaignId = typeof b.campaignId === "string" && b.campaignId.length <= 80 ? b.campaignId : undefined;
-    const entry = await g.applicants.run({ trigger: "manual", dryRun: b.dryRun ? true : undefined, campaignId, rescan });
+    const runOpts = { trigger: "manual", dryRun: b.dryRun ? true : undefined, campaignId, rescan };
+    if (b.confirmMassDelete === true) runOpts.confirmMassDelete = true;   // staff only (requireStaff above); never sent by the poll
+    const entry = await g.applicants.run(runOpts);
     if (entry && entry.throttled) return res.status(429).json({ error: "A run was started a moment ago. Wait and try again.", retryAfterSec: entry.retryAfterSec });
     if (entry && entry.skipped === "cooling-down") return res.status(429).json({ error: "Notion asked us to slow down; the job is resting.", retryAfterSec: entry.retryAfterSec });
     return res.json({ ok: true, run: entry });

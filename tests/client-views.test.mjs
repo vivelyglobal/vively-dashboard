@@ -778,3 +778,37 @@ test('REBUILD: Rebuild still replaces a view of the same revision (no clear-firs
     assert.equal((await h.brand('/api/client/' + a.json.token)).json.counts.posted, 1);
   } finally { h.close(); }
 });
+
+/* ---------- security review 37, finding 2: phone numbers and credentials in names shown to brands ---------- */
+
+test('CAMPAIGN NAME: phone-like digit runs (7+ digits) and URLs with credentials are removed; short numbers and dates stay; empty shows "Campaign"', () => {
+  const nameOf = (raw) => { const db = handleDb(['@ok']); db.campaigns[0].name = raw; return CV.buildClientView(db, CAMP, helpers).campaign.name; };
+  /* Korean mobile formats and other phone shapes (fake numbers) */
+  assert.equal(nameOf('Sushi Jongno 010-1234-5678'), 'Sushi Jongno');
+  assert.equal(nameOf('Sushi Jongno 01012345678'), 'Sushi Jongno');
+  assert.equal(nameOf('Sushi Jongno +82 10 1234 5678'), 'Sushi Jongno');
+  assert.equal(nameOf('+82-10-1234-5678 Sushi'), 'Sushi');
+  assert.equal(nameOf('Sushi 010.1234.5678 Jongno'), 'Sushi Jongno');
+  assert.equal(nameOf('Sushi (02) 123-4567'), 'Sushi');
+  assert.equal(nameOf('Sushi １０１２３４５６７８９'), 'Sushi', 'fullwidth digits');
+  assert.equal(nameOf('Sushi 010 ​1234​ 5678'), 'Sushi', 'invisible characters inside the number');
+  /* credentials in a URL, and emails */
+  assert.equal(nameOf('Sushi https://user:pass@example.test/x Jongno'), 'Sushi Jongno');
+  assert.equal(nameOf('Sushi ftp://admin@example.test Jongno'), 'Sushi Jongno');
+  assert.equal(nameOf('Sushi kim@example.test'), 'Sushi');
+  /* normal names, short numbers and dates are not mangled */
+  assert.equal(nameOf('UH Cell Gangnam 12'), 'UH Cell Gangnam 12');
+  assert.equal(nameOf('Spring 2026 Launch'), 'Spring 2026 Launch');
+  assert.equal(nameOf('Cafe 123456 Seoul'), 'Cafe 123456 Seoul', '6 digits stay');
+  assert.equal(nameOf('Sushi 2026-11-24 Jongno'), 'Sushi 2026-11-24 Jongno');
+  assert.equal(nameOf('Sushi 2026.11.24'), 'Sushi 2026.11.24');
+  assert.equal(nameOf('Sushi 24.11.2026'), 'Sushi 24.11.2026');
+  assert.equal(nameOf('Sushi (Spring) 2026'), 'Sushi (Spring) 2026');
+  /* empty after cleaning */
+  assert.equal(nameOf('010-1234-5678'), 'Campaign');
+  assert.equal(nameOf('kim@example.test'), 'Campaign');
+  assert.equal(nameOf(''), 'Campaign');
+  assert.equal(nameOf(undefined), 'Campaign');
+  /* nothing digit-heavy survives into the brand view as JSON either */
+  assert.ok(!JSON.stringify(CV.buildClientView((() => { const d = handleDb(['@ok']); d.campaigns[0].name = 'X 010-1234-5678'; return d; })(), CAMP, helpers)).includes('5678'));
+});
