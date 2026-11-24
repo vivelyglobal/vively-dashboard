@@ -102,6 +102,7 @@ const bookingStore = require("./server/booking-store.js");
 const bookingRoutes = require("./server/booking-routes.js");
 const sheetProxy = require("./server/sheet-proxy.js");
 const notionAutocreate = require("./server/notion-autocreate.js");
+const perfSyncLib = require("./server/perf-sync.js");
 const { writeWorkspaceCas } = require("./server/workspace-cas.js");
 const dateWritebackLib = require("./server/date-writeback.js");
 const sheetsClient = require("./server/sheets-client.js");
@@ -1189,6 +1190,41 @@ if (!applicantsOff) {
    only make a run MORE careful (dryRun true); it cannot turn the env dry run off. Both routes are
    registered here so a test can mount them behind the real requireStaff. */
 notionApplicants.registerRoutes(app, requireStaff, () => ({ applicants, off: applicantsOff, cfg: applicantsCfg, logStore: applicantsLog }));
+
+/* ---------------- live performance: the KOL Google Sheet -> one snapshot ----------------
+   OFF unless PERF_SHEET_ID is set (an environment value only: never committed, never
+   logged, never in a response). Logic, whitelist and safety rules are in
+   server/perf-sync.js; this is only the wiring. Read-only toward Google (column-limited
+   gviz reads of link-shared tabs) and toward the workspace (read to match campaigns).
+   It writes only its own collections: perf_snapshot, perf_sync_log, perf_match.
+   PERF_SYNC_DRY_RUN=1 reads and reports and stores nothing. */
+const perfCfg = perfSyncLib.parseConfig(process.env);
+let perfSync = null;
+let perfOff = "";
+if (!perfCfg.requested) perfOff = "PERF_SHEET_ID is not set";
+else if (perfCfg.invalid) perfOff = "PERF_SHEET_ID is not a Google Sheet id";
+else if (!MONGODB_URI) perfOff = "MONGODB_URI is not set";
+if (perfCfg.requested && perfOff) console.error("Performance sync stays off: " + perfOff + ".");
+if (!perfOff) {
+  perfSync = perfSyncLib.createPerfSync({
+    sheetId: perfCfg.sheetId,
+    maxRows: perfCfg.maxRows,
+    intervalMin: perfCfg.intervalMin,
+    dryRun: perfCfg.dryRun,
+    loadWorkspace: async () => {
+      const doc = await loadWorkspaceDoc();
+      return doc ? { db: doc.db } : null;
+    },
+    store: perfSyncLib.makeMongoStore(() => getMongoClient(), MONGODB_DB)
+  });
+  /* first read 45 s after boot (the database connection is up by then); unref so the
+     timers never keep a stopping process alive */
+  const perfTick = () => perfSync.run({ trigger: "poll" }).catch(() => console.error("Performance sync tick failed."));
+  setTimeout(perfTick, 45000).unref();
+  setInterval(perfTick, perfCfg.intervalMs).unref();
+  console.log("Performance sync: ON, every %d min%s.", perfCfg.intervalMin, perfCfg.dryRun ? " (dry run: reads and reports, stores nothing)" : "");
+}
+perfSyncLib.registerRoutes(app, requireStaff, () => ({ perf: perfSync, off: perfOff, cfg: perfCfg }));
 
 /* ---------------- confirmed visit date: dashboard -> Notion row + Sheet row ----------------
    Both channels are OFF unless NOTION_DATE_WRITEBACK=1 / SHEET_DATE_WRITEBACK=1.
