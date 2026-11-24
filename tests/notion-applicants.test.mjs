@@ -108,7 +108,7 @@ function job(store, table, extra) {
   const js = x.jobState || makeJobState();
   const logs = x.logs || [];
   const j = N.createApplicants(Object.assign({
-    shared, loadWorkspace: store.load, saveWorkspace: store.save, queryRows: table.query, manualMinSec: 0,
+    pilot: N.parseConfig({ NOTION_APPLICANTS_ONLY: 'ALL' }).pilot, shared, loadWorkspace: store.load, saveWorkspace: store.save, queryRows: table.query, manualMinSec: 0,
     loadState: js.loadState, saveState: js.saveState, saveLog: js.saveLog,
     newId: (p) => p + 'TEST' + (++idN), now: () => new Date('2026-11-24T10:00:00Z'),
     logger: { error: (m) => logs.push(String(m)), log: (m) => logs.push(String(m)) }
@@ -503,7 +503,7 @@ test('409 through the REAL saveWorkspaceDoc and the real wrapper (force:false): 
   const wrapper = AC.makeSaveWorkspace(async (b) => { calls.push(b); return save(b); });
   col.hooks = [(d) => { d.revision += 1; d.db.campaigns.push({ id: 'typed', name: 'Someone typed this' }); }];
   const j = N.createApplicants({
-    shared, loadWorkspace: async () => ({ db: clone(col.doc.db), settings: col.doc.settings, revision: col.doc.revision }),
+    pilot: N.parseConfig({ NOTION_APPLICANTS_ONLY: 'ALL' }).pilot, shared, loadWorkspace: async () => ({ db: clone(col.doc.db), settings: col.doc.settings, revision: col.doc.revision }),
     saveWorkspace: wrapper, queryRows: makeTable({ [DS1]: [row(1)] }).query, newId: (p) => p + 'REAL1',
     now: () => new Date('2026-11-24T10:00:00Z'), logger: { error() {}, log() {} }
   });
@@ -780,7 +780,7 @@ test('over HTTP against tools/fake-notion.cjs: only data source QUERIES are sent
     };
     const store = makeStore({ campaigns: [campaign('cp1', DS1)] });
     const j = N.createApplicants({
-      shared, loadWorkspace: store.load, saveWorkspace: store.save, queryRows: N.makeQueryRows(post, realExtractNotionValue()),
+      pilot: N.parseConfig({ NOTION_APPLICANTS_ONLY: 'ALL' }).pilot, shared, loadWorkspace: store.load, saveWorkspace: store.save, queryRows: N.makeQueryRows(post, realExtractNotionValue()),
       newId: (p) => p + 'HTTP' + (++idN), now: () => new Date('2026-11-24T10:00:00Z'), logger: { error() {}, log() {} }, pageSize: 2, maxRows: 10, maxCreate: 20
     });
     const r1 = await j.run();
@@ -1459,7 +1459,7 @@ test('hands-free over HTTP against tools/fake-notion.cjs: schema read, default m
     await httpJson(port, 'POST', '/__schema', { [DS1]: types, [DS2]: Object.assign({}, types, { 'Visit Date': 'rich_text' }) });
     const api = N.makeNotionApi(realNotionFetch('http://127.0.0.1:' + port + '/v1'), realExtractNotionValue(), { sleep: async () => {}, minGapMs: 0 });
     const store = makeStore({ campaigns: [unmapped('cp1', DS1), unmapped('cp2', DS2)] });
-    const j = N.createApplicants({ shared, loadWorkspace: store.load, saveWorkspace: store.save, queryRows: api.queryRows, getPage: api.getPage, getSchema: api.getSchema,
+    const j = N.createApplicants({ pilot: N.parseConfig({ NOTION_APPLICANTS_ONLY: 'ALL' }).pilot, shared, loadWorkspace: store.load, saveWorkspace: store.save, queryRows: api.queryRows, getPage: api.getPage, getSchema: api.getSchema,
       newId: (p) => p + 'HF' + (++idN), now: () => new Date('2026-11-24T10:00:00Z'), logger: { error() {}, log() {} }, manualMinSec: 0 });
     const run = await j.run();
     assert.equal(cpReport(run, 'cp1').mapping, 'saved'); assert.equal(cpReport(run, 'cp1').counts.created, 3);

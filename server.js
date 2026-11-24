@@ -106,6 +106,7 @@ const { writeWorkspaceCas } = require("./server/workspace-cas.js");
 const dateWritebackLib = require("./server/date-writeback.js");
 const sheetsClient = require("./server/sheets-client.js");
 const notionApplicants = require("./server/notion-applicants.js");
+const notionApplicantsPilot = require("./server/pilot-allowlist.js");
 const clientViewsLib = require("./server/client-views.js");
 
 /* ------------------------------------------------------------------
@@ -1169,11 +1170,17 @@ if (!applicantsOff) {
   });
   const apTick = () => applicants.run({ trigger: "poll" })
     .catch((e) => console.error("Notion applicants tick failed:", e && e.status ? "http-" + e.status : "error"));
-  setTimeout(apTick, 60000).unref();
-  setInterval(apTick, applicantsCfg.intervalMs).unref();
+  /* fail closed: on with no NOTION_APPLICANTS_ONLY and not a dry run = the job refuses; no polling is scheduled at all */
+  const apRefuse = notionApplicantsPilot.mustRefuse(applicantsCfg.pilot, applicantsCfg.dryRun);
+  if (!apRefuse) {
+    setTimeout(apTick, 60000).unref();
+    setInterval(apTick, applicantsCfg.intervalMs).unref();
+  }
   console.log("Notion applicants sync: ON, every %d min%s; caps %d new roster rows per run, %d rows per campaign.", applicantsCfg.intervalMin,
     applicantsCfg.dryRun ? " (dry run: reads Notion, writes nothing)" : "", applicantsCfg.maxCreate, applicantsCfg.maxRows);
-  if (applicantsCfg.pilot.mode === "all") console.log("Notion applicants sync: WARNING, acting on ALL campaigns (NOTION_APPLICANTS_ONLY is not set).");
+  if (apRefuse) console.error("Notion applicants sync: " + notionApplicantsPilot.refusal("NOTION_APPLICANTS_ONLY") + ". No polling, no manual live run (a dry run can still preview).");
+  else if (applicantsCfg.pilot.mode === "unset") console.log("Notion applicants sync: dry-run preview of every campaign; a live run would be refused (NOTION_APPLICANTS_ONLY is not set).");
+  else if (applicantsCfg.pilot.mode === "all") console.log("Notion applicants sync: WARNING, acting on ALL campaigns (NOTION_APPLICANTS_ONLY=ALL).");
   else console.log("Notion applicants sync: pilot mode (%s), %d allow-list id(s).", applicantsCfg.pilot.mode, applicantsCfg.pilot.ids.length);
 }
 
@@ -1267,12 +1274,18 @@ if (dwCfg.notion.enabled || dwCfg.sheet.enabled) {
   });
   const dwTick = () => dateWriteback.run({ trigger: "poll" })
     .catch((e) => console.error("Date write-back tick failed:", e && e.status ? "http-" + e.status : "error"));
-  setTimeout(dwTick, 45000).unref();
-  setInterval(dwTick, dwCfg.intervalMs).unref();
+  /* fail closed: a live channel with no DATE_WRITEBACK_ONLY = the job refuses; no polling is scheduled at all */
+  const dwRefuse = notionApplicantsPilot.mustRefuse(dwCfg.pilot, !((dwCfg.notion.enabled && !dwCfg.notion.dryRun) || (dwCfg.sheet.enabled && !dwCfg.sheet.dryRun)));
+  if (!dwRefuse) {
+    setTimeout(dwTick, 45000).unref();
+    setInterval(dwTick, dwCfg.intervalMs).unref();
+  }
   console.log("Date write-back: ON (notion %s, sheet %s), every %d min; cap %d writes per channel per run.",
     dwCfg.notion.enabled ? (dwCfg.notion.dryRun ? "dry run" : "live") : "off",
     dwCfg.sheet.enabled ? (dwCfg.sheet.dryRun ? "dry run" : "live") : "off", dwCfg.intervalMin, dwCfg.maxPerRun);
-  if (dwCfg.pilot.mode === "all") console.log("Date write-back: WARNING, acting on ALL campaigns (DATE_WRITEBACK_ONLY is not set).");
+  if (dwRefuse) console.error("Date write-back: " + notionApplicantsPilot.refusal("DATE_WRITEBACK_ONLY") + ". No polling, no live write (a dry run can still preview).");
+  else if (dwCfg.pilot.mode === "unset") console.log("Date write-back: dry-run preview of every campaign; a live run would be refused (DATE_WRITEBACK_ONLY is not set).");
+  else if (dwCfg.pilot.mode === "all") console.log("Date write-back: WARNING, acting on ALL campaigns (DATE_WRITEBACK_ONLY=ALL).");
   else console.log("Date write-back: pilot mode (%s), %d allow-list id(s).", dwCfg.pilot.mode, dwCfg.pilot.ids.length);
 }
 
@@ -1285,6 +1298,7 @@ app.post("/api/date-writeback/run", requireStaff(async (req, res) => {
   /* force: creator ids whose hand-edited value may be overwritten once (live runs only) */
   const force = Array.isArray(b.force) ? b.force.filter((x) => typeof x === "string" && x.length <= 80).slice(0, 20) : undefined;
   const entry = await dateWriteback.run({ trigger: "manual", dryRun: b.dryRun ? true : undefined, channel: b.channel, force });
+  if (entry && entry.refused) return res.status(409).json({ error: entry.reason, refused: true });
   return res.json({ ok: true, run: entry });
 }));
 

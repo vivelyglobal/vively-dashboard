@@ -54,7 +54,7 @@ function workspace(over) {
 }
 
 function make(sheets, ws0, venues) {
-  const config = W.parseConfig({});
+  const config = W.parseConfig({ DATE_WRITEBACK_ONLY: 'ALL' });
   config.sheet.enabled = true;
   let ws = ws0 || workspace();
   const store = { state: null };

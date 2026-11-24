@@ -110,7 +110,7 @@ const aura = () => ({ 'Aura Seoul': [HEADER.slice(), sheetRow({ ig: 'https://ins
 /* the job, wired to stand-ins */
 function make(o) {
   const opts = o || {};
-  const env = Object.assign({}, opts.env || {});
+  const env = Object.assign({ DATE_WRITEBACK_ONLY: 'ALL' }, opts.env || {});   // the list is required now; ALL = every campaign
   const config = W.parseConfig(env);
   config.notion.enabled = opts.notion !== undefined ? !!opts.notion : false;
   config.sheet.enabled = opts.sheet !== undefined ? !!opts.sheet : false;
@@ -910,7 +910,7 @@ test('the job only reads the workspace: a counting fake sees one read per run, n
   const used = new Map(); const count = (k) => used.set(k, (used.get(k) || 0) + 1);
   const n = memNotion(); const s = memSheets(aura());
   const sheetsFake = {}; ['listTabs', 'readHeaderRow', 'readColumns', 'readCells', 'writeVisitCell'].forEach((m) => { sheetsFake[m] = (...a) => { count('sheets.' + m); return s[m](...a); }; });
-  const config = W.parseConfig({}); config.notion.enabled = true; config.sheet.enabled = true;
+  const config = W.parseConfig({ DATE_WRITEBACK_ONLY: 'ALL' }); config.notion.enabled = true; config.sheet.enabled = true;
   const deps = {
     config, logger: { log() {}, error() {} },
     loadWorkspace: async () => { count('loadWorkspace'); return { db: frozen }; },
@@ -966,7 +966,7 @@ test('a dashboard save is never blocked: notifySaved is synchronous, coalesces, 
 
 test('a run that fails inside (workspace unreadable) returns an error code instead of throwing', async () => {
   const n = memNotion();
-  const config = W.parseConfig({}); config.notion.enabled = true;
+  const config = W.parseConfig({ DATE_WRITEBACK_ONLY: 'ALL' }); config.notion.enabled = true;
   const job = W.createDateWriteback({ config, loadWorkspace: async () => { throw Object.assign(new Error('mongo down'), { status: 500 }); }, notion: n.fn, logger: { log() {}, error() {} } });
   const r = await job.run({ trigger: 'poll' });
   assert.equal(r.error, 'http-500');

@@ -801,6 +801,12 @@ function createApplicants(deps) {
   async function run(opts) {
     const o = opts || {};
     if (running) return Object.assign({}, last || {}, { busy: true });
+    /* FAIL CLOSED: on with no allow-list (NOTION_APPLICANTS_ONLY unset) = no live run: no Notion read, no workspace or state write.
+       A dry run may still preview (read only, labelled previewOnly below). */
+    if (PILOT.mustRefuse(pilot, o.dryRun != null ? !!o.dryRun : !!d.dryRun)) {
+      return { ok: false, refused: true, reason: PILOT.refusal("NOTION_APPLICANTS_ONLY"), trigger: o.trigger || "poll", dryRun: false, campaigns: [],
+        pilot: { mode: "unset", campaignsInPilot: 0, campaignsNotInPilot: 0, unmatchedEntries: 0 } };
+    }
     const t0 = now().getTime();
     if (coolUntil > t0) return { ok: false, skipped: "cooling-down", retryAfterSec: Math.ceil((coolUntil - t0) / 1000), campaigns: [] };
     const manual = o.trigger === "manual";
@@ -832,11 +838,12 @@ function createApplicants(deps) {
       let eligible = [];
       const needMap = new Set();
       let inPilotN = 0, notInPilotN = 0;
+      const pilotNow = PILOT.previewPilot(pilot);   // unset + dry run only gets here: a read-only look at every campaign
       all.forEach((c) => {
         const k = keyOf(c);
         if (!k) return; // never connected to a Notion form: not this job's business, not even reported
         /* pilot mode: a campaign outside the allow-list is only counted. A manual run, campaignId or rescan cannot widen it. */
-        if (!PILOT.inPilot(pilot, c)) { notInPilotN++; return; }
+        if (!PILOT.inPilot(pilotNow, c)) { notInPilotN++; return; }
         inPilotN++;
         if (o.campaignId && c.id !== String(o.campaignId)) return;
         const skip = (why) => entry.campaigns.push({ campaignId: c.id, status: "skipped", why });
@@ -848,6 +855,7 @@ function createApplicants(deps) {
         eligible.push(c);
       });
       entry.pilot = { mode: pilot.mode, campaignsInPilot: inPilotN, campaignsNotInPilot: notInPilotN, unmatchedEntries: PILOT.unmatchedCount(pilot, all) };
+      if (pilot.mode === "unset") { entry.pilot.previewOnly = true; entry.warnings.push("preview only: NOTION_APPLICANTS_ONLY is not set; a live run is refused until it is set to a campaign list or to ALL"); }
       eligible.sort((a, b) => str((st.campaigns[a.id] || {}).lastRunAt).localeCompare(str((st.campaigns[b.id] || {}).lastRunAt)));
       entry.remaining.campaignsNotVisited = Math.max(0, eligible.length - cfg.maxCampaigns);
       eligible = eligible.slice(0, cfg.maxCampaigns);
@@ -1168,6 +1176,7 @@ function registerRoutes(app, requireStaff, get) {
     if (b.confirmMassDelete === true) runOpts.confirmMassDelete = true;   // staff only (requireStaff above); never sent by the poll
     const entry = await g.applicants.run(runOpts);
     if (entry && entry.throttled) return res.status(429).json({ error: "A run was started a moment ago. Wait and try again.", retryAfterSec: entry.retryAfterSec });
+    if (entry && entry.refused) return res.status(409).json({ error: entry.reason, refused: true });
     if (entry && entry.skipped === "cooling-down") return res.status(429).json({ error: "Notion asked us to slow down; the job is resting.", retryAfterSec: entry.retryAfterSec });
     return res.json({ ok: true, run: entry });
   }));

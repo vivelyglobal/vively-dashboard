@@ -368,6 +368,7 @@ function createDateWriteback(deps) {
   }
 
   /* ---- what to consider ---- */
+  let activePilot = cfg.pilot;   // per run (one run at a time): the env list, or a read-only preview of all when unset + dry
   function collectTargets(ws, stats) {
     const db = (ws && ws.db) || {};
     const cps = new Map((db.campaigns || []).map((c) => [c.id, c]));
@@ -382,7 +383,7 @@ function createDateWriteback(deps) {
       if (Date.parse(slot.date + "T00:00:00Z") < cutoff) { stats.tooOld++; return; }
       const cp = cps.get(p.campaignId);
       if (!cp) { stats.noCampaign++; return; }
-      if (!PILOT.inPilot(cfg.pilot, cp)) { stats.notInPilot++; return; }   // a staff force cannot reach it: it never becomes a target
+      if (!PILOT.inPilot(activePilot, cp)) { stats.notInPilot++; return; }   // a staff force cannot reach it: it never becomes a target
       out.push({ id: p.id, campaignId: cp.id, cp, p, cr: crs.get(p.creatorId) || {}, slot });
     });
     return out;
@@ -567,7 +568,7 @@ function createDateWriteback(deps) {
     const only = opts.channel === "notion" || opts.channel === "sheet" ? opts.channel : null;
     const entry = {
       at: new Date(nowMs()).toISOString(), trigger: opts.trigger || "poll", dryRun: dry,
-      considered: 0, skipped: Object.assign({ badDate: 0, dropped: 0, tooOld: 0, noCampaign: 0 }, cfg.pilot.mode === "all" ? {} : { notInPilot: 0 }),   // the extra key exists only in pilot mode: unset = output unchanged
+      considered: 0, skipped: Object.assign({ badDate: 0, dropped: 0, tooOld: 0, noCampaign: 0 }, cfg.pilot.mode === "all" || cfg.pilot.mode === "unset" ? {} : { notInPilot: 0 }),   // the extra key exists only in pilot mode: unset = output unchanged
       channels: {
         notion: newChannel(notionOn && only !== "sheet", dry || cfg.notion.dryRun),
         sheet: newChannel(sheetOn && only !== "notion", dry || cfg.sheet.dryRun)
@@ -576,14 +577,24 @@ function createDateWriteback(deps) {
     };
     const entryRef = entry;
     try {
+      /* FAIL CLOSED: a live channel with no allow-list (DATE_WRITEBACK_ONLY unset) = refuse the whole run before
+         any workspace, Notion, Sheet or state access. A run where every channel is a dry run may still preview. */
+      if (PILOT.mustRefuse(cfg.pilot, !anyLive())) {
+        entry.refused = true; entry.error = "refused-no-allow-list"; entry.reason = PILOT.refusal("DATE_WRITEBACK_ONLY");
+        entry.pilot = { mode: "unset", campaignsInPilot: 0, campaignsNotInPilot: 0, participantsNotInPilot: 0, unmatchedEntries: 0 };
+        last = entry;
+        return entry;
+      }
+      activePilot = PILOT.previewPilot(cfg.pilot);
       const ws = await d.loadWorkspace();
       if (!ws) { entry.error = "no-workspace"; return entry; }
       const targets = collectTargets(ws, entry.skipped);
       {
         const cps = (ws.db && ws.db.campaigns) || [];
-        const inN = cps.filter((c) => c && PILOT.inPilot(cfg.pilot, c)).length;
+        const inN = cps.filter((c) => c && PILOT.inPilot(activePilot, c)).length;
         entry.pilot = { mode: cfg.pilot.mode, campaignsInPilot: inN, campaignsNotInPilot: cps.filter(Boolean).length - inN,
           participantsNotInPilot: entry.skipped.notInPilot || 0, unmatchedEntries: PILOT.unmatchedCount(cfg.pilot, cps) };
+        if (cfg.pilot.mode === "unset") entry.pilot.previewOnly = true;   // dry-run preview of every campaign; nothing is written
       }
       entry.considered = targets.length;
       const stored = await readState();
