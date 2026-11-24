@@ -537,9 +537,18 @@ test('sheet: the old SHEET_DATE_OVERWRITE switch no longer exists; a hand-edit s
   assert.equal(again.channels.sheet.counts.unchanged, 2);
 });
 
-test('sheet: no store name derivable -> date and time only, flagged', async () => {
+test('sheet: no venue and no store name -> the campaign name is the default store name', async () => {
   const s = memSheets(aura());
   const t = make({ sheet: true, sheetsClient: s });
+  const r = await t.job.run({ trigger: 'manual' });
+  assert.equal(s.writes[0].text, 'Aura Seoul: Dec 5 14.30');
+  assert.equal(r.channels.sheet.flags['no-store-name'], undefined);
+});
+
+test('sheet: no store name anywhere (no venue, no store name, no campaign name) -> date and time only, flagged', async () => {
+  const s = memSheets(aura());
+  const ws = workspace(); ws.db.campaigns[0] = { id: 'cp1', brand: 'Aura', sheetTab: 'Aura Seoul' };
+  const t = make({ sheet: true, sheetsClient: s, ws });
   const r = await t.job.run({ trigger: 'manual' });
   assert.equal(s.writes[0].text, 'Dec 5 14.30');
   assert.equal(r.channels.sheet.flags['no-store-name'], 2);

@@ -11,6 +11,11 @@
              or is not a date, that is reported and the row is skipped.
      Sheet   one cell: the "Visiting Date" column of the matching row, in
              the template's own text format ("Seongsu store: Oct 17 17.30").
+             The store part is the STORE NAME: the participant's own, else the
+             campaign's, else the booking venue, else the campaign name; used
+             as written, "<Store name>: <Mon D> <HH.MM>", the word "store" is
+             never added (see chooseStore). If only that store part changed
+             and the date did not, a cell this job wrote is left alone.
              The columns are found by HEADER TEXT ("Instagram", "Visiting
              Date"); if either header is not found the tab is refused. The
              row is found by the creator's Instagram handle, with the creator
@@ -77,14 +82,59 @@ function storeLabel(v) {
   return s.slice(0, 60);
 }
 
-/* '<Store> store: <Mon D> <HH.MM>' ; without a store: '<Mon D> <HH.MM>' ;
-   without a time: no time part. */
+const whenText = (s) => MONTHS[s.month - 1] + " " + s.day + (s.time ? " " + s.time.replace(":", ".") : "");
+
+/* LEGACY form, kept for the booking-venue source: '<Venue> store: <Mon D>
+   <HH.MM>' (the word "store" is added once). Without a venue: '<Mon D>
+   <HH.MM>'. Without a time: no time part. */
 function sheetText(slot, store) {
   const s = typeof slot === "string" ? parseSlot(slot) : slot;
   if (!s) return "";
-  const when = MONTHS[s.month - 1] + " " + s.day + (s.time ? " " + s.time.replace(":", ".") : "");
+  const when = whenText(s);
   const label = storeLabel(store);
   return label ? label + " store: " + when : when;
+}
+
+/* ---- Store name (founder decision 2026-11-24) ----------------------------
+   A stored store name (participant override, else campaign field, else the
+   campaign's own name as the default) is used VERBATIM and never gets the
+   word "store" added: '<StoreName>: <Mon D> <HH.MM>'.
+     "Seongsu store"      -> "Seongsu store: Oct 17"     (the template's text)
+     "UH Cell Gangnam 12" -> "UH Cell Gangnam 12: Oct 17" (no "store" doubled
+                              or invented)
+   The booking venue is not a stored name; it keeps its old text exactly
+   ('<Venue> store: ...') so cells already written do not change.
+   Precedence: participant.storeName > campaign.storeName > booking venue >
+   campaign name (the default). Control characters and a leading = + - @ are
+   removed, 60 characters at most. */
+function storeNameClean(v) {
+  const s = String(v == null ? "" : v).replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  return s.replace(/^[=+\-@\s]+/, "").trim().slice(0, 60);
+}
+function sheetTextFor(slot, name) {
+  const s = typeof slot === "string" ? parseSlot(slot) : slot;
+  if (!s) return "";
+  const label = storeNameClean(name);
+  return label ? label + ": " + whenText(s) : whenText(s);
+}
+/* -> { name, source } ; name "" means none of the four exists */
+function chooseStore(p, cp, venue) {
+  const own = storeNameClean(p && p.storeName);
+  if (own) return { name: own, source: "participant" };
+  const camp = storeNameClean(cp && cp.storeName);
+  if (camp) return { name: camp, source: "campaign" };
+  const v = storeLabel(venue);
+  if (v) return { name: v + " store", source: "venue" };
+  const dflt = storeNameClean(cp && cp.name);
+  return dflt ? { name: dflt, source: "campaign-default" } : { name: "", source: "none" };
+}
+/* does a sheet text already say this same visit (same date and time),
+   whatever store text stands in front of it? */
+function sameVisitText(text, slot) {
+  const s = typeof slot === "string" ? parseSlot(slot) : slot;
+  if (!s || !text) return false;
+  const w = whenText(s);
+  return text === w || text.endsWith(": " + w);
 }
 
 /* the Notion date object for a slot. A time is wall-clock at the venue, so
@@ -293,7 +343,9 @@ function createDateWriteback(deps) {
   }
 
   /* ---- ledger records ---- */
-  const markDone = (r, want) => { r.done = want; r.want = null; r.tries = 0; r.nextAt = 0; r.why = null; r.gaveUp = false; };
+  const markDone = (r, want) => { r.done = want; delete r.kept; r.want = null; r.tries = 0; r.nextAt = 0; r.why = null; r.gaveUp = false; };
+  /* the cell keeps its older, same-visit text: settled for this wanted text, nothing pending */
+  const markKept = (r, want) => { r.kept = want; r.want = null; r.tries = 0; r.nextAt = 0; r.why = null; r.gaveUp = false; };
   /* needs a person (property missing, no match, ...): looked at again later, not counted as a failure */
   const markWait = (r, want, why) => { r.want = want; r.why = why; r.nextAt = nowMs() + WAIT_MIN * 60000; r.tries = 0; r.gaveUp = false; };
   const markFail = (r, want, why) => {
@@ -304,6 +356,7 @@ function createDateWriteback(deps) {
   };
   function gate(r, want, manual) {
     if (r.done === want) return "unchanged";
+    if (r.kept === want && !manual) return "unchanged";
     if (manual || r.want !== want) return null;
     if (r.gaveUp) return "gave-up";
     if (r.nextAt && r.nextAt > nowMs()) return "waiting";
@@ -397,9 +450,9 @@ function createDateWriteback(deps) {
     }
     const pending = [];
     for (const t of targets) {
-      const store = storeLabel(venues.get(t.id));
-      t.text = sheetText(t.slot, store);
-      t.noStore = !store;
+      const pick = chooseStore(t.p, t.cp, venues.get(t.id));
+      t.text = sheetTextFor(t.slot, pick.name);
+      t.noStore = !pick.name;
       const r = ctx.state.items[t.id].s;
       const g = gate(r, t.text, ctx.manual);
       if (g) ctx.note(ch, "sheet", t, g, r.why && g !== "unchanged" ? { why: r.why } : null);
@@ -464,6 +517,16 @@ function createDateWriteback(deps) {
         if (!normHandle(cur[0]) || normHandle(cur[0]) !== normHandle(t.cr.handle)) { ctx.note(ch, "sheet", t, "row-moved", { row }); continue; }
         const existing = cur[1];
         if (existing === t.text) { markDone(r, t.text); ctx.note(ch, "sheet", t, "unchanged-remote", { row }); continue; }
+        /* 2b. Only the store text differs: the cell holds exactly what this
+           system last wrote for this same visit (date and time unchanged), and
+           the new text differs because the store-name rule or field changed. That
+           is not worth a rewrite, and not an "edited by hand" alarm either: the
+           cell is left as it is, remembered, and takes the new text the next
+           time the visit date itself changes. A staff force by creator id
+           still rewrites it. */
+        if (existing && r.done && existing === r.done && sameVisitText(r.done, t.slot) && !(ctx.force && ctx.force.has(String(t.p.creatorId)))) {
+          markKept(r, t.text); ctx.note(ch, "sheet", t, "kept-format", { row }); continue;
+        }
         /* 3. a cell that is not empty and is not what this system last wrote
            was typed by a person: reported, not overwritten (unless forced) */
         if (existing && existing !== r.done && !(ctx.force && ctx.force.has(String(t.p.creatorId)))) {
@@ -596,6 +659,6 @@ function createDateWriteback(deps) {
 }
 
 module.exports = {
-  parseSlot, storeLabel, sheetText, notionDateValue, notionDateEquals, matchRow, resolveTab,
+  parseSlot, storeLabel, sheetText, sheetTextFor, storeNameClean, chooseStore, sameVisitText, notionDateValue, notionDateEquals, matchRow, resolveTab,
   normName, parseConfig, createDateWriteback, normState, locateColumns, findColumn, notionPropertyProblem, NOTION_DENY
 };

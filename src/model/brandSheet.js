@@ -85,8 +85,10 @@ export function brandSheetSafeCell(v) {
 }
 
 /* "Seongsu store: Oct 17" / "Hongdae store: Oct 27 17.30" / "Oct 17" (no store).
-   Same text the date write-back puts in the Visiting Date column. */
-export function brandSheetVisitText(confirmedVisitAt, storeName) {
+   Same text the date write-back puts in the Visiting Date column.
+   brandSheetFormatVisit is the one place that lays the text out; the label
+   it gets is already final. */
+export function brandSheetFormatVisit(confirmedVisitAt, label) {
   const raw = String(confirmedVisitAt == null ? '' : confirmedVisitAt).trim();
   if (!raw) return '';
   const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{1,2}):(\d{2}))?/);
@@ -95,9 +97,32 @@ export function brandSheetVisitText(confirmedVisitAt, storeName) {
   if (mo < 1 || mo > 12 || d < 1 || d > 31) return raw;
   const time = m[4] !== undefined ? String(+m[4]).padStart(2, '0') + '.' + m[5] : '';
   const when = BRAND_SHEET_MONTHS[mo - 1] + ' ' + d + (time ? ' ' + time : '');
-  const label = String(storeName == null ? '' : storeName).replace(/[\u0000-\u001f\u007f]+/g, ' ')
-    .replace(/\s+/g, ' ').trim().replace(/^[=+\-@\s]+/, '').replace(/\s+store$/i, '').trim().slice(0, 60);
-  return label ? label + ' store: ' + when : when;
+  return label ? label + ': ' + when : when;
+}
+/* control characters and a leading = + - @ removed, 60 characters at most */
+export function brandSheetCleanName(v) {
+  return String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s+/g, ' ').trim().replace(/^[=+\-@\s]+/, '').trim().slice(0, 60);
+}
+/* LEGACY: a short venue name gets the word "store" added once:
+   'Seongsu' / 'Seongsu store' -> "Seongsu store: Oct 17" */
+export function brandSheetVisitText(confirmedVisitAt, storeName) {
+  const label = brandSheetCleanName(storeName).replace(/\s+store$/i, '').trim();
+  return brandSheetFormatVisit(confirmedVisitAt, label ? label + ' store' : '');
+}
+/* STORE NAME rule (founder decision 2026-11-24): the stored name is used as
+   written, "<Store name>: <Mon D> <HH.MM>", and the word "store" is never
+   added. "Seongsu store" -> "Seongsu store: Oct 17"; "UH Cell Gangnam 12" ->
+   "UH Cell Gangnam 12: Oct 17". Same rule as server/date-writeback.js. */
+export function brandSheetVisitTextFor(confirmedVisitAt, storeName) {
+  return brandSheetFormatVisit(confirmedVisitAt, brandSheetCleanName(storeName));
+}
+/* the store name of one creator row: the participant's own, else the
+   campaign's, else the campaign name (the default). p may be null: then it is
+   the campaign-level name. visitStore is the older field name, still read. */
+export function brandSheetStoreName(p, cp) {
+  const pick = (o) => brandSheetCleanName(o && (o.storeName || o.visitStore));
+  return pick(p) || pick(cp) || brandSheetCleanName(cp && cp.name);
 }
 
 export function brandSheetProfileUrl(cr) {
@@ -160,10 +185,12 @@ export function buildBrandSheet(opts) {
     if (b === 'rejected' && !withRejected) { rejectedHidden++; return; }
     blocks[b].push({ p, cr, b });
   });
-  /* store name only from stored data on the creator row or the campaign, never
-     from what the Booking tab happened to load, so the same campaign always
-     gives the same text. None of these fields is filled by the dashboard today. */
-  const storeOf = (p) => String(p.storeName || p.visitStore || cp.storeName || cp.visitStore || '').trim();
+  /* store name only from stored data on the creator row or the campaign (the
+     campaign's own name when its store name is empty), never from what the
+     Booking tab happened to load, so the same campaign always gives the same
+     text. Counted as missing only when the creator row, the campaign's store
+     name and the campaign name are all empty. */
+  const storeOf = (p) => brandSheetStoreName(p, cp);
   let missingStore = 0;
 
   const dt = (v) => { const s = String(v || ''); return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 16).replace('T', ' ') : ''; };
@@ -192,7 +219,7 @@ export function buildBrandSheet(opts) {
         if (!String(p.confirmedVisitAt || '').trim()) return '';
         const st = storeOf(p);
         if (!st) missingStore++;
-        return brandSheetVisitText(p.confirmedVisitAt, st);
+        return brandSheetVisitTextFor(p.confirmedVisitAt, st);
       })(),
       'Posted Date': c ? String(c.postedAt || c.publishedAt || '') : '',
       'Reminder for Brand': '',

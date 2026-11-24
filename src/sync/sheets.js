@@ -44,7 +44,7 @@ export const SHEET_SCHEMA = {
     ['start','s'],['end','s'],['targetCreators','n'],['minFollowers','n'],['platforms','a'],
     ['deliverables','s'],['budget','n'],['productCostPer','n'],['adSpend','n'],['hashtags','a'],
     ['owner','s'],['note','s'],['createdAt','s'],['fulfilment','s'],['importedFrom','s'],
-    ['notionDatabaseId','s'],['notionSyncedAt','s'],['notionDescription','s']
+    ['notionDatabaseId','s'],['notionSyncedAt','s'],['notionDescription','s'],['storeName','s']
   ],
   creators: [
     ['id','s'],['handle','s'],['name','s'],['platform','s'],['followers','n'],['er','n'],['avgViews','n'],
@@ -60,7 +60,7 @@ export const SHEET_SCHEMA = {
     ['id','s'],['campaignId','s'],['creatorId','s'],['stage','s'],['source','s'],['fee','n'],
     ['contactedAt','s'],['repliedAt','s'],['confirmedAt','s'],['shippedAt','s'],['dropReason','s'],
     ['revisions','n'],['note','s'],['fullName','s'],['address','s'],['contact','s'],['nationality','s'],
-    ['visitAt','s'],['confirmedVisitAt','s'],['pinnedCampaign','s'],
+    ['visitAt','s'],['confirmedVisitAt','s'],['pinnedCampaign','s'],['storeName','s'],
     ['arrivingDate','s'],['otherSns','s'],['importedStatus','s'],['notionPageId','s'],
     ['content.url','s'],['content.platform','s'],['content.format','s'],['content.postedAt','s'],
     ['content.submittedAt','s'],['content.views','n'],['content.paidViews','n'],['content.organicViews','n'],

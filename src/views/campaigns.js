@@ -4,7 +4,7 @@ import { campaignsSharingNotionDb, joinSlot, notionLinkedCampaigns, openNotionMa
 import { DAY, TODAY, addDays, dLabel, iso } from '../lib/dates.js';
 import { engagementsOf, erPct, kmb, money2, num, pct, won, wonK } from '../lib/format.js';
 import { downloadXlsx } from '../lib/xlsx.js';
-import { buildBrandSheet, loadBrandSheetOptions, saveBrandSheetOptions } from '../model/brandSheet.js';
+import { brandSheetStoreName, buildBrandSheet, loadBrandSheetOptions, saveBrandSheetOptions } from '../model/brandSheet.js';
 import { recomputeCreatorStats } from '../model/creators.js';
 import { DB, byCampaign, byCreator, detachContent, notify, persist, serverSave, setContentUrl, stripPayout, toastAfterSave } from '../model/db.js';
 import { duplicateIdBanner, wireDuplicateIdBanner } from '../model/duplicates.js';
@@ -247,6 +247,9 @@ export function campaignFormHtml(cp) {
       <div class="field"><label>Ad spend (₩)</label><input type="number" id="ecAd" value="${cp.adSpend || 0}"/></div>
       <div class="field"><label>Budget (₩)</label><input type="number" id="ecBudget" value="${cp.budget || 0}"/></div>
       <div class="field"><label>Owner</label><input type="text" id="ecOwner" value="${esc(cp.owner || '')}"/></div>
+      <div class="field"><label>Store name (shown in the Visiting Date)</label>
+        <input type="text" id="ecStoreName" maxlength="60" placeholder="${esc(cp.name || '')}" value="${esc(cp.storeName || '')}"/>
+        <div style="font-size:11px;color:var(--text-3);margin-top:3px">Leave empty to use the project name. Written as "Store name: Oct 17 17.30"; the word "store" is not added for you.</div></div>
       <div class="field"><label>Venue address</label><input type="text" id="ecVenue" placeholder="서울 종로구 …" value="${esc(cp.venue || '')}"/></div>
       <div class="field"><label>Timezone</label><input type="text" id="ecTz" placeholder="${esc(GCAL_PREFS.defaultTz)}" value="${esc(cp.timezone || '')}"/></div>
     </div>
@@ -280,6 +283,8 @@ export function readCampaignForm(cp) {
   /* the address a creator is actually going to, and the clock that address
      runs on — both go straight onto the calendar event */
   cp.venue = $('#ecVenue').value.trim();
+  /* empty = "use the project name": the default is read at use, never copied here */
+  cp.storeName = $('#ecStoreName').value.trim();
   cp.timezone = $('#ecTz').value.trim();
   cp.deliverables = $('#ecDeliv').value.trim();
   cp.platforms = list($('#ecPlatforms').value);
@@ -701,7 +706,7 @@ export function openBrandSheetExport(cp) {
       One row per creator in the template's columns: <strong>${preview.counts.confirmed}</strong> confirmed,
       then a STANDBY row and <strong>${preview.counts.standby}</strong> waiting for the brand's approval.
       Brand-rejected creators are left out unless you tick the box below (${preview.counts.rejectedHidden} at the moment).
-      Visiting Date is the confirmed visit only.
+      Visiting Date is the confirmed visit only, written as <strong>${esc(brandSheetStoreName(null, cp) || 'date only')}</strong>: <em>date</em>.
       ${missing ? `<br><span style="color:var(--amber)">Store name missing for ${missing} creator${missing === 1 ? '' : 's'}: their Visiting Date shows date and time only.</span>` : ''}
     </div>
     <div class="lbl">Brand-safe file (default)</div>
@@ -929,6 +934,9 @@ export function showParticipant(pid) {
       ${p.confirmedVisitAt ? `<br><button class="btn xs" id="pdVisitClear" type="button" style="margin-top:6px">Clear the confirmed time</button>` : ''}
       <br><button class="btn xs" id="pdInvite" type="button" style="margin-top:6px">Invite to book</button>
     </div>`}
+    <div class="field"><label>Store name for this creator (optional)</label>
+      <input type="text" id="pdStoreName" maxlength="60" placeholder="${esc(brandSheetStoreName(null, cp))}" value="${esc(p.storeName || '')}"/>
+      <div style="font-size:11px;color:var(--text-3);margin-top:3px">Leave empty to use the campaign's store name.</div></div>
     ${campaignShips(cp) && STAGE_IDX[p.stage] >= STAGE_IDX.confirmed && p.stage !== 'dropped' ? (() => {
       const sh = p.shipment || {};
       const st = shipmentState(p);
@@ -1104,6 +1112,10 @@ export function showParticipant(pid) {
     /* A booked row has no date inputs — its time belongs to the booking,
        and applyBookingSlots() on the server would put back anything set
        here anyway. Leaving it alone is the honest version of that. */
+    {
+      const sn = $('#pdStoreName').value.trim();
+      if (sn) p.storeName = sn; else delete p.storeName;
+    }
     if (!p.bookingId) {
       const slot = joinSlot($('#pdVisitDate').value, $('#pdVisitTime').value);
       if (slot !== (p.confirmedVisitAt || '')) {

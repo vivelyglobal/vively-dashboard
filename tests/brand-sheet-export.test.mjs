@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildBrandSheet, BRAND_SHEET_HEADERS, brandSheetVisitText, brandSheetSafeCell, brandSheetStatusLabel,
+  buildBrandSheet, BRAND_SHEET_HEADERS, brandSheetVisitText, brandSheetStoreName, brandSheetSafeCell, brandSheetStatusLabel,
   loadBrandSheetOptions, saveBrandSheetOptions, BRAND_SHEET_OPTS_KEY
 } from '../src/model/brandSheet.js';
 import { buildXlsx, unzip } from '../src/lib/xlsx.js';
@@ -271,21 +271,27 @@ test('Visiting Date text format', () => {
 
 test('the store name comes only from stored data: the same campaign always gives the same text', () => {
   const v = (s, h) => s.rows.find((r) => r[col(s, 'Instagram')] === 'https://www.instagram.com/fake_' + h + '/')[col(s, 'Visiting Date')];
-  /* nothing stored: date and time only, and a runtime store argument is ignored */
+  /* no store name stored: the campaign's own name is the default, and a
+     runtime store argument is ignored */
   const a1 = buildBrandSheet(base);
   const a2 = buildBrandSheet({ ...base, storeName: 'Booking-Tab-Venue' });
   assert.deepEqual(a1.rows, a2.rows);
-  assert.equal(v(a1, 'a'), 'Oct 17');
-  assert.equal(v(a1, 'b'), 'Oct 27 17.30');
+  assert.equal(v(a1, 'a'), 'Fake Brand Spring: Oct 17');
+  assert.equal(v(a1, 'b'), 'Fake Brand Spring: Oct 27 17.30');
   assert.equal(v(a1, 'c'), '', 'a requested (unconfirmed) visit is not exported');
-  assert.equal(a1.counts.missingStore, 2);
+  assert.equal(a1.counts.missingStore, 0);
+  /* no store name and no campaign name: date and time only, and it is counted */
+  const nameless = buildBrandSheet({ ...base, cp: { ...cp, name: '', brand: 'Fake Brand' } });
+  assert.equal(v(nameless, 'a'), 'Oct 17');
+  assert.equal(v(nameless, 'b'), 'Oct 27 17.30');
+  assert.equal(nameless.counts.missingStore, 2);
   assert.ok(!all(a2).includes('Booking-Tab-Venue'));
   /* a stored store name on the creator row or the campaign is used */
   const withP = buildBrandSheet({ ...base, participants: participants.map((p) => (p.id === 'p-a' ? { ...p, storeName: 'Seongsu' } : p)) });
-  assert.equal(v(withP, 'a'), 'Seongsu store: Oct 17');
-  assert.equal(v(withP, 'b'), 'Oct 27 17.30');
-  assert.equal(withP.counts.missingStore, 1);
-  const withCp = buildBrandSheet({ ...base, cp: { ...cp, storeName: 'Hongdae' } });
+  assert.equal(v(withP, 'a'), 'Seongsu: Oct 17', 'stored as written: "store" is not added');
+  assert.equal(v(withP, 'b'), 'Fake Brand Spring: Oct 27 17.30');
+  assert.equal(withP.counts.missingStore, 0);
+  const withCp = buildBrandSheet({ ...base, cp: { ...cp, storeName: 'Hongdae store' } });
   assert.equal(v(withCp, 'b'), 'Hongdae store: Oct 27 17.30');
   assert.equal(withCp.counts.missingStore, 0);
 });
@@ -358,7 +364,7 @@ test('drawer code has no persist / save / SETTINGS write in it (source check)', 
   assert.ok(!/BOOKING/.test(body), 'does not depend on whether the Booking tab was opened');
 });
 
-function runDrawer(parts, extraStore) {
+function runDrawer(parts, extraStore, cpOverride) {
   const calls = { persist: 0, serverSave: 0, sheetPush: 0, settingsWrites: [], downloads: [], setItem: [], html: '' };
   const store = Object.assign({}, extraStore || {});
   const localStorage = { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { calls.setItem.push(k); store[k] = String(v); } };
@@ -366,7 +372,7 @@ function runDrawer(parts, extraStore) {
   const $ = (sel) => els[sel] || (els[sel] = { checked: false, style: {}, h: {}, addEventListener(t, f) { this.h[t] = f; } });
   const SETTINGS = new Proxy({}, { set(t, k, v) { calls.settingsWrites.push(k); t[k] = v; return true; } });
   const deps = {
-    buildBrandSheet, loadBrandSheetOptions, saveBrandSheetOptions, $, SETTINGS,
+    buildBrandSheet, brandSheetStoreName, loadBrandSheetOptions, saveBrandSheetOptions, $, SETTINGS,
     partsOf: () => parts, byCreator: creators, esc: (x) => String(x),
     openDrawer: (title, html) => { calls.html = html; },
     downloadXlsx: (name, rows, file) => calls.downloads.push({ name, rows, file }),
@@ -377,7 +383,7 @@ function runDrawer(parts, extraStore) {
   };
   const names = Object.keys(deps);
   const fn = new Function(...names, fnTextOf(viewSrc).replace(/^export /, '') + '\nreturn openBrandSheetExport;')(...names.map((n) => deps[n]));
-  fn(cp);
+  fn(cpOverride || cp);
   return { calls, els, store };
 }
 
@@ -407,7 +413,10 @@ test('drawer opens with the three boxes off, rejected left out, and a missing-st
   const { calls, els } = runDrawer(participants);
   assert.ok(/id="bsRej"(?![^>]*checked)/.test(calls.html), 'Include rejected is unticked by default');
   assert.ok(/id="bsNames"(?![^>]*checked)/.test(calls.html) && /id="bsNat"(?![^>]*checked)/.test(calls.html));
-  assert.ok(calls.html.includes('Store name missing for 2 creators'), 'notice shown');
+  assert.ok(!calls.html.includes('Store name missing'), 'no notice: the campaign name is the default store name');
+  assert.ok(calls.html.includes('Fake Brand Spring'), 'the name that will be used is shown');
+  const none = runDrawer(participants, undefined, { ...cp, name: '' });
+  assert.ok(none.calls.html.includes('Store name missing for 2 creators'), 'notice shown when no store name exists anywhere');
   assert.ok(!calls.html.includes('Booking-Tab-Venue'));
   els['#bsDownload'].h.click();
   assert.ok(!JSON.stringify(calls.downloads[0].rows).includes('Rejected'));
@@ -415,6 +424,8 @@ test('drawer opens with the three boxes off, rejected left out, and a missing-st
   const again = runDrawer(participants, { [BRAND_SHEET_OPTS_KEY]: JSON.stringify({ includeRejected: true }) });
   assert.ok(/id="bsRej"[^>]*checked/.test(again.calls.html));
   /* no notice when every visit has a stored store name */
-  const named = runDrawer(participants.map((p) => ({ ...p, storeName: 'Seongsu' })));
-  assert.ok(!named.calls.html.includes('Store name missing'));
+  const named = runDrawer(participants.map((p) => ({ ...p, storeName: 'Seongsu' })), undefined, { ...cp, name: '' });
+  assert.ok(!named.calls.html.includes('Store name missing'), 'a participant store name alone is enough');
+  const campNamed = runDrawer(participants, undefined, { ...cp, name: '', storeName: 'Hongdae store' });
+  assert.ok(!campNamed.calls.html.includes('Store name missing'), 'a campaign store name alone is enough');
 });
