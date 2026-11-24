@@ -1862,7 +1862,7 @@ test('report 61: the nine real Status options land on the intended stage and dro
   const run = await job(store, table, { jobState: makeJobState({ campaigns: { cp1: { ds: DS1, cursor: null, baselineDone: true } } }) }).run();
   const by = {}; rosterOf(store, 'cp1').forEach((p) => { by[p.importedStatus] = [p.stage, p.dropReason || null]; });
   assert.deepEqual(by, {
-    'Waiting Approval': ['shortlisted', null], 'Brand Accepted': ['shortlisted', null], Confirmed: ['confirmed', null], 'Re-Schedule': ['confirmed', null],
+    'Waiting Approval': ['shortlisted', null], 'Brand Accepted': ['confirmed', null], Confirmed: ['confirmed', null], 'Re-Schedule': ['confirmed', null],
     'Waiting Upload': ['shipped', null], Uploaded: ['live', null], Declined: ['dropped', 'Declined'], 'Brand Rejected': ['dropped', 'Brand rejected'], Cancelled: ['dropped', 'Cancelled']
   });
   assert.deepEqual(run.unknownStatuses, [{ value: 'unknown', count: 1 }]);

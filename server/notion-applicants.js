@@ -361,10 +361,8 @@ const fieldHash = (k, v) => crypto.createHash("sha256").update(k + "\u0000" + st
    import and the browser bundle, so it is not edited here (see report 28). */
 const EXTRA_STATUS = {
   declined: { stage: "dropped", reason: "Declined" },
-  /* brand approved, creator not yet confirmed: the job keeps it Shortlisted
-     (the manual import still reads it as Confirmed). Orchestrator decision
-     2026-11-24, reversible: delete this line. */
-  "brand accepted": { stage: "shortlisted" },
+  /* Brand Accepted = selected by the brand: Confirmed, same as STATUS_MAP and
+     the manual import (founder, 2026-11-25). Not listed here on purpose. */
   /* visit being moved: the creator stays Confirmed */
   "re-schedule": { stage: "confirmed" }
 };
