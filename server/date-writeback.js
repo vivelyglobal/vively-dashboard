@@ -50,6 +50,7 @@
 
 const { normHandle, wallClockToInstant } = require("./booking-store.js");
 const { normaliseTitle, normalizeId } = require("./notion-autocreate.js");
+const PILOT = require("./pilot-allowlist.js");
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const pad2 = (n) => String(n).padStart(2, "0");
@@ -259,6 +260,9 @@ function parseConfig(env) {
   const hdrRow = num(e.SHEET_HEADER_ROW);
   return {
     intervalMin, intervalMs: Math.round(intervalMin * 60000),
+    /* pilot mode: DATE_WRITEBACK_ONLY = campaign ids or Notion page ids, or NONE (see pilot-allowlist.js).
+       Environment only: no request can change it. */
+    pilot: PILOT.parsePilot(e.DATE_WRITEBACK_ONLY, "DATE_WRITEBACK_ONLY"),
     maxPerRun: Number.isFinite(cap) && cap >= 0 ? Math.floor(cap) : 25,
     pastDays: Number.isFinite(past) && past >= 0 ? Math.floor(past) : 7,
     tz,
@@ -378,6 +382,7 @@ function createDateWriteback(deps) {
       if (Date.parse(slot.date + "T00:00:00Z") < cutoff) { stats.tooOld++; return; }
       const cp = cps.get(p.campaignId);
       if (!cp) { stats.noCampaign++; return; }
+      if (!PILOT.inPilot(cfg.pilot, cp)) { stats.notInPilot++; return; }   // a staff force cannot reach it: it never becomes a target
       out.push({ id: p.id, campaignId: cp.id, cp, p, cr: crs.get(p.creatorId) || {}, slot });
     });
     return out;
@@ -562,7 +567,7 @@ function createDateWriteback(deps) {
     const only = opts.channel === "notion" || opts.channel === "sheet" ? opts.channel : null;
     const entry = {
       at: new Date(nowMs()).toISOString(), trigger: opts.trigger || "poll", dryRun: dry,
-      considered: 0, skipped: { badDate: 0, dropped: 0, tooOld: 0, noCampaign: 0 },
+      considered: 0, skipped: Object.assign({ badDate: 0, dropped: 0, tooOld: 0, noCampaign: 0 }, cfg.pilot.mode === "all" ? {} : { notInPilot: 0 }),   // the extra key exists only in pilot mode: unset = output unchanged
       channels: {
         notion: newChannel(notionOn && only !== "sheet", dry || cfg.notion.dryRun),
         sheet: newChannel(sheetOn && only !== "notion", dry || cfg.sheet.dryRun)
@@ -574,6 +579,12 @@ function createDateWriteback(deps) {
       const ws = await d.loadWorkspace();
       if (!ws) { entry.error = "no-workspace"; return entry; }
       const targets = collectTargets(ws, entry.skipped);
+      {
+        const cps = (ws.db && ws.db.campaigns) || [];
+        const inN = cps.filter((c) => c && PILOT.inPilot(cfg.pilot, c)).length;
+        entry.pilot = { mode: cfg.pilot.mode, campaignsInPilot: inN, campaignsNotInPilot: cps.filter(Boolean).length - inN,
+          participantsNotInPilot: entry.skipped.notInPilot || 0, unmatchedEntries: PILOT.unmatchedCount(cfg.pilot, cps) };
+      }
       entry.considered = targets.length;
       const stored = await readState();
       const state = stored;
@@ -660,5 +671,5 @@ function createDateWriteback(deps) {
 
 module.exports = {
   parseSlot, storeLabel, sheetText, sheetTextFor, storeNameClean, chooseStore, sameVisitText, notionDateValue, notionDateEquals, matchRow, resolveTab,
-  normName, parseConfig, createDateWriteback, normState, locateColumns, findColumn, notionPropertyProblem, NOTION_DENY
+  pilotStatus: PILOT.pilotStatus, normName, parseConfig, createDateWriteback, normState, locateColumns, findColumn, notionPropertyProblem, NOTION_DENY
 };

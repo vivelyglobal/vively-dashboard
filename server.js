@@ -1164,6 +1164,7 @@ if (!applicantsOff) {
     manualMinSec: applicantsCfg.manualMinSec, docLimitFraction: applicantsCfg.docLimitFraction, docLimitBytes: applicantsCfg.docLimitBytes,
     maxHeldRetry: applicantsCfg.maxHeldRetry,
     dryRun: applicantsCfg.dryRun,
+    pilot: applicantsCfg.pilot,   // NOTION_APPLICANTS_ONLY: the campaigns this job may touch (all when unset)
     logger: console
   });
   const apTick = () => applicants.run({ trigger: "poll" })
@@ -1172,6 +1173,8 @@ if (!applicantsOff) {
   setInterval(apTick, applicantsCfg.intervalMs).unref();
   console.log("Notion applicants sync: ON, every %d min%s; caps %d new roster rows per run, %d rows per campaign.", applicantsCfg.intervalMin,
     applicantsCfg.dryRun ? " (dry run: reads Notion, writes nothing)" : "", applicantsCfg.maxCreate, applicantsCfg.maxRows);
+  if (applicantsCfg.pilot.mode === "all") console.log("Notion applicants sync: WARNING, acting on ALL campaigns (NOTION_APPLICANTS_ONLY is not set).");
+  else console.log("Notion applicants sync: pilot mode (%s), %d allow-list id(s).", applicantsCfg.pilot.mode, applicantsCfg.pilot.ids.length);
 }
 
 /* Staff: run now (POST, body { dryRun?: true, campaignId?: "<id>", rescan?: [...] }; at most one every
@@ -1269,6 +1272,8 @@ if (dwCfg.notion.enabled || dwCfg.sheet.enabled) {
   console.log("Date write-back: ON (notion %s, sheet %s), every %d min; cap %d writes per channel per run.",
     dwCfg.notion.enabled ? (dwCfg.notion.dryRun ? "dry run" : "live") : "off",
     dwCfg.sheet.enabled ? (dwCfg.sheet.dryRun ? "dry run" : "live") : "off", dwCfg.intervalMin, dwCfg.maxPerRun);
+  if (dwCfg.pilot.mode === "all") console.log("Date write-back: WARNING, acting on ALL campaigns (DATE_WRITEBACK_ONLY is not set).");
+  else console.log("Date write-back: pilot mode (%s), %d allow-list id(s).", dwCfg.pilot.mode, dwCfg.pilot.ids.length);
 }
 
 /* Staff: run now. Body { dryRun?: true, channel?: "notion"|"sheet" }. A dry run
@@ -1292,7 +1297,10 @@ app.get("/api/date-writeback/status", requireStaff(async (req, res) => {
     notionProperty: dwCfg.notion.property,
     sheetHeaders: dwCfg.sheet.headers,
     sheetColumnLetters: dwCfg.sheet.cols,
-    intervalMin: dwCfg.intervalMin
+    intervalMin: dwCfg.intervalMin,
+    /* the allow-list (ids only) and a warning when a channel is on with no list */
+    pilot: dateWritebackLib.pilotStatus(dwCfg.pilot, { enabled: on && (dwCfg.notion.enabled || dwCfg.sheet.enabled),
+      dryRun: [dwCfg.notion, dwCfg.sheet].filter((c) => c.enabled).every((c) => c.dryRun) })
   };
   if (dwCfg.sheet.requested) {
     /* the address to share the sheet with as Editor; it is not a secret */

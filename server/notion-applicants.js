@@ -134,6 +134,8 @@ const clampNum = (v, lo, hi, dflt) => {
 /* the browser save limit: server.js reads request bodies with express.json({ limit: "10mb" }) (a test keeps the two in step) */
 const BROWSER_SAVE_LIMIT_BYTES = 10 * 1024 * 1024;
 
+const PILOT = require("./pilot-allowlist.js");
+
 function parseConfig(env) {
   const e = env || {};
   /* The Notion forms are near-live (founder, 2026-11-24): every 2 minutes by
@@ -149,6 +151,8 @@ function parseConfig(env) {
     maxRows: clampInt(e.NOTION_APPLICANTS_MAX_ROWS, 1, 2000, 200),     // rows read per campaign per run
     pageSize: clampInt(e.NOTION_APPLICANTS_PAGE_SIZE, 1, 100, 50),     // rows per Notion request
     maxCampaigns: clampInt(e.NOTION_APPLICANTS_MAX_CAMPAIGNS, 1, 200, 25),
+    /* pilot mode: NOTION_APPLICANTS_ONLY = campaign ids or Notion page ids, or NONE (see pilot-allowlist.js) */
+    pilot: PILOT.parsePilot(e.NOTION_APPLICANTS_ONLY, "NOTION_APPLICANTS_ONLY"),
     includeWrapped: String(e.NOTION_APPLICANTS_INCLUDE_WRAPPED || "").trim() === "1",
     manualMinSec: clampInt(e.NOTION_APPLICANTS_MANUAL_MIN_SEC, 0, 3600, 30),            // between staff-triggered runs
     docLimitFraction: clampNum(e.NOTION_APPLICANTS_DOC_LIMIT_FRACTION, 0.1, 0.95, 0.8), // of the browser save limit
@@ -666,6 +670,7 @@ function makeLogStore(col, keep) {
 function createApplicants(deps) {
   const d = deps;
   const logger = d.logger || console;
+  const pilot = d.pilot || PILOT.parsePilot("", "NOTION_APPLICANTS_ONLY");   // set from the environment only, never from a request
   const maxAttempts = d.maxAttempts || 4;
   const cfg = {
     maxCreate: Number.isFinite(d.maxCreate) ? d.maxCreate : 10,
@@ -826,10 +831,14 @@ function createApplicants(deps) {
       all.forEach((c) => { const k = keyOf(c); if (k) sourceUse.set(k, (sourceUse.get(k) || 0) + 1); });
       let eligible = [];
       const needMap = new Set();
+      let inPilotN = 0, notInPilotN = 0;
       all.forEach((c) => {
-        if (o.campaignId && c.id !== String(o.campaignId)) return;
         const k = keyOf(c);
         if (!k) return; // never connected to a Notion form: not this job's business, not even reported
+        /* pilot mode: a campaign outside the allow-list is only counted. A manual run, campaignId or rescan cannot widen it. */
+        if (!PILOT.inPilot(pilot, c)) { notInPilotN++; return; }
+        inPilotN++;
+        if (o.campaignId && c.id !== String(o.campaignId)) return;
         const skip = (why) => entry.campaigns.push({ campaignId: c.id, status: "skipped", why });
         if (sourceUse.get(k) > 1) { skip("shared-source"); return; }
         if (c.status === "wrapped" && !cfg.includeWrapped) { skip("wrapped"); return; }
@@ -838,6 +847,7 @@ function createApplicants(deps) {
         if (!(m.instagram && m.instagram !== "skip") && !(m.tiktok && m.tiktok !== "skip")) { skip("no-mapping"); return; }
         eligible.push(c);
       });
+      entry.pilot = { mode: pilot.mode, campaignsInPilot: inPilotN, campaignsNotInPilot: notInPilotN, unmatchedEntries: PILOT.unmatchedCount(pilot, all) };
       eligible.sort((a, b) => str((st.campaigns[a.id] || {}).lastRunAt).localeCompare(str((st.campaigns[b.id] || {}).lastRunAt)));
       entry.remaining.campaignsNotVisited = Math.max(0, eligible.length - cfg.maxCampaigns);
       eligible = eligible.slice(0, cfg.maxCampaigns);
@@ -1125,6 +1135,7 @@ function createApplicants(deps) {
       campaignsSynced: entry.campaigns.filter((c) => c.status === "ok" || c.status === "dry-run").length,
       campaignsSkipped: entry.campaigns.filter((c) => c.status === "skipped").length,
       campaignsFailed: entry.campaigns.filter((c) => c.status === "error").length,
+      campaignsNotInPilot: entry.pilot ? entry.pilot.campaignsNotInPilot : 0,
       campaignsMassDeleteSuspected: entry.campaigns.filter((c) => c.massDelete).length,
       created: sum("created"), linked: sum("linked"), updated: sum("updated"), already: sum("already"),
       ambiguous: sum("ambiguous"), held: sum("held"), deferred: sum("deferred"), differs: sum("differs"), edited: sum("edited"),
@@ -1175,7 +1186,9 @@ function registerRoutes(app, requireStaff, get) {
   app.get("/api/notion-applicants/status", requireStaff(async (req, res) => {
     const g = get();
     const base = { enabled: !!g.applicants, reason: g.applicants ? "" : g.off,
-      intervalMin: g.applicants ? g.cfg.intervalMin : null, dryRun: g.applicants ? g.cfg.dryRun : null };
+      intervalMin: g.applicants ? g.cfg.intervalMin : null, dryRun: g.applicants ? g.cfg.dryRun : null,
+      /* the allow-list (ids only), and a warning when the job is on with no list */
+      pilot: PILOT.pilotStatus(g.cfg && g.cfg.pilot, { enabled: !!g.applicants, dryRun: !!(g.cfg && g.cfg.dryRun) }) };
     if (!g.applicants) return res.json({ ok: true, ...base, last: null, history: [] });
     try { base.state = await g.applicants.stateSummary(); } catch (err) { console.error("Notion applicants state read failed."); }
     let last = g.applicants.lastRun();
