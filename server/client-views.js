@@ -169,6 +169,11 @@ function buildClientView(db, campaignId, h) {
     const cr = byCreator[p.creatorId] || {};
     const bare = igHandle(cr.handle);
     const handle = bare ? "@" + bare : labelOf.get(keyOf(p)) || "Creator";
+    /* A TikTok link carries "@user" in its path. When the handle was refused
+       (the brand sees "Creator N") that path could carry the very name we
+       hid, so the link goes too. Instagram and YouTube post paths hold no handle. */
+    let contentUrl = postUrl(h.contentUrl(db, p), h.safeUrl);
+    if (!bare && contentUrl.indexOf("/@") !== -1) contentUrl = "";
     const m = String(h.visitSlot(p) || "").match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{1,2}:\d{2}))?/);
     const people = Math.floor(Number(p.headcount));
     return pick({
@@ -178,7 +183,7 @@ function buildClientView(db, campaignId, h) {
       visitDate: m ? m[1] : "",
       visitTime: m && m[2] ? m[2] : "",
       people: Number.isFinite(people) && people >= 1 && people <= 50 ? people : 0,
-      contentUrl: postUrl(h.contentUrl(db, p), h.safeUrl)
+      contentUrl
     }, CLIENT_ROW_FIELDS);
   }).filter(Boolean);
 
@@ -250,14 +255,17 @@ function createClientViews(deps) {
      newer view: when the stored builtRevision is higher, nothing matches and
      the upsert's insert hits the duplicate _id, which is ignored. Returns
      true when written, false when skipped because a newer view is there. */
-  async function writeView(views, linkId, built, revision, savedAt, force) {
+  async function writeView(views, linkId, built, revision, savedAt, force, reset) {
     const doc = { campaignId: built.campaignId, builtRevision: revision, builtAt: new Date(now()).toISOString(),
       sourceSavedAt: savedAt || null, payload: { campaign: built.campaign, counts: built.counts, rows: built.rows } };
     try {
       /* force (staff Rebuild): may replace a view of the SAME revision, but
          never a newer one (a save may have landed since Rebuild read the
          workspace). One upsert, so a failure leaves the previous copy. */
-      await views.updateOne({ _id: linkId, builtRevision: force ? { $lte: revision } : { $lt: revision } }, { $set: doc }, { upsert: true });
+      /* reset (staff, explicit): the stored revision is AHEAD of the workspace
+         (backup restore), so the revision guard is dropped for this one write. */
+      const filter = reset ? { _id: linkId } : { _id: linkId, builtRevision: force ? { $lte: revision } : { $lt: revision } };
+      await views.updateOne(filter, { $set: doc }, { upsert: true });
       return true;
     } catch (err) {
       if (err && err.code === 11000) return false;         /* a newer view is already there */
@@ -270,9 +278,9 @@ function createClientViews(deps) {
   async function rebuildFromDb(db, revision, savedAt, opts) {
     const c = await cols();
     if (!c) return { links: 0, written: 0, removed: 0, failed: 0, deferred: 0, skipped: 0, notConfigured: true };
-    const force = !!(opts && opts.force);
+    const reset = !!(opts && opts.reset), force = !!(opts && opts.force) || reset;
     const links = await c.links.find({}).toArray();
-    const out = { links: links.length, written: 0, removed: 0, failed: 0, deferred: 0, skipped: 0 };
+    const out = { links: links.length, written: 0, removed: 0, failed: 0, deferred: 0, skipped: 0, reset: 0 };
     const stale = [];
     /* pass 1: upsert every live view, one document at a time. Nothing is
        deleted here, so a failure midway cannot take a brand page down. */
@@ -282,7 +290,9 @@ function createClientViews(deps) {
         const built = live ? buildClientView(db, l.campaignId, h) : null;
         if (!built) { stale.push(l); continue; }
         built.campaignId = l.campaignId;
-        if (await writeView(c.views, l._id, built, revision, savedAt, force)) out.written++;
+        let ahead = false;
+        if (reset) { const old = await c.views.findOne({ _id: l._id }); ahead = !!(old && old.builtRevision > revision); }
+        if (await writeView(c.views, l._id, built, revision, savedAt, force, reset)) { out.written++; if (ahead) out.reset++; }
         else out.skipped++;                                 /* a newer view is already stored */
       } catch (err) { out.failed++; }
     }
@@ -446,8 +456,11 @@ function createClientViews(deps) {
           rows.push({ id: l._id, builtRevision: v ? v.builtRevision : null, builtAt: v ? v.builtAt : null,
             stale: !v || !(v.builtRevision >= wsRev) });
         }
+        const ahead = rows.filter((r) => Number.isFinite(r.builtRevision) && Number.isFinite(wsRev) && r.builtRevision > wsRev).length;
         return res.json({ ok: true, workspaceRevision: wsRev, projection: { ...state },
-          staleCount: rows.filter((r) => r.stale).length, links: rows });
+          staleCount: rows.filter((r) => r.stale).length, aheadCount: ahead,
+          note: ahead ? ahead + " view(s) are ahead of the workspace revision (usually after a backup restore). Plain Rebuild skips them. API only: POST /api/client-links/rebuild with {\"resetRevision\": true} rewrites them from the current workspace." : null,
+          links: rows });
       } catch (err) {
         log.error("GET /api/client-links/status failed:", err && err.message);
         return res.status(502).json({ error: "Could not reach the database." });
@@ -555,7 +568,8 @@ function createClientViews(deps) {
         const c = await cols();
         /* force: a rebuild may replace a same-revision view. Each view is one
            upsert and nothing is cleared first, so a failure keeps the old copy. */
-        const r = await rebuildFromDb(doc.db, rev, doc.savedAt, { force: true });
+        const reset = !!(req.body && req.body.resetRevision === true);   /* strict true; default unchanged */
+        const r = await rebuildFromDb(doc.db, rev, doc.savedAt, { force: true, reset });
         state.attempts++; state.lastAttemptAt = t0;
         state.lastCounts = { links: r.links, written: r.written, removed: r.removed, failed: r.failed, deferred: r.deferred || 0, skipped: r.skipped || 0 };
         if (r.failed) { state.failures++; state.lastError = r.failed + " view write(s) failed"; }
@@ -564,7 +578,8 @@ function createClientViews(deps) {
           if (!r.skipped) state.lastRevision = rev;          /* skipped: newer views exist, keep the higher mark */
         }
         return res.json({ ok: !r.failed, ...state.lastCounts, error: state.lastError,
-          note: r.skipped ? r.skipped + " view(s) left as they were: a newer save is already shown. Press Rebuild now again." : null });
+          ...(reset ? { resetRevision: true, reset: r.reset || 0 } : {}),
+          note: r.skipped ? r.skipped + " view(s) left as they were: a newer save is already shown. Press Rebuild now again. If this repeats and the status shows views ahead of the workspace (after a backup restore), ask engineering to run Rebuild with resetRevision." : null });
       } catch (err) {
         log.error("POST /api/client-links/rebuild failed:", err && err.message);
         return res.status(502).json({ error: "Could not rebuild." });

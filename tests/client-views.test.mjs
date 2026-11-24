@@ -896,3 +896,53 @@ test('REBUILD (force): when anything was skipped, views of links that look stale
     assert.equal(views.size, 1, 'with no skip the existing delete behaviour is unchanged');
   } finally { h.close(); }
 });
+
+
+/* ---------- review 41: TikTok link vs refused handle; explicit revision reset ---------- */
+
+test('TIKTOK (review 41 #2): a refused handle also drops a post link that carries @user; a valid handle keeps it; IG and YouTube links stay', () => {
+  const TT = 'https://www.tiktok.com/@kim.minji/video/7301234567890';
+  const row = (handle, url) => { const db = handleDb([handle]); db.socialContent = [{ participantId: 'pp0', url, postUrl: url }];
+    return CV.buildClientView(db, CAMP, helpers).rows[0]; };
+  const bad = row('Kim Minji', TT);
+  assert.equal(bad.handle, 'Creator 1');
+  assert.equal(bad.contentUrl, '', 'the planted real-name TikTok link is dropped');
+  assert.ok(!JSON.stringify(bad).includes('minji'), 'no trace of the name in the row');
+  assert.equal(row('@ok', TT).contentUrl, TT, 'valid handle: link kept as before');
+  assert.equal(row('Kim Minji', 'https://www.instagram.com/reel/Cabc123/').contentUrl, 'https://www.instagram.com/reel/Cabc123/');
+  assert.equal(row('Kim Minji', 'https://youtu.be/abcDEF12345').contentUrl, 'https://youtu.be/abcDEF12345');
+});
+
+test('REBUILD (review 41 #1): resetRevision rewrites views stored AHEAD of the workspace and reports the count; plain Rebuild still skips them', async () => {
+  const h = await harness();
+  try {
+    const a = await h.create(CAMP), b = await h.create(OTHER);          /* both at revision 5 */
+    const views = h.m.cols.client_views.docs;
+    for (const v of views.values()) { v.builtRevision = 99; v.payload.counts.posted = 777; }   /* backup restore: workspace is now 5 */
+    const plain = await h.call('/api/client-links/rebuild', { method: 'POST' });
+    assert.equal(plain.json.skipped, 2, 'default behaviour unchanged');
+    assert.equal(plain.json.written, 0);
+    assert.equal(plain.json.resetRevision, undefined);
+    assert.equal((await h.brand('/api/client/' + a.json.token)).json.counts.posted, 777);
+    const st = await h.call('/api/client-links/status');
+    assert.equal(st.json.aheadCount, 2);
+    assert.match(st.json.note || '', /resetRevision/);
+    for (const bodyVal of ['true', 1, 'yes']) {                           /* only the real boolean counts */
+      const r = await h.call('/api/client-links/rebuild', { method: 'POST', body: { resetRevision: bodyVal } });
+      assert.equal(r.json.skipped, 2, 'not a reset: ' + bodyVal);
+    }
+    assert.equal((await h.call('/api/client-links/rebuild', { method: 'POST', body: { resetRevision: true }, staff: false })).status, 401);
+    const r = await h.call('/api/client-links/rebuild', { method: 'POST', body: { resetRevision: true } });
+    assert.equal(r.status, 200);
+    assert.equal(r.json.ok, true);
+    assert.equal(r.json.resetRevision, true);
+    assert.equal(r.json.reset, 2, 'count of views that were ahead');
+    assert.equal(r.json.written, 2);
+    assert.equal(r.json.skipped, 0);
+    for (const v of views.values()) assert.equal(v.builtRevision, 5);
+    assert.notEqual((await h.brand('/api/client/' + a.json.token)).json.counts.posted, 777);
+    assert.notEqual((await h.brand('/api/client/' + b.json.token)).json.counts.posted, 777);
+    assert.equal(h.cv.state.lastRevision, 5);
+    assert.equal((await h.call('/api/client-links/status')).json.aheadCount, 0);
+  } finally { h.close(); }
+});
