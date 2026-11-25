@@ -40,14 +40,14 @@ export function ensureHomeStyles() {
   s.id = 'hmCss';
   s.textContent = `
   /* ---- the command band ---- */
-  .hm-band{background:var(--surface);border:1px solid var(--line);color:var(--text);border-radius:14px;padding:34px 30px 26px;margin-bottom:44px}
-  .hm-top{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:58px;align-items:start}
+  .hm-band{background:var(--surface);border:1px solid var(--line);color:var(--text);border-radius:var(--r-lg,14px);padding:34px 30px 26px;margin-bottom:var(--hm-gap-sec,44px)}
+  .hm-top{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:var(--hm-gap-top,58px);align-items:start}
   .hm-lab{font:500 12px/1.3 var(--font);color:var(--text-3)}
   .hm-big{font-size:clamp(56px,8vw,86px);font-weight:600;line-height:.92;letter-spacing:-.045em;
     margin-top:14px;font-variant-numeric:tabular-nums}
   .hm-cap{font-size:19px;font-weight:500;letter-spacing:-.02em;margin-top:10px}
   .hm-band .hm-sub{color:var(--text-3);font-size:13px;margin-top:7px}
-  .hm-sats{display:grid;grid-template-columns:1fr 1fr;gap:24px 44px;padding-left:38px;border-left:1px solid var(--line)}
+  .hm-sats{display:grid;grid-template-columns:1fr 1fr;gap:var(--hm-gap-sat-y,24px) var(--hm-gap-sat-x,44px);padding-left:var(--hm-sat-pad,38px);border-left:1px solid var(--line)}
   .hm-sat .l{font:500 12px/1.3 var(--font);color:var(--text-3)}
   .hm-sat .v{font-size:26px;font-weight:600;letter-spacing:-.028em;margin-top:8px;font-variant-numeric:tabular-nums}
   .hm-sat .s{font:400 12px/1.3 var(--font);color:var(--text-3);margin-top:5px}
@@ -70,13 +70,13 @@ export function ensureHomeStyles() {
   .hm-labs span{font:400 12px/1.3 var(--font);color:var(--text-3);text-align:center;min-width:28px}
 
   /* ---- sections, not boxes ---- */
-  .hm-flow{display:flex;flex-direction:column;gap:50px}
-  .hm-sec{display:flex;align-items:baseline;gap:12px;margin-bottom:17px}
+  .hm-flow{display:flex;flex-direction:column;gap:var(--hm-gap-flow,50px)}
+  .hm-sec{display:flex;align-items:baseline;gap:12px;margin-bottom:var(--hm-gap-head,17px)}
   .hm-sec h4{margin:0;font-size:15px;font-weight:600;letter-spacing:-.015em;white-space:nowrap}
   .hm-sec .ln{flex:1;height:1px;background:var(--line)}
   .hm-sec .m{font:400 12px/1.3 var(--font);color:var(--text-3);white-space:nowrap}
-  .hm-duo{display:grid;grid-template-columns:1.62fr 1fr;gap:44px;align-items:start}
-  .hm-note{font:400 11.5px/1.65 var(--font);color:var(--text-3);margin-top:15px}
+  .hm-duo{display:grid;grid-template-columns:1.62fr 1fr;gap:var(--hm-gap-duo,44px);align-items:start}
+  .hm-note{font:400 12px/1.65 var(--font);color:var(--text-3);margin-top:15px}
 
   /* ---- creator flow ---- */
   #hmFlow svg{width:100%;height:auto;display:block;overflow:visible}
@@ -93,7 +93,7 @@ export function ensureHomeStyles() {
   .hm-att .tx{font-size:13.5px;display:flex;align-items:baseline;gap:9px;min-width:0}
   .hm-att .tx b{font:600 15px/1 var(--font)}
   .hm-att .row.crit .tx b{color:var(--danger)}
-  .hm-att .row.warn .tx b{color:var(--warning)}
+  .hm-att .row.warn .tx b{color:var(--warn-ink)}
   .hm-att .tx span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .hm-att .row.done .tx,.hm-att .row.done .tx b{color:var(--text-3);font-weight:400}
   .hm-att .go{color:var(--text-3);font-size:13px;opacity:0;transition:opacity .14s ease}
@@ -113,31 +113,31 @@ export function ensureHomeStyles() {
   .hm-reg-row + .hm-reg-row{box-shadow:inset 0 1px 0 var(--line)}
   .hm-reg-row:hover{background:var(--surface-2)}
   .hm-reg-row .nm{font-size:13.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .hm-reg-row:hover .nm{color:var(--blue)}
+  .hm-reg-row:hover .nm{color:var(--blue-hi)}
   .hm-prog{display:flex;align-items:center;gap:10px}
   .hm-prog .t{flex:1;height:5px;border-radius:3px;background:var(--surface-3);overflow:hidden;min-width:40px}
   .hm-prog .f{height:100%;border-radius:3px;background:var(--s1)}
   .hm-prog .f.nil{background:var(--danger);width:2px}
-  .hm-prog .v{font:500 11.5px/1 var(--font);color:var(--text-2);white-space:nowrap}
+  .hm-prog .v{font:500 12px/1 var(--font);color:var(--text-2);white-space:nowrap}
   .hm-reg-row .fig{font:500 13px/1 var(--font);font-variant-numeric:tabular-nums}
-  .hm-reg-row .fig.na{color:var(--text-3);font-weight:400;font-size:10.5px}
-  .hm-more{margin-top:13px;font:500 12px/1 var(--font);color:var(--blue);cursor:pointer;
+  .hm-reg-row .fig.na{color:var(--text-3);font-weight:400;font-size:12px}
+  .hm-more{margin-top:13px;font:500 12px/1 var(--font);color:var(--blue-hi);cursor:pointer;
     padding:11px 12px;border-radius:8px;border:0;background:none}
   .hm-more:hover{background:var(--blue-soft)}
 
   /* ---- chips ---- */
-  .hm-chip{display:inline-flex;align-items:center;gap:6px;font:500 11px/1 inherit;padding:5px 9px;
+  .hm-chip{display:inline-flex;align-items:center;gap:6px;font:500 12px/1 var(--font);padding:5px 9px;
     border-radius:100px;white-space:nowrap}
   .hm-chip::before{content:'';width:5px;height:5px;border-radius:50%;background:currentColor;flex:0 0 5px}
-  .hm-ok{background:rgba(38,166,110,.12);color:var(--success)}
-  .hm-risk{background:rgba(220,76,76,.12);color:var(--danger)}
+  .hm-ok{background:var(--success-bg);color:var(--success)}
+  .hm-risk{background:var(--danger-bg-soft);color:var(--danger)}
   .hm-idle{background:var(--surface-3);color:var(--text-3)}
 
   /* ---- activity ---- */
   .hm-feed .e{display:grid;grid-template-columns:56px 1fr;gap:12px;padding:9px 0;font-size:13px}
   .hm-feed .e + .e{border-top:1px solid var(--line)}
   .hm-feed .d{font:400 12px/1.3 var(--font);color:var(--text-3)}
-  .hm-feed .w{color:var(--text-3);font-size:11.5px}
+  .hm-feed .w{color:var(--text-3);font-size:12px}
 
   .hm-blank{border-radius:10px;background:var(--surface-2);padding:22px;text-align:center;
     color:var(--text-3);font-size:12.5px;line-height:1.6}
@@ -195,8 +195,8 @@ export function flowSvg(flow) {
       <stop offset="1" stop-color="var(--s3)" stop-opacity=".62"/></linearGradient></defs>
     ${body}${nodes}
     <g font-family="inherit" font-size="21" font-weight="600" fill="var(--text)">${counts}</g>
-    <g font-family="inherit" font-size="10.5" fill="var(--text-3)">${labels}</g>
-    <g font-family="inherit" font-size="11">${losses}</g>
+    <g font-family="inherit" font-size="12" fill="var(--text-3)">${labels}</g>
+    <g font-family="inherit" font-size="12">${losses}</g>
   </svg>`;
 }
 
@@ -299,7 +299,7 @@ export function renderHome(view) {
               <span class="v">${num(c.confirmed)}/${c.target ? num(c.target) : '—'}</span></span>
             <span class="fig r${c.posts ? '' : ' na'}">${c.posts ? num(c.posts) : '—'}</span>
             <span class="fig r${c.views ? '' : ' na'}">${c.views ? num(c.views)
-              : c.unmeasured ? 'unmeasured' : '—'}</span>
+              : c.unmeasured ? 'No numbers yet' : '—'}</span>
             <span class="r"><span class="hm-chip ${HEALTH[c.health].cls}">${HEALTH[c.health].label}</span></span>
           </button>`).join('')}</div>
         ${reg.length > 9 ? `<button class="hm-more" id="hmRegMore">${

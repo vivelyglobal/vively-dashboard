@@ -272,50 +272,50 @@ export function ensureDeskStyles() {
   .dk-b{background:var(--surface);padding:12px 14px}
   .dk-b .lab{font-size:12px;color:var(--text-3)}
   .dk-b .big{font-size:26px;font-weight:600;line-height:1.15;margin-top:3px}
-  .dk-b .big.warn{color:var(--warning)} .dk-b .big.bad{color:#f08a8a}
-  .dk-b .cap{font-size:11.5px;color:var(--text-3)}
+  .dk-b .big.warn{color:var(--warn-ink)} .dk-b .big.bad{color:var(--danger)}
+  .dk-b .cap{font-size:12px;color:var(--text-3)}
   .dk-next{display:flex;gap:8px;overflow-x:auto;padding:2px 0 12px}
   .dk-nx{flex:0 0 auto;background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--s1);
     border-radius:var(--r);padding:8px 11px;min-width:166px}
   .dk-nx .t{font-size:15px;font-weight:600}
-  .dk-nx .m{font-size:11.5px;color:var(--text-3);margin-top:2px}
+  .dk-nx .m{font-size:12px;color:var(--text-3);margin-top:2px}
   .dk-days{display:flex;gap:6px;overflow-x:auto;padding:2px 0 10px}
   .dk-day{min-width:96px;flex:0 0 auto;background:var(--surface);border:1px solid var(--line);
     border-radius:var(--r);padding:8px 10px;cursor:pointer;text-align:left;color:var(--text);font:inherit}
   .dk-day.on{border-color:var(--blue);background:var(--blue-soft)}
-  .dk-day .d{font-size:11.5px;color:var(--text-3)} .dk-day .n{font-size:15px;font-weight:600;margin-top:2px}
-  .dk-day .w{font-size:11px;margin-top:2px;color:var(--warning)}
+  .dk-day .d{font-size:12px;color:var(--text-3)} .dk-day .n{font-size:15px;font-weight:600;margin-top:2px}
+  .dk-day .w{font-size:12px;margin-top:2px;color:var(--warn-ink)}
   .dk-q{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;border-bottom:1px solid var(--line)}
   .dk-q:last-child{border-bottom:0}
-  .dk-q .ic{width:22px;height:22px;flex:0 0 22px;border-radius:6px;display:grid;place-items:center;font-size:11px;margin-top:1px}
-  .dk-q .t{font-size:12.5px} .dk-q .why{font-size:11.5px;color:var(--text-3);margin-top:2px}
+  .dk-q .ic{width:22px;height:22px;flex:0 0 22px;border-radius:6px;display:grid;place-items:center;font-size:12px;margin-top:1px}
+  .dk-q .t{font-size:12.5px} .dk-q .why{font-size:12px;color:var(--text-3);margin-top:2px}
   .dk-q .act{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
   .dk-grid{display:grid;gap:1px;background:var(--line);border:1px solid var(--line);
     border-radius:var(--r-lg);overflow:hidden;margin-top:14px}
   .dk-cell{background:var(--surface);padding:8px 9px;min-height:44px;display:flex;flex-direction:column;gap:5px}
   .dk-head{background:var(--surface-2);padding:10px}
   .dk-head .v{font-weight:600;font-size:13px}
-  .dk-head .m{font-size:11.5px;color:var(--text-3);margin-top:2px}
-  .dk-time{background:var(--surface-2);color:var(--text-3);font-size:11.5px;padding:8px;text-align:right;white-space:nowrap}
+  .dk-head .m{font-size:12px;color:var(--text-3);margin-top:2px}
+  .dk-time{background:var(--surface-2);color:var(--text-3);font-size:12px;padding:8px;text-align:right;white-space:nowrap}
   .dk-bk{background:var(--surface-2);border:1px solid var(--line);border-left:3px solid var(--s1);
     border-radius:6px;padding:6px 8px;font-size:12px;cursor:grab}
   .dk-bk:hover{border-color:var(--line-strong)}
   .dk-bk.dragging{opacity:.4}
   .dk-bk.warn{border-left-color:var(--warning)} .dk-bk.bad{border-left-color:var(--critical)}
   .dk-bk .h{font-weight:500;display:flex;gap:5px;align-items:center;flex-wrap:wrap}
-  .dk-bk .m{color:var(--text-3);font-size:11px;margin-top:3px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  .dk-bk .m{color:var(--text-3);font-size:12px;margin-top:3px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
   .dk-bk .acts{display:flex;gap:4px;margin-top:5px;flex-wrap:wrap}
-  .dk-free{border:1px dashed var(--line-strong);border-radius:6px;color:var(--text-3);font-size:11.5px;
+  .dk-free{border:1px dashed var(--line-strong);border-radius:6px;color:var(--text-3);font-size:12px;
     padding:5px 8px;text-align:center;cursor:pointer;background:none;font:inherit;width:100%}
   .dk-free:hover{color:var(--blue-hi);border-color:var(--blue)}
   .dk-free.full{opacity:.4;cursor:default}
-  .dk-shut{color:var(--text-3);font-size:11.5px;font-style:italic}
+  .dk-shut{color:var(--text-3);font-size:12px;font-style:italic}
   .dk-pr{display:grid;grid-template-columns:210px 1fr;gap:10px;padding:9px 12px;border-bottom:1px solid var(--line)}
   .dk-pr:last-child{border-bottom:0}
   .dk-chips{display:flex;gap:6px;flex-wrap:wrap}
-  .dk-chip{background:var(--surface-2);border:1px solid var(--line);border-radius:999px;padding:2px 9px;font-size:11.5px}
-  .dk-chip.clash{border-color:rgba(250,178,25,.5);color:#f5c451}
-  .dk-stale{background:rgba(250,178,25,.12);border:1px solid rgba(250,178,25,.4);color:#f5c451;
+  .dk-chip{background:var(--surface-2);border:1px solid var(--line);border-radius:999px;padding:2px 9px;font-size:12px}
+  .dk-chip.clash{border-color:var(--warn-line-2);color:var(--warn-ink)}
+  .dk-stale{background:var(--warn-bg);border:1px solid var(--warn-line);color:var(--warn-ink);
     border-radius:var(--r);padding:8px 12px;font-size:12.5px;margin-bottom:10px;display:flex;gap:10px;align-items:center}
   @media(max-width:1000px){.dk-band{grid-template-columns:repeat(2,1fr)}}
   @media(max-width:820px){
@@ -407,7 +407,7 @@ export function renderDesk(view, item) {
       </div>
       <button class="btn sm" id="dkReload" title="Read every campaign's bookings again">Refresh</button>
     </div>
-    <div style="font-size:11.5px;color:var(--text-3);margin:-4px 0 8px">
+    <div style="font-size:12px;color:var(--text-3);margin:-4px 0 8px">
       Read ${DESK.at ? DESK.at.toLocaleTimeString() : '—'} · Korea time · ← → to change the day
     </div>
 
@@ -449,8 +449,8 @@ export function deskQueueHtml(cs, chores, day) {
     <div style="padding:11px 12px;border-bottom:1px solid var(--line);font-size:12.5px;color:var(--text-2)">
       <strong style="color:var(--text)">${total} thing${total === 1 ? '' : 's'} need a person</strong> · ${esc(deskLabel(day))}</div>
     ${cs.map((c) => `<div class="dk-q">
-      <div class="ic" style="background:${c.bad ? 'rgba(208,59,59,.2)' : 'rgba(250,178,25,.18)'};
-        color:${c.bad ? '#f08a8a' : '#f5c451'}">${c.bad ? '!' : '•'}</div>
+      <div class="ic" style="background:${c.bad ? 'var(--danger-bg)' : 'var(--warn-bg-2)'};
+        color:${c.bad ? 'var(--danger)' : 'var(--warn-ink)'}">${c.bad ? '!' : '•'}</div>
       <div style="flex:1;min-width:0"><div class="t">${esc(c.text)}</div><div class="why">${esc(c.why)}</div>
         ${c.bookingId ? `<div class="act">
           <button class="btn xs" data-dkmove="${esc(c.bookingId)}">Move this one</button>
@@ -540,7 +540,7 @@ export function deskPeopleHtml() {
       r.list.forEach((b) => { (byDay[b.date] = byDay[b.date] || []).push(b); });
       return `<div class="dk-pr">
         <div><div style="font-weight:500">${esc(r.who.handle)} ${r.who.flag ? flagMark(r.who.cr) : ''}</div>
-          <div style="font-size:11.5px;color:var(--text-3)">${r.list.length} booking${r.list.length === 1 ? '' : 's'}
+          <div style="font-size:12px;color:var(--text-3)">${r.list.length} booking${r.list.length === 1 ? '' : 's'}
             · ${camps.size} campaign${camps.size === 1 ? '' : 's'}</div>
           ${camps.size > 1 ? '<span class="pill blue" style="margin-top:4px">in more than one</span>' : ''}</div>
         <div class="dk-chips">${r.list.slice().sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))

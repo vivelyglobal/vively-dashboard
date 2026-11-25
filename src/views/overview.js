@@ -149,7 +149,7 @@ export function ensureTodayStyles() {
   .td-bar .f{display:block;height:100%;border-radius:3px;background:var(--s1)}
   .td-bar .v{font-size:12px;color:var(--text-2);min-width:34px;text-align:right;font-variant-numeric:tabular-nums}
   .td-mix{display:flex;gap:5px;flex-wrap:wrap}
-  .td-mix span{font-size:11.5px;padding:3px 7px;border-radius:100px;background:var(--surface-2);color:var(--text-2);
+  .td-mix span{font-size:12px;padding:3px 7px;border-radius:100px;background:var(--surface-2);color:var(--text-2);
     white-space:nowrap;font-variant-numeric:tabular-nums}
   .td-mix span.z{opacity:.4}
   .td-mix i{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:5px;font-style:normal}
@@ -159,9 +159,9 @@ export function ensureTodayStyles() {
   .td-days .r:first-child{border-top:0}
   .td-days .r:hover{background:var(--surface-2)}
   .td-days .dy{font-size:13.5px;font-weight:550}
-  .td-days .dy small{display:block;font-size:11.5px;font-weight:400;color:var(--blue);margin-top:2px}
+  .td-days .dy small{display:block;font-size:12px;font-weight:400;color:var(--blue-hi);margin-top:2px}
   .td-days .n{font-size:13px;font-variant-numeric:tabular-nums}
-  .td-days .n small{display:block;font-size:11.5px;color:var(--text-3)}
+  .td-days .n small{display:block;font-size:12px;color:var(--text-3)}
   .td-note{font-size:12px;color:var(--text-3);padding:11px 16px;border-top:1px solid var(--line)}
   .td-empty{padding:26px 18px;text-align:center;color:var(--text-3);font-size:13px}
   .td-two{display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start}
@@ -601,7 +601,7 @@ export function ovPipeline(view, tab, act) {
         <td class="num">${num(c.n)}</td>
         <td class="num">${i ? pct(c.n / (f.counts[i - 1].n || 1), 0) : '—'}</td>
         <td class="num">${pct(c.n / (f.counts[0].n || 1), 0)}</td></tr>`).join('')}
-        <tr><td class="strong" style="color:#f08a8a">Dropped</td><td style="color:var(--text-3);font-size:12.5px">Declined, ghosted or removed by the brand</td>
+        <tr><td class="strong" style="color:var(--danger)">Dropped</td><td style="color:var(--text-3);font-size:12.5px">Declined, ghosted or removed by the brand</td>
         <td class="num">${num(f.dropped)}</td><td class="num">—</td><td class="num">${pct(f.dropped / (f.total || 1), 0)}</td></tr>
       </tbody></table></div></div>`;
     return;

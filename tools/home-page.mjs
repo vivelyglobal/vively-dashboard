@@ -137,8 +137,8 @@ await step('an unmeasured campaign says so instead of scoring zero', atHome(asyn
   /* a campaign with posts but no readings must never render "0" in the
      views column — the two are not the same claim */
   const t = await p.$eval('#hmRegister', (e) => e.textContent);
-  if (/unmeasured/.test(t) === false && cells.includes('0'))
-    throw new Error('a zero appears in the register with no "unmeasured" anywhere to explain it');
+  if (/unmeasured|No numbers yet/.test(t) === false && cells.includes('0'))
+    throw new Error('a zero appears in the register with no "No numbers yet" anywhere to explain it');
 }));
 
 await step('a register row opens that campaign', atHome(async () => {

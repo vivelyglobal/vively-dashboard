@@ -178,12 +178,12 @@ export function renderNotionImportStep3() {
       <thead><tr><th>Row</th><th>Creator</th><th>Name</th><th class="num">Followers</th><th>Notion status</th><th>Stage</th><th>Notes</th></tr></thead>
       <tbody>${st.parsed.slice(0, 200).map((r) => `<tr${r.issues.length ? ' style="background:rgba(250,178,25,.05)"' : ''}>
         <td style="color:var(--text-3)">${r.rowNo}</td>
-        <td>${r.handle ? `<span class="strong">${esc(r.handle)}</span><div style="font-size:11px;color:var(--text-3)">${esc(r.platform)}</div>` : '<span style="color:#f08a8a">—</span>'}</td>
+        <td>${r.handle ? `<span class="strong">${esc(r.handle)}</span><div style="font-size:11px;color:var(--text-3)">${esc(r.platform)}</div>` : '<span style="color:var(--danger)">—</span>'}</td>
         <td>${esc(r.fullName)}</td>
         <td class="num">${r.followers ? num(r.followers) : '—'}</td>
         <td><span class="tag">${esc(r.statusRaw || '(blank)')}</span></td>
         <td>${stagePill(r.stage)}</td>
-        <td style="font-size:11.5px;color:#f5c451">${r.issues.map(esc).join('; ')}</td></tr>`).join('')}</tbody></table></div>
+        <td style="font-size:11.5px;color:var(--warn-ink)">${r.issues.map(esc).join('; ')}</td></tr>`).join('')}</tbody></table></div>
     ${st.parsed.length > 200 ? `<div style="font-size:12px;color:var(--text-3);margin-top:6px">Showing the first 200 of ${st.parsed.length} rows. All of them will import.</div>` : ''}
 
     <div class="divider"></div>

@@ -48,7 +48,7 @@ export function openAppointmentForm(existing) {
       <button class="btn primary" id="apSave">${existing ? 'Save changes' : 'Add appointment'}</button>
       <button class="btn" onclick="closeDrawer()">Cancel</button>
       <div style="flex:1"></div>
-      ${existing ? `<button class="btn" id="apDelete" style="color:#f08a8a;border-color:rgba(208,59,59,.4)">Delete</button>` : ''}
+      ${existing ? `<button class="btn" id="apDelete" style="color:var(--danger);border-color:rgba(208,59,59,.4)">Delete</button>` : ''}
     </div>`, true);
 
   $('#apSave').addEventListener('click', () => {

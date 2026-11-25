@@ -251,14 +251,14 @@ export function settingsSheetMetrics(view) {
       <div class="field" style="margin-top:14px"><label>Master Sheet link</label>
         <input type="text" id="smBase" value="${esc(SM.base)}" placeholder="https://docs.google.com/spreadsheets/d/…"/></div>
       <div class="grid g3" style="gap:10px">
-        <div class="field"><label>post_er in the Sheet</label>
+        <div class="field"><label>Engagement rate is written as</label>
           <select id="smEr">
             <option value="percent" ${SM.erUnit === 'percent' ? 'selected' : ''}>Percent — 4.2 means 4.2%</option>
             <option value="decimal" ${SM.erUnit === 'decimal' ? 'selected' : ''}>Decimal — 0.042 means 4.2%</option>
           </select></div>
         <div class="field"><label>A zero in the Sheet</label>
           <select id="smZero">
-            <option value="skip" ${SM.skipZero ? 'selected' : ''}>Treat as blank — keep what we have</option>
+            <option value="skip" ${SM.skipZero ? 'selected' : ''}>Ignore zeros (the scraper often means 'not read')</option>
             <option value="take" ${SM.skipZero ? '' : 'selected'}>Take it literally</option>
           </select></div>
         <div class="field"><label>Posts the library hasn't seen</label>
@@ -304,7 +304,7 @@ export function settingsSheetMetrics(view) {
       <div class="card-head"><h3>Read and preview</h3></div>
       <p class="card-sub">Nothing is written until you have seen what would change.</p>
       <div style="display:flex;gap:8px;margin-top:12px">
-        <button class="btn primary" id="smDry" ${SM.base ? '' : 'disabled'}>Read the Sheet</button>
+        <button class="btn primary" id="smDry" ${SM.base ? '' : 'disabled'}>Check the sheet for new numbers</button>
         <button class="btn" id="smCheck" ${SM.base ? '' : 'disabled'}>Check the columns</button>
       </div>
       <div id="smOut" style="margin-top:14px"></div>
@@ -476,7 +476,7 @@ export function renderSheetMetricsPreview() {
       <p class="card-sub">${cr.updates.length} to update · ${cr.unmatched.length} not in the database — never created</p>` : ''}
     <div style="display:flex;gap:8px;margin-top:10px">
       <button class="btn primary" id="smApply" ${(updates + creates + cr.updates.length) ? '' : 'disabled'}>
-        Apply: update ${updates}, add ${creates}${d.creators ? ', ' + cr.updates.length + ' profiles' : ''}</button>
+        Save ${updates} update${updates === 1 ? '' : 's'} and add ${creates} post${creates === 1 ? '' : 's'}${d.creators ? ' and ' + cr.updates.length + ' profile update' + (cr.updates.length === 1 ? '' : 's') : ''}</button>
       <button class="btn" id="smDiscard">Discard</button>
     </div>`;
 

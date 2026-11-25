@@ -623,7 +623,7 @@ export function openEditCampaign(cp) {
       <button class="btn primary" id="ecSave">Save changes</button>
       <button class="btn" onclick="closeDrawer()">Cancel</button>
       <div style="flex:1"></div>
-      <button class="btn" id="ecDelete" style="color:#f08a8a;border-color:rgba(208,59,59,.4)">Delete campaign</button>
+      <button class="btn" id="ecDelete" style="color:var(--danger);border-color:rgba(208,59,59,.4)">Delete campaign</button>
     </div>`, true);
   $('#ecSave').addEventListener('click', () => {
     const bad = [['sheet', '#ecSheetUrl'], ['guideline', '#ecGuideUrl']].map(([k, sel]) => [hubCheckLink($(sel).value, k), sel]).find(([r]) => !r.ok);

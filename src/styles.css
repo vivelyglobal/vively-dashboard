@@ -44,6 +44,24 @@
   --serious:  #ec835a;
   --critical: #d03b3b;
 
+  /* status as TEXT and its tints. --warning/--good/--critical stay for
+     fills and chart marks; these are the ones safe to set words in.
+     Light values are re-measured in tests/tokens-brand-skin.test.mjs. */
+  --danger:       #f08a8a;
+  --success:      #6fce6f;
+  --warn-ink:     #f5c451;
+  --danger-bg:    rgba(208,59,59,.20);
+  --danger-bg-soft: rgba(220,76,76,.12);
+  --success-bg:   rgba(38,166,110,.12);
+  --warn-bg:      rgba(250,178,25,.12);
+  --warn-bg-2:    rgba(250,178,25,.18);
+  --warn-line:    rgba(250,178,25,.40);
+  --warn-line-2:  rgba(250,178,25,.50);
+  /* names older rules read without a fallback */
+  --amber:  var(--warn-ink);
+  --red:    var(--danger);
+  --accent: var(--blue);
+
   --grid:     #2c2c2a;
   --axis:     #383835;
   --muted-ink:#898781;
@@ -61,6 +79,9 @@
   --r-lg:14px;
   --r-pill: 999px;
   --rail: 232px;
+
+  /* spacing scale shared by Home and the Desk */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px; --sp-7: 48px;
 }
 
 /* ---------------------------- light theme ----------------------------
@@ -91,6 +112,17 @@
 
   --s1: #1a73e8;  --s2: #e8710a;  --s3: #1baf7a;  --s4: #eda100;
   --s5: #a06ee0;  --s6: #c5221f;  --s7: #0097a7;
+
+  --danger:       #b42318;
+  --success:      #0b6b1f;
+  --warn-ink:     #8a5a00;
+  --danger-bg:    rgba(180,35,24,.10);
+  --danger-bg-soft: rgba(180,35,24,.09);
+  --success-bg:   rgba(11,107,31,.10);
+  --warn-bg:      rgba(234,161,0,.13);
+  --warn-bg-2:    rgba(234,161,0,.18);
+  --warn-line:    rgba(234,161,0,.45);
+  --warn-line-2:  rgba(234,161,0,.55);
 
   --grid:     #e8eaed;
   --axis:     #dadce0;
@@ -1132,6 +1164,139 @@ tr.preferred-row td:first-child { box-shadow: inset 3px 0 0 var(--good); }
   .g2, .g4, .g6 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .card.stat .value { font-size: 20px; }
 }
+/* ==== VIVELY-SKIN:BEGIN ===== brand skin v1 (designer spec phases 1 + 7) =====
+   ONE block. Delete everything from BEGIN to END and the dashboard returns to
+   the purple, warm-grey, 9/14px-radius look it had before; nothing outside
+   this block depends on it (each Home spacing rule reads its own token with
+   the old pixel value as the fallback).
+   What stays when this block is removed: the status text tokens, the 12px
+   text floor, the microcopy, and the token-based Desk and Home colours.
+   Brand blue is ESTIMATED from a screenshot description: founder to confirm
+   the exact hex, then change --blue and --blue-hi here and nowhere else. */
+:root {
+  --blue:          #4d8dff;
+  --blue-hi:       #7aa7ff;
+  --blue-soft:     rgba(77,141,255,0.14);
+  --blue-soft-2:   rgba(77,141,255,0.24);
+
+  --r-sm: 6px;
+  --r:    10px;
+  --r-lg: 16px;
+  --r-inner: calc(var(--r-lg) - var(--sp-2));   /* concentric: card 16 - padding 8 = 8 */
+
+  --shadow-1: none;                              /* dark cards: border only */
+  --shadow-2: 0 8px 24px rgba(0,0,0,.40);
+
+  --fs-eyebrow: 12px;  --fs-caption: 12px;  --fs-body: 14px;
+  --fs-card-title: 15px;  --fs-kpi: 28px;
+  --fs-title: 28px;  --fs-title-phone: 24px;
+  --ease: 150ms ease;
+  --hit: 40px;
+
+  /* Home on the Desk's spacing scale (the old values are the fallbacks) */
+  --hm-gap-sec:   var(--sp-6);
+  --hm-gap-flow:  var(--sp-6);
+  --hm-gap-top:   var(--sp-7);
+  --hm-gap-duo:   var(--sp-6);
+  --hm-gap-sat-y: var(--sp-5);
+  --hm-gap-sat-x: var(--sp-6);
+  --hm-sat-pad:   var(--sp-6);
+  --hm-gap-head:  var(--sp-4);
+}
+:root[data-theme="light"] {
+  --bg:            #f6f7f9;
+  --surface:       #ffffff;
+  --surface-2:     #f1f2f4;
+  --surface-3:     #e6e8eb;
+  --line:          rgba(17,17,17,0.10);
+  --line-strong:   rgba(17,17,17,0.20);
+
+  --text:          #111111;
+  --text-2:        #555555;
+  --text-3:        #666666;   /* 5.74:1 on white, 4.68:1 on --surface-3 */
+
+  --blue:          #0b63f6;
+  --blue-hi:       #0a52cf;   /* text and hover on light: 6.73:1 on white */
+  --blue-soft:     rgba(11,99,246,0.09);
+  --blue-soft-2:   rgba(11,99,246,0.18);
+
+  --shadow-1: 0 1px 2px rgba(17,17,17,.05);
+  --shadow-2: 0 8px 24px rgba(17,17,17,.08);
+}
+
+/* type helpers (built for Home, Performance and Reports; not applied yet) */
+.eyebrow { font-size: var(--fs-eyebrow); font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--text-3); margin: 0 0 var(--sp-2); }
+.page-title { font-size: var(--fs-title); font-weight: 700; letter-spacing: -.03em; line-height: 1.15;
+  margin: 0; color: var(--text); text-wrap: balance; }
+.page-title .soft { color: var(--text-2); }
+.card-head h3 { font-size: var(--fs-card-title); }
+.card-head h3, .hub-brand, .hub-h, .hm-cap, .td-head h2, .hm-sec h4, .so-sec h4 { text-wrap: balance; }
+.card-sub, .hub-sub, .hub-next, .hub-msg, .hm-note, .note { text-wrap: pretty; }
+.stat .value, .dk-b .big, .hm-sat .v, .hm-big, .td-bar .v { font-variant-numeric: tabular-nums; }
+
+/* buttons: pills, solid blue primary with the on-accent label */
+.btn, .btn.sm, .btn.xs { border-radius: var(--r-pill); }
+.btn { position: relative;
+  transition: background-color var(--ease), border-color var(--ease), color var(--ease), transform var(--ease); }
+.btn.primary { background: var(--blue); border-color: var(--blue); color: var(--on-accent); }
+:root[data-theme="light"] .btn.primary:hover { filter: none; background: var(--blue-hi); border-color: var(--blue-hi); }
+:root[data-theme="light"] .pill.blue { border-color: rgba(11,99,246,.35); }
+
+/* cards */
+.card { border-radius: var(--r-lg); }
+.card .card { border-radius: var(--r-inner); }
+:root[data-theme="light"] .card { box-shadow: var(--shadow-1); }
+
+/* segmented control: the active chip is white and lifted in light */
+:root[data-theme="light"] .seg button.active,
+:root[data-theme="light"] .so-seg button[aria-pressed="true"] { background: var(--surface); box-shadow: var(--shadow-1); }
+.seg button, .so-seg button, .chip, .rail-item, .tab {
+  transition: background-color var(--ease), border-color var(--ease), color var(--ease), transform var(--ease); }
+
+/* touch targets: the box can stay small, the clickable area grows to --hit
+   (40px, 44px on a phone) from a pseudo-element that is only ever taller */
+.btn.xs, .btn.sm, .chip, .pl-chip, .seg button, .so-seg button { position: relative; }
+.btn.xs::after, .btn.sm::after, .chip::after, .pl-chip::after, .seg button::after, .so-seg button::after {
+  content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 100%; min-height: var(--hit);
+  transform: translateY(-50%); }
+
+/* press feedback */
+.btn:active, .chip:active, .pl-chip:active, .seg button:active, .so-seg button:active,
+.rail-item:active, .icon-btn:active { transform: scale(.97); }
+.btn:disabled:active { transform: none; }
+
+/* one keyboard focus ring, the brand blue, on everything that can be tabbed to */
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; box-shadow: none; }
+.card-link:focus-visible::after { outline: 2px solid var(--blue); outline-offset: 2px; }
+.card[tabindex]:focus-visible, .card[role="button"]:focus-visible, .card[role="link"]:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+/* inside a clipped or scrolling strip the ring is drawn inward, or it is cut off */
+.rail-item:focus-visible, .panel-item:focus-visible, .mbar a:focus-visible, .subnav a:focus-visible,
+.hm-reg-row:focus-visible, .dk-day:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.tab:focus-visible { outline: 2px solid var(--blue); outline-offset: -3px; }
+
+/* light theme: text that was written for the dark surface */
+:root[data-theme="light"] .save-badge.warn,
+:root[data-theme="light"] .note.warn strong,
+:root[data-theme="light"] .pl-why.amber,
+:root[data-theme="light"] .pl-group.warn,
+:root[data-theme="light"] .pl-age.warm { color: var(--warn-ink); }
+:root[data-theme="light"] .pl-why,
+:root[data-theme="light"] .pl-age.hot { color: var(--danger); }
+:root[data-theme="light"] .pl-chip.on { color: var(--blue-hi); }
+
+@media (max-width: 760px) {
+  :root { --hit: 44px; }
+  .page-title { font-size: var(--fs-title-phone); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .btn, .seg button, .so-seg button, .chip, .rail-item, .tab { transition: none; }
+  .btn:active, .chip:active, .pl-chip:active, .seg button:active, .so-seg button:active,
+  .rail-item:active, .icon-btn:active { transform: none; }
+}
+/* ==== VIVELY-SKIN:END ==== */
 @media print {
   .rail, .panel, .topbar, .tabbar, .no-print { display: none !important; }
   body { background: #fff; color: #111; }
