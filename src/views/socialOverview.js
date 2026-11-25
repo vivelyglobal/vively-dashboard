@@ -5,7 +5,7 @@ import { DB, notify } from '../model/db.js';
 import { OVERVIEW_METRICS, byCampaignRollup, byMarketRollup, byPlatformRollup, engagementSplit, overviewCoverage, overviewFilter, overviewKpis, overviewRows, overviewSeries, topContent, unmappedCountries, viewDistribution } from '../model/socialStats.js';
 import { SM } from '../sync/sheetMetrics.js';
 import { $, $$, esc } from '../ui/dom.js';
-import { emptyState } from '../ui/html.js';
+import { downloadFile, emptyState } from '../ui/html.js';
 import { ensureDeskStyles } from './desk.js';
 import { showSocialContent } from './social.js';
 
@@ -192,6 +192,7 @@ export function perfReset() {
   Object.assign(PERF, { gen: PERF.gen + 1, status: null, snapResp: null, problem: null, at: 0, loading: null,
     campaign: '', platform: '', period: 'all', metric: 'views', sort: { key: 'posted', dir: 'desc' }, limit: 100,
     refresh: { busy: false, text: '' }, matchMsg: {}, picks: {} });
+  rbReset();
 }
 
 /* ---- small, strict readers ---- */
@@ -951,6 +952,578 @@ export function perfWire(root) {
     else return;
     PERF.limit = 100; perfPaint();
   });
+}
+
+/* ============================================================
+   REPORTS: THE REPORT BUILDER (#/overview/report), staff only
+
+   Reads the same cached snapshot as Social > Performance (perfLoad) and
+   turns it into a report page you can check, export as CSV and print.
+   It is not shared with anyone from here: no public link, no email, no
+   share button. A report that goes to a brand needs counsel's answer first.
+
+   Rules the code keeps:
+   - the report is built from a short whitelist: campaign name, platform,
+     handle, post link, type, posted date, six counts, rate, reading time.
+     Creator names, emails, contacts, rates, amounts, budgets, notes, cost
+     figures, the sheet address, Notion links and internal ids are never read
+   - every string goes through esc (page) or rbCsvText (file); a cell that
+     starts with = + - @ gets an apostrophe in front of it
+   - a number nobody read is "—" (blank in the CSV), never 0
+   - the report sheet is always light (paper), whatever the app theme
+   - printing shows the report and nothing else: no controls, no staff note
+   ============================================================ */
+
+export const RB_COLS = ['campaign', 'platform', 'handle', 'post URL', 'type', 'posted date', 'views', 'likes', 'comments', 'shares', 'saves', 'reposts', 'ER', 'last reading time'];
+export const RB_PERIODS = [['all', 'All time'], ['30', 'Last 30 days'], ['custom', 'Custom dates']];
+export const RB_METRICS = [['views', 'Views'], ['likes', 'Likes'], ['comments', 'Comments'], ['shares', 'Shares'], ['saves', 'Saves'],
+  ['reposts', 'Reposts'], ['er', 'Average ER'], ['count', 'Posts']];
+export const RB_SORTS = [['newest', 'Newest posted first', { key: 'posted', dir: 'desc' }], ['oldest', 'Oldest posted first', { key: 'posted', dir: 'asc' }],
+  ['views', 'Most views', { key: 'views', dir: 'desc' }], ['likes', 'Most likes', { key: 'likes', dir: 'desc' }],
+  ['er', 'Highest ER', { key: 'er', dir: 'desc' }], ['creator', 'Handle A to Z', { key: 'creator', dir: 'asc' }]];
+export const RB_NONE = '__not_linked__';
+export const RB_MAX_ROWS = 1500;
+export const RB_BLOCKED_HOST = /(^|\.)(docs\.google\.com|drive\.google\.com|sheets\.google\.com|notion\.so|notion\.site|notion\.com)$/i;
+export const RB_TRACKING = ['igsh', 'igshid', 'fbclid', 'si', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content'];
+
+/* what the builder remembers between repaints; cleared on sign-in and sign-out (perfReset) */
+export const RBT = { sel: new Set(), period: 'all', from: '', to: '', metric: 'views', sort: 'newest', msg: '', hooked: false };
+export function rbReset() {
+  Object.assign(RBT, { sel: new Set(), period: 'all', from: '', to: '', metric: 'views', sort: 'newest', msg: '' });
+}
+
+/* ---- strict readers ---- */
+export const rbCount = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
+/* one line of plain text: control characters and line breaks become spaces */
+export const rbLine = (v, max) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max || 200) : '');
+/* a post link without sharing-tracking parts, and never a link into the sheet or Notion */
+export function rbTidyUrl(u) {
+  if (!u) return '';
+  try {
+    const x = new URL(u);
+    if (RB_BLOCKED_HOST.test(x.hostname)) return '';
+    RB_TRACKING.forEach((k) => x.searchParams.delete(k));
+    x.hash = '';
+    return x.href;
+  } catch (e) { return ''; }
+}
+export function rbUrlLabel(u) {
+  try {
+    const x = new URL(u);
+    const s = x.hostname.replace(/^www\./i, '') + x.pathname.replace(/\/$/, '');
+    return s.length > 44 ? s.slice(0, 43) + '…' : s;
+  } catch (e) { return ''; }
+}
+export function rbCleanPost(p) {
+  const b = perfCleanPost(p);
+  if (!b) return null;
+  const t = Date.parse(b.scraped);
+  return Object.assign(b, {
+    url: rbTidyUrl(b.url), handle: rbLine(b.handle, 80), platform: rbLine(b.platform, 40), type: rbLine(p.type, 40),
+    scraped: Number.isFinite(t) ? new Date(t).toISOString() : '',
+    comments: rbCount(p.comments), shares: rbCount(p.shares), saves: rbCount(p.saves), reposts: rbCount(p.reposts)
+  });
+}
+
+/* ---- what can be chosen: sheet campaigns that have posts, named like the dashboard names them when matched ---- */
+export function rbOptions(posts, camps, dashBy) {
+  const count = new Map();
+  let none = 0;
+  posts.forEach((p) => { if (p.campaignId) count.set(p.campaignId, (count.get(p.campaignId) || 0) + 1); else none++; });
+  const out = camps.filter((c) => count.get(c.id)).map((c) => {
+    const d = c.state === 'matched' && c.dashId ? dashBy.get(c.dashId) : null;
+    const brand = rbLine(d && d.brand, 80), name = rbLine((d && d.name) || c.name, 120) || 'Unnamed campaign';
+    return { id: c.id, brand, name, label: brand ? brand + ' · ' + name : name, posts: count.get(c.id) };
+  }).sort((a, b) => a.label.localeCompare(b.label));
+  if (none) out.push({ id: RB_NONE, brand: '', name: 'Not linked to a campaign', label: 'Not linked to a campaign', posts: none });
+  return out;
+}
+export function rbRange(ui, nowMs) {
+  if (ui.period === '30') {
+    const from = new Date(nowMs - 29 * 86400000).toISOString().slice(0, 10);
+    return { mode: '30', from, to: '', error: '', label: 'Last 30 days: posted from ' + from };
+  }
+  if (ui.period === 'custom') {
+    const from = perfDay(ui.from), to = perfDay(ui.to);
+    if (from && to && from > to) return { mode: 'custom', from, to, error: 'The start date is after the end date.', label: '' };
+    return { mode: 'custom', from, to, error: '',
+      label: from && to ? 'Posted ' + from + ' to ' + to : from ? 'Posted from ' + from : to ? 'Posted up to ' + to : 'All posted dates' };
+  }
+  return { mode: 'all', from: '', to: '', error: '', label: 'All posted dates' };
+}
+export function rbStats(list) {
+  const s = perfStats(list);
+  const sum = (k) => {
+    const r = list.filter((p) => p[k] != null);
+    return { v: r.length ? r.reduce((a, p) => a + p[k], 0) : null, read: r.length };
+  };
+  return Object.assign(s, { comments: sum('comments'), shares: sum('shares'), saves: sum('saves'), reposts: sum('reposts') });
+}
+export function rbTitle(chosen) {
+  if (!chosen.length) return { brand: '', name: '', list: [] };
+  if (chosen.length === 1) return { brand: chosen[0].brand, name: chosen[0].name, list: [] };
+  /* a brand heads the report only when every chosen campaign has that same brand */
+  const brands = [...new Set(chosen.map((c) => c.brand))];
+  return { brand: brands.length === 1 ? brands[0] : '', name: chosen.length + ' campaigns', list: chosen.map((c) => c.label) };
+}
+/* one point per posted day; a day with no number is left out (never drawn as zero) and counted */
+export function rbTimeline(posts, metric) {
+  const byDay = new Map();
+  let noDate = 0;
+  posts.forEach((p) => {
+    if (!p.posted) { noDate++; return; }
+    if (!byDay.has(p.posted)) byDay.set(p.posted, []);
+    byDay.get(p.posted).push(p);
+  });
+  const days = [];
+  let leftOut = 0;
+  [...byDay.keys()].sort().forEach((day) => {
+    const list = byDay.get(day);
+    let v;
+    if (metric === 'count') v = list.length;
+    else if (metric === 'er') { const s = perfStats(list); v = s.avgEr; }
+    else { const r = list.filter((p) => p[metric] != null); v = r.length ? r.reduce((a, p) => a + p[metric], 0) : null; }
+    if (v == null) { leftOut++; return; }
+    days.push({ day, value: metric === 'er' ? Math.round(v * 100) / 100 : v });
+  });
+  return { days, leftOut, noDate };
+}
+
+/* P is PERF (or a stand-in), ctx = { nowMs, dash: [{ id, brand, name }] }, ui = RBT (or a stand-in) */
+export function rbModel(P, ctx, ui) {
+  const resp = P.snapResp && typeof P.snapResp === 'object' ? P.snapResp : null;
+  const snap = resp && resp.snapshot && typeof resp.snapshot === 'object' ? resp.snapshot : null;
+  const posts = snap && Array.isArray(snap.posts) ? snap.posts.map(rbCleanPost).filter(Boolean) : [];
+  const camps = snap && Array.isArray(snap.campaigns) ? snap.campaigns.map(perfCleanCampaign).filter(Boolean) : [];
+  const dashBy = new Map((ctx.dash || []).map((d) => [d.id, d]));
+  const options = rbOptions(posts, camps, dashBy);
+  const known = new Set(options.map((o) => o.id));
+  const sel = new Set([...ui.sel].filter((id) => known.has(id)));
+  const chosen = options.filter((o) => sel.has(o.id));
+  const labelOf = new Map(options.map((o) => [o.id, o.label]));
+  const nameOf = (p) => labelOf.get(p.campaignId || RB_NONE) || 'Unknown campaign';
+  const range = rbRange(ui, ctx.nowMs);
+  const byCamp = posts.filter((p) => sel.has(p.campaignId || RB_NONE));
+  const limited = !!(range.from || range.to);
+  const undatedLeftOut = limited ? byCamp.filter((p) => !p.posted).length : 0;
+  const inRange = (p) => !limited || (p.posted && (!range.from || p.posted >= range.from) && (!range.to || p.posted <= range.to));
+  const scope = range.error ? [] : byCamp.filter(inRange);
+  const sortDef = (RB_SORTS.find((x) => x[0] === ui.sort) || RB_SORTS[0])[2];
+  const rows = perfSortPosts(scope, sortDef, nameOf);
+  const metric = RB_METRICS.some((x) => x[0] === ui.metric) ? ui.metric : 'views';
+  const stats = rbStats(scope);
+  const off = !!(P.problem && P.problem.kind === 'off');
+  const blocked = off || !!(P.problem && ['signin', 'forbidden'].includes(P.problem.kind));
+  const checked = snap ? perfKst(snap.checkedAt) : '';
+  let line;
+  if (!snap) line = '';
+  else if (!chosen.length) line = 'Choose at least one campaign to see the report.';
+  else line = scope.length + (scope.length === 1 ? ' post' : ' posts') + ' from ' + chosen.length + (chosen.length === 1 ? ' campaign' : ' campaigns') + ' in the report.';
+  return {
+    resp, snap, blocked, off, loading: !!P.loading && !P.problem && !resp,
+    options, chosen, sel, range, scope, rows, shown: rows.slice(0, RB_MAX_ROWS), truncated: rows.length > RB_MAX_ROWS,
+    stats, top: perfTop3(scope), timeline: rbTimeline(scope, metric), metric, nameOf,
+    title: rbTitle(chosen), undatedLeftOut, line, sortKey: (RB_SORTS.find((x) => x[0] === ui.sort) || RB_SORTS[0])[0],
+    checkedKst: checked, tzNote: rbLine(snap && snap.timeZoneNote, 120),
+    newestKst: (() => { const t = scope.map((p) => p.scraped).filter(Boolean).sort(); return t.length ? perfKst(t[t.length - 1]) : ''; })(),
+    nowMs: ctx.nowMs
+  };
+}
+
+/* ---- the CSV: header row is the whitelist and nothing else ---- */
+export function rbCsvText(v) {
+  let s = rbLine(v == null ? '' : String(v), 500);
+  if (/^[=+\-@]/.test(s)) s = "'" + s;
+  return /[",]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+export function rbCsv(m) {
+  const n = (v) => (v == null ? '' : String(v));
+  const lines = [RB_COLS.join(',')].concat(m.rows.map((p) => [
+    rbCsvText(m.nameOf(p)), rbCsvText(p.platform), rbCsvText(p.handle), rbCsvText(p.url), rbCsvText(p.type), rbCsvText(p.posted),
+    n(p.views), n(p.likes), n(p.comments), n(p.shares), n(p.saves), n(p.reposts), p.er == null ? '' : p.er.toFixed(2) + '%', rbCsvText(p.scraped)
+  ].join(',')));
+  return '﻿' + lines.join('\r\n') + '\r\n';
+}
+export function rbFileName(m) {
+  const base = m.chosen.length === 1 ? m.chosen[0].label : m.chosen.length + ' campaigns';
+  const slug = base.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '') || 'report';
+  const day = new Date(m.nowMs + 9 * 3600000).toISOString().slice(0, 10);
+  return 'vively-report-' + slug + '-' + day + '.csv';
+}
+
+/* ---- the report sheet (this is what prints; no staff control is inside it) ---- */
+export const rbNa = (what) => `<span class="rp-na">—<span class="sr-only"> ${esc(what || 'did not read')}</span></span>`;
+export const rbN = (v) => (v == null ? rbNa() : esc(num(v)));
+export const rbEr = (v) => (v == null ? rbNa('no rate given') : esc(v.toFixed(2) + '%'));
+export function rbLinkHtml(p) {
+  if (!p.url) return '<span class="rp-na">No link</span>';
+  return `<a class="rp-link" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(rbUrlLabel(p.url) || 'Open post')}</a>`;
+}
+export function rbBandHtml(m) {
+  const st = m.stats, none = st.posts === 0;
+  const cell = (lab, big, cap) => `<div class="rp-b"><div class="rp-bl">${esc(lab)}</div><div class="rp-bn">${big}</div><div class="rp-bc">${esc(cap)}</div></div>`;
+  const plural = (n) => n + ' post' + (n === 1 ? '' : 's');
+  const measured = (lab, v, read) => (v == null
+    ? cell(lab, '—', none ? 'no posts' : 'Not measured')
+    : cell(lab, esc(num(v)), 'from ' + read + ' of ' + plural(st.posts)));
+  return `<div class="rp-band">
+    ${cell('Posts', esc(num(st.posts)), st.withReading + ' of ' + st.posts + ' have a reading')}
+    ${cell('Creators', esc(num(st.creators)), 'different handles')}
+    ${measured('Views', st.views, st.viewsRead)}
+    ${measured('Likes', st.likes, st.likesRead)}
+    ${measured('Comments', st.comments.v, st.comments.read)}
+    ${measured('Shares', st.shares.v, st.shares.read)}
+    ${measured('Saves', st.saves.v, st.saves.read)}
+    ${measured('Reposts', st.reposts.v, st.reposts.read)}
+    ${st.avgEr == null ? cell('Average ER', '—', none ? 'no posts' : 'no rate given') : cell('Average ER', esc(st.avgEr.toFixed(2) + '%'), 'mean of ' + st.erCount + ' of ' + plural(st.posts))}
+  </div>`;
+}
+export function rbNotesHtml(m) {
+  const st = m.stats;
+  const li = [
+    `${st.withReading} of ${st.posts} posts have a reading (views or likes).`,
+    'Average engagement rate (ER) is the plain average of the engagement rates in the sheet. A post with no rate is left out, not counted as zero. ' +
+      st.erCount + ' of ' + st.posts + ' posts have a rate.',
+    '— means no number was read. It is not zero.'
+  ];
+  if (m.tzNote) li.push(m.tzNote);
+  if (m.undatedLeftOut) li.push(m.undatedLeftOut + (m.undatedLeftOut === 1 ? ' post has' : ' posts have') + ' no posted date and is left out of this period.');
+  return `<ul class="rp-notes">${li.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`;
+}
+export function rbTopHtml(m) {
+  if (!m.top.length) return '<p class="rp-empty">No post in this report has a views reading yet.</p>';
+  return `<ol class="rp-top">${m.top.map((p, i) => `<li class="rp-tc">
+    <div class="rp-tc-h">${esc('#' + (i + 1))} · ${esc(p.handle || 'unknown creator')}</div>
+    <div class="rp-tc-m">${esc(m.nameOf(p))} · ${esc([p.platform, p.type].filter(Boolean).join(' · ') || 'platform not given')}${p.posted ? ' · posted ' + esc(p.posted) : ''}</div>
+    <div class="rp-tc-n"><strong>${esc(num(p.views))}</strong> views · ER ${rbEr(p.er)}</div>
+    <div>${rbLinkHtml(p)}</div></li>`).join('')}</ol>`;
+}
+export function rbChartHtml(m) {
+  const t = m.timeline;
+  const label = (RB_METRICS.find((x) => x[0] === m.metric) || RB_METRICS[0])[1];
+  const fmt = (v) => (m.metric === 'er' ? v.toFixed(2) + '%' : num(v));
+  const notes = [];
+  if (t.leftOut) notes.push(t.leftOut + (t.leftOut === 1 ? ' day' : ' days') + ' left out: no reading, not zero');
+  if (t.noDate) notes.push(t.noDate + (t.noDate === 1 ? ' post has' : ' posts have') + ' no posted date');
+  const note = notes.length ? `<p class="rp-cap">${esc(notes.join(' · '))}</p>` : '';
+  if (!t.days.length) return `<p class="rp-empty">No dated posts with a number for ${esc(label.toLowerCase())} in this report.</p>${note}`;
+  const t0 = Date.parse(t.days[0].day + 'T00:00:00Z');
+  const span = Math.round((Date.parse(t.days[t.days.length - 1].day + 'T00:00:00Z') - t0) / 86400000);
+  const W = Math.max(span + 1, 14);
+  const max = Math.max(1, ...t.days.map((d) => d.value));
+  const best = t.days.reduce((a, d) => (d.value > a.value ? d : a), t.days[0]);
+  const bars = t.days.map((d) => {
+    const off = Math.round((Date.parse(d.day + 'T00:00:00Z') - t0) / 86400000);
+    let h = (d.value / max) * 100;
+    if (d.value > 0 && h < 1) h = 1;
+    return `<rect class="rp-bar" x="${off + 0.1}" y="${(100 - h).toFixed(2)}" width="0.8" height="${h.toFixed(2)}"><title>${esc(d.day + ': ' + fmt(d.value))}</title></rect>`;
+  }).join('');
+  const sum = label + ' by posted date: ' + t.days.length + (t.days.length === 1 ? ' day' : ' days') + ' from ' + t.days[0].day + ' to ' + t.days[t.days.length - 1].day +
+    ', highest ' + fmt(best.value) + ' on ' + best.day + '.';
+  return `<svg class="rp-svg" viewBox="0 0 ${W} 100" preserveAspectRatio="none" role="img" aria-label="${esc(sum)}">
+      <line class="rp-axis" x1="0" x2="${W}" y1="100" y2="100"/>${bars}</svg>
+    <div class="rp-axis-l"><span>${esc(t.days[0].day)}</span><span>${esc('Highest ' + fmt(best.value) + ' · ' + best.day)}</span><span>${esc(t.days[t.days.length - 1].day)}</span></div>
+    ${note}
+    <table class="sr-only"><caption>${esc(label + ' by posted date')}</caption><thead><tr><th scope="col">Posted</th><th scope="col">${esc(label)}</th></tr></thead>
+      <tbody>${t.days.map((d) => `<tr><th scope="row">${esc(d.day)}</th><td>${esc(fmt(d.value))}</td></tr>`).join('')}</tbody></table>`;
+}
+export function rbTableHtml(m) {
+  if (!m.rows.length) return '<p class="rp-empty">No posts in this report.</p>';
+  const many = m.chosen.length > 1;
+  const head = ['Post', 'Posted', 'Views', 'Likes', 'Comments', 'Shares', 'Saves', 'Reposts', 'ER'];
+  return `<div class="rp-tw"><table class="rp-tbl"><caption class="sr-only">${esc('All posts, ' + m.shown.length + ' of ' + m.rows.length)}</caption>
+    <thead><tr>${head.map((h, i) => `<th scope="col"${i >= 2 ? ' class="num"' : ''}>${esc(h)}</th>`).join('')}</tr></thead>
+    <tbody>${m.shown.map((p) => `<tr>
+      <th scope="row" class="rp-post"><span class="rp-hd">${esc(p.handle || 'unknown')}</span>
+        <span class="rp-sub">${esc([p.platform, p.type].filter(Boolean).join(' · ') || 'platform not given')}</span>
+        ${many ? `<span class="rp-sub">${esc(m.nameOf(p))}</span>` : ''}${rbLinkHtml(p)}</th>
+      <td>${p.posted ? esc(p.posted) : rbNa('no date')}</td>
+      <td class="num">${rbN(p.views)}</td><td class="num">${rbN(p.likes)}</td><td class="num">${rbN(p.comments)}</td>
+      <td class="num">${rbN(p.shares)}</td><td class="num">${rbN(p.saves)}</td><td class="num">${rbN(p.reposts)}</td><td class="num">${rbEr(p.er)}</td></tr>`).join('')}</tbody></table></div>
+    ${m.truncated ? `<p class="rp-cap">${esc('The table shows the first ' + num(RB_MAX_ROWS) + ' of ' + num(m.rows.length) + ' posts. The CSV file has all of them.')}</p>` : ''}`;
+}
+export function rbDocHtml(m) {
+  const t = m.title;
+  const h1 = t.brand ? `<span class="rp-t1">${esc(t.brand)}</span> <span class="rp-t2">${esc(t.name)}</span>` : `<span class="rp-t1">${esc(t.name)}</span>`;
+  return `<article class="rp-sheet" aria-label="Performance report">
+    <header class="rp-top-block">
+      <p class="rp-eyebrow">Performance report</p>
+      <h2 class="rp-h1">${h1}</h2>
+      ${t.list.length ? `<p class="rp-meta">${esc('Campaigns: ' + t.list.join('; '))}</p>` : ''}
+      <p class="rp-meta">${esc(m.range.label)}</p>
+      <p class="rp-meta">${esc('Data as of ' + (m.checkedKst || 'unknown time'))}${m.newestKst ? esc(' · newest post reading ' + m.newestKst) : ''}</p>
+    </header>
+    <section class="rp-sec" aria-label="Performance summary"><h3 class="rp-h2">Performance summary</h3>${rbBandHtml(m)}${rbNotesHtml(m)}</section>
+    <section class="rp-sec" aria-label="Top 3 posts by views"><h3 class="rp-h2">Top 3 posts by views</h3>${rbTopHtml(m)}</section>
+    <section class="rp-sec" aria-label="Timeline by posted date"><h3 class="rp-h2">${esc('Timeline by posted date: ' + (RB_METRICS.find((x) => x[0] === m.metric) || RB_METRICS[0])[1])}</h3>${rbChartHtml(m)}</section>
+    <section class="rp-sec rp-sec-tbl" aria-label="All posts"><h3 class="rp-h2">All posts</h3>${rbTableHtml(m)}</section>
+    <footer class="rp-foot">${esc('Data as of ' + (m.checkedKst || 'unknown time'))}</footer>
+  </article>`;
+}
+/* the repeating page footer, for browsers that support page margin boxes; the closing footer line above is the fallback */
+export function rbPrintCss(m) {
+  const t = m.checkedKst;
+  if (!/^[0-9A-Za-z :-]{1,60}$/.test(t)) return '';
+  return `<style>@page rp{@bottom-center{content:"Data as of ${t}";font-size:9pt;color:black}}</style>`;
+}
+
+/* ---- the builder page (screen only) ---- */
+export function rbControlsHtml(m, ui) {
+  const opt = (o) => `<label class="rb-opt"><input type="checkbox" data-rb-camp="${esc(o.id)}"${m.sel.has(o.id) ? ' checked' : ''}>
+    <span>${esc(o.label)} <span class="rb-sub">${esc(o.posts + (o.posts === 1 ? ' post' : ' posts'))}</span></span></label>`;
+  const custom = ui.period === 'custom';
+  const ready = m.scope.length > 0;
+  return `<fieldset class="rb-fs"><legend>Campaigns</legend>
+      ${m.options.length ? `<div class="rb-row"><button type="button" class="btn sm" data-rb-all="1">Select all</button><button type="button" class="btn sm" data-rb-none="1">Clear</button></div>
+      <div class="rb-list">${m.options.map(opt).join('')}</div>` : '<p class="rb-sub">No campaign in the sheet has posts yet.</p>'}
+    </fieldset>
+    <fieldset class="rb-fs"><legend>Posted date</legend>
+      ${RB_PERIODS.map(([v, l]) => `<label class="rb-opt"><input type="radio" name="rbPeriod" data-rb-period="${esc(v)}" value="${esc(v)}"${ui.period === v ? ' checked' : ''}><span>${esc(l)}</span></label>`).join('')}
+      <div class="rb-dates"><label>From<input type="date" id="rbFrom" value="${esc(perfDay(ui.from))}"${custom ? '' : ' disabled'}></label>
+        <label>To<input type="date" id="rbTo" value="${esc(perfDay(ui.to))}"${custom ? '' : ' disabled'}></label></div>
+      ${m.range.error ? `<p class="rb-warn">${esc(m.range.error)}</p>` : ''}
+    </fieldset>
+    <div class="rb-fs"><label class="rb-lab" for="rbSort">Table order</label>
+      <select id="rbSort">${RB_SORTS.map(([v, l]) => `<option value="${esc(v)}"${m.sortKey === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
+    <fieldset class="rb-fs"><legend>Timeline shows</legend>
+      <div class="so-seg" role="group" aria-label="Timeline metric">${RB_METRICS.map(([v, l]) =>
+        `<button type="button" data-rb-metric="${esc(v)}" aria-pressed="${m.metric === v}">${esc(l)}</button>`).join('')}</div>
+    </fieldset>
+    <div class="rb-actions">
+      <button type="button" class="btn primary" data-rb-print="1"${ready ? '' : ' disabled'}>Print / Save as PDF</button>
+      <button type="button" class="btn" data-rb-csv="1"${ready ? '' : ' disabled'}>Download CSV</button></div>
+    ${ready ? '' : '<p class="rb-sub">Choose a campaign with posts in the period to turn these on.</p>'}
+    <aside class="rb-card"><h4>Content insights</h4>
+      <p class="rb-sub">Not in this version. Reading captions and hashtags from public pages needs an answer on platform terms first.</p></aside>`;
+}
+export function rbHtml(m, P, ui, ctx) {
+  const status = P.status || {};
+  const chip = m.blocked ? '' : perfChipHtml(perfFreshness(m.resp && m.resp.freshness, m.snap && m.snap.checkedAt, m.snap && m.snap.newestReadingAt, ctx.nowMs,
+    perfNum(status.intervalMin) || perfNum(m.snap && m.snap.intervalMin) || 30));
+  const head = `<div class="rb-head"><div><div class="eyebrow">Reports</div><h2 class="rb-title">Build a report</h2></div>
+    <div class="rb-headr">${chip}${m.blocked ? '' : `<button type="button" class="btn sm" data-rb-refresh="1"${P.refresh.busy ? ' disabled aria-busy="true"' : ''}>${P.refresh.busy ? 'Reading…' : 'Refresh now'}</button>`}</div></div>
+    ${P.refresh.text ? `<p class="rb-msg">${esc(P.refresh.text)}</p>` : ''}
+    ${perfBannerHtml(P, { snap: m.snap })}`;
+  if (!m.snap) {
+    return `<section class="rb-wrap" aria-label="Report builder">${head}${m.loading ? '<p class="rb-sub">Reading live performance…</p>'
+      : m.blocked ? '' : '<p class="rb-sub">No live readings are stored yet, so there is nothing to report on.</p>'}</section>`;
+  }
+  let preview;
+  if (!m.chosen.length) preview = '<p class="rb-empty">Choose at least one campaign on the left. The report appears here.</p>';
+  else if (m.range.error) preview = `<p class="rb-empty">${esc(m.range.error)}</p>`;
+  else if (!m.scope.length) preview = '<p class="rb-empty">No posts match this campaign and period. Try All time.</p>';
+  else preview = rbDocHtml(m);
+  return `<section class="rb-wrap" aria-label="Report builder">${head}
+    <div class="rb-grid">
+      <div class="rb-side">${rbControlsHtml(m, ui)}</div>
+      <div class="rb-main">
+        <p class="rb-staff" role="note"><strong>Staff copy: check before sharing.</strong> Handles, post links and public numbers only. This note and the controls do not print.</p>
+        <div class="rb-prev" role="region" aria-label="Report preview" tabindex="0">${preview}</div>
+      </div>
+    </div></section>`;
+}
+
+/* The one rule block. The sheet's colours are its own paper palette (--pp-*), the only place hex appears. */
+export const RB_CSS = `
+  #reportPrint{display:none}
+  .rb{margin-bottom:var(--sp-6,32px)}
+  .rb-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--sp-3,12px);margin-bottom:var(--sp-3,12px)}
+  .rb-headr{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2,8px)}
+  .rb-title{margin:2px 0 0;font:650 var(--fs-card-title,15px)/1.25 var(--font)}
+  .rb-msg{margin:0 0 var(--sp-3,12px);font:400 var(--fs-caption,12px)/1.4 var(--font);color:var(--text-2)}
+  .rb-sub{font:400 var(--fs-caption,12px)/1.4 var(--font);color:var(--text-3)}
+  .rb-grid{display:grid;grid-template-columns:minmax(260px,320px) minmax(0,1fr);gap:var(--sp-5,24px);align-items:start}
+  .rb-side{display:flex;flex-direction:column;gap:var(--sp-4,16px);min-width:0}
+  .rb-fs{margin:0;padding:var(--sp-3,12px);border:1px solid var(--line);border-radius:var(--r);background:var(--surface);min-width:0}
+  .rb-fs legend{padding:0 var(--sp-1,4px);font:600 var(--fs-card-title,15px)/1.3 var(--font)}
+  .rb-row,.rb-actions{display:flex;flex-wrap:wrap;gap:var(--sp-2,8px)}
+  .rb-list{max-height:280px;overflow-y:auto;margin-top:var(--sp-2,8px)}
+  .rb-opt{display:flex;align-items:center;gap:var(--sp-2,8px);min-height:var(--hit,40px);cursor:pointer;font:400 var(--fs-body,14px)/1.3 var(--font);overflow-wrap:anywhere}
+  .rb-opt input{width:20px;height:20px;flex:0 0 auto}
+  .rb-dates{display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2,8px);margin-top:var(--sp-2,8px)}
+  .rb-dates label,.rb-lab{display:flex;flex-direction:column;gap:var(--sp-1,4px);font:400 var(--fs-caption,12px)/1.3 var(--font);color:var(--text-2)}
+  .rb-warn{margin:var(--sp-2,8px) 0 0;font:500 var(--fs-caption,12px)/1.4 var(--font);color:var(--danger)}
+  .rb .btn,.rb select,.rb input[type=date]{min-height:var(--hit,40px)}
+  .rb select,.rb input[type=date]{max-width:100%}
+  .rb input:focus-visible,.rb select:focus-visible,.rb .btn:focus-visible,.rb-prev:focus-visible,.rb .so-seg button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+  .rb-card{padding:var(--sp-3,12px);border:1px dashed var(--line-strong);border-radius:var(--r)}
+  .rb-card h4{margin:0 0 var(--sp-1,4px);font:600 var(--fs-body,14px)/1.3 var(--font)}
+  .rb-staff{margin:0 0 var(--sp-3,12px);padding:var(--sp-3,12px);border:1px solid var(--warn-line);border-radius:var(--r);background:var(--warn-bg);color:var(--text);font:400 var(--fs-body,14px)/1.45 var(--font)}
+  .rb-prev{overflow-x:auto;min-width:0}
+  .rb-empty{margin:0;padding:var(--sp-5,24px);border:1px dashed var(--line-strong);border-radius:var(--r);color:var(--text-2);font:400 var(--fs-body,14px)/1.45 var(--font)}
+  .rp-sheet{--pp-bg:#ffffff;--pp-ink:#111111;--pp-ink2:#555555;--pp-ink3:#666666;--pp-line:#d3d5db;--pp-blue:#0b63f6;
+    box-sizing:border-box;max-width:210mm;margin:0 auto;padding:var(--sp-5,24px);background:var(--pp-bg);color:var(--pp-ink);
+    border:1px solid var(--line-strong);border-radius:var(--r-lg,16px);font:400 var(--fs-body,14px)/1.45 var(--font);
+    -webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .rp-eyebrow{margin:0 0 var(--sp-2,8px);font:600 var(--fs-eyebrow,12px)/1.3 var(--font);letter-spacing:.08em;text-transform:uppercase;color:var(--pp-ink3)}
+  .rp-h1{margin:0;font:700 var(--fs-title,28px)/1.15 var(--font);letter-spacing:-.03em;color:var(--pp-ink);text-wrap:balance;overflow-wrap:anywhere}
+  .rp-t2{color:var(--pp-ink2)}
+  .rp-meta{margin:var(--sp-2,8px) 0 0;color:var(--pp-ink2);font:400 var(--fs-body,14px)/1.45 var(--font);overflow-wrap:anywhere}
+  .rp-sec{margin-top:var(--sp-5,24px)}
+  .rp-h2{margin:0 0 var(--sp-3,12px);font:650 var(--fs-card-title,15px)/1.3 var(--font);color:var(--pp-ink);break-after:avoid;page-break-after:avoid}
+  .rp-band{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:var(--sp-2,8px)}
+  .rp-b{padding:var(--sp-3,12px);border:1px solid var(--pp-line);border-radius:var(--r-sm,6px);min-width:0;break-inside:avoid;page-break-inside:avoid}
+  .rp-bl{font:600 var(--fs-caption,12px)/1.3 var(--font);color:var(--pp-ink3)}
+  .rp-bn{margin:var(--sp-1,4px) 0;font:600 var(--fs-kpi,28px)/1.1 var(--font);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+  .rp-bc{font:400 var(--fs-caption,12px)/1.3 var(--font);color:var(--pp-ink2)}
+  .rp-notes{margin:var(--sp-3,12px) 0 0;padding-left:18px;font:400 var(--fs-caption,12px)/1.5 var(--font);color:var(--pp-ink2)}
+  .rp-cap,.rp-empty{margin:var(--sp-2,8px) 0 0;font:400 var(--fs-caption,12px)/1.5 var(--font);color:var(--pp-ink2)}
+  .rp-na{color:var(--pp-ink3)}
+  .rp-top{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--sp-3,12px)}
+  .rp-tc{padding:var(--sp-3,12px);border:1px solid var(--pp-line);border-radius:var(--r-sm,6px);display:flex;flex-direction:column;gap:var(--sp-1,4px);min-width:0;break-inside:avoid;page-break-inside:avoid}
+  .rp-tc-h{font:600 var(--fs-body,14px)/1.3 var(--font);overflow-wrap:anywhere}
+  .rp-tc-m{font:400 var(--fs-caption,12px)/1.4 var(--font);color:var(--pp-ink2);overflow-wrap:anywhere}
+  .rp-tc-n{font:400 var(--fs-body,14px)/1.4 var(--font);font-variant-numeric:tabular-nums}
+  .rp-link{color:var(--pp-blue);text-decoration:underline;overflow-wrap:anywhere;font:400 var(--fs-caption,12px)/1.4 var(--font)}
+  .rp-svg{display:block;width:100%;height:160px;overflow:visible}
+  .rp-bar{fill:var(--pp-blue)}
+  .rp-axis{stroke:var(--pp-line);stroke-width:1;vector-effect:non-scaling-stroke}
+  .rp-axis-l{display:flex;justify-content:space-between;gap:var(--sp-2,8px);margin-top:var(--sp-1,4px);font:400 var(--fs-caption,12px)/1.3 var(--font);color:var(--pp-ink2)}
+  .rp-tw{overflow-x:auto}
+  .rp-tbl{width:100%;min-width:720px;border-collapse:collapse;font:400 var(--fs-caption,12px)/1.4 var(--font);color:var(--pp-ink)}
+  .rp-tbl thead{display:table-header-group}
+  .rp-tbl tr{break-inside:avoid;page-break-inside:avoid}
+  .rp-tbl th{padding:6px 8px;text-align:left;font-weight:600;color:var(--pp-ink2);border-bottom:2px solid var(--pp-ink);vertical-align:bottom}
+  .rp-tbl td,.rp-tbl th[scope=row]{padding:6px 8px;border-bottom:1px solid var(--pp-line);vertical-align:top;font-weight:400;color:var(--pp-ink)}
+  .rp-tbl .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .rp-post{overflow-wrap:anywhere}
+  .rp-post>span,.rp-post>a{display:block}
+  .rp-hd{font-weight:600}
+  .rp-sub{color:var(--pp-ink2)}
+  .rp-foot{margin-top:var(--sp-5,24px);padding-top:var(--sp-2,8px);border-top:1px solid var(--pp-line);font:400 var(--fs-caption,12px)/1.3 var(--font);color:var(--pp-ink2)}
+  @media screen{.rp-link{display:inline-flex;align-items:center;min-height:var(--hit,40px)}}
+  @media(max-width:900px){.rb-grid{grid-template-columns:1fr}}
+  @media(max-width:640px){
+    .rb-dates{grid-template-columns:1fr}
+    .rp-sheet{padding:var(--sp-3,12px)}
+    .rp-top{grid-template-columns:1fr}
+    .rp-band{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .rp-bn{font-size:var(--fs-title-phone,24px)}
+  }
+  @page rp{size:A4;margin:14mm 14mm 18mm}
+  @media print{
+    body.print-report>*{display:none!important}
+    body.print-report>#reportPrint{display:block!important;page:rp}
+    body.print-report{height:auto!important;overflow:visible!important;background:white!important;color:black!important}
+    #reportPrint .rp-sheet{max-width:none;margin:0;padding:0;border:0;border-radius:0;font-size:10pt}
+    #reportPrint .rp-band{grid-template-columns:repeat(3,minmax(0,1fr))}
+    #reportPrint .rp-sec{break-inside:avoid;page-break-inside:avoid}
+    #reportPrint .rp-sec-tbl{break-inside:auto;page-break-inside:auto}
+    #reportPrint .rp-tw{overflow:visible}
+    #reportPrint .rp-tbl{min-width:0;table-layout:fixed;font-size:9pt}
+    #reportPrint .rp-tbl th:first-child{width:32%}
+    #reportPrint .rp-link{font-size:9pt;min-height:0;display:block}
+    #reportPrint .rp-foot{margin-top:var(--sp-4,16px)}
+  }`;
+export function ensureReportBuilderStyles() {
+  if (document.getElementById('rbCss')) return;
+  const s = document.createElement('style');
+  s.id = 'rbCss';
+  s.textContent = RB_CSS;
+  document.head.appendChild(s);
+}
+
+/* ---- on the page ---- */
+export function rbCtx() {
+  return { nowMs: Date.now(), dash: (DB.campaigns || []).map((c) => ({ id: c.id, brand: c.brand, name: c.name })) };
+}
+export function rbCurrent() { return rbModel(PERF, rbCtx(), RBT); }
+export function rbPaint() {
+  const root = $('#rbRoot');
+  if (!root) return;
+  const a = document.activeElement;
+  const attrs = ['data-rb-camp', 'data-rb-period', 'data-rb-metric', 'data-rb-all', 'data-rb-none', 'data-rb-print', 'data-rb-csv', 'data-rb-refresh', 'id'];
+  const keep = a && root.contains(a) ? attrs.map((k) => [k, a.getAttribute(k)]).find((x) => x[1] != null) : null;
+  const list = root.querySelector('.rb-list');
+  const scroll = list ? list.scrollTop : 0;
+  const ctx = rbCtx(), m = rbModel(PERF, ctx, RBT);
+  root.innerHTML = rbHtml(m, PERF, RBT, ctx);
+  root.setAttribute('aria-busy', PERF.loading ? 'true' : 'false');
+  const nl = root.querySelector('.rb-list');
+  if (nl) nl.scrollTop = scroll;
+  const say = $('#rbAnnounce');
+  if (say) say.textContent = RBT.msg || m.line;
+  RBT.msg = '';
+  if (keep) {
+    const again = [...root.querySelectorAll('[' + keep[0] + ']')].find((n) => n.getAttribute(keep[0]) === keep[1]);
+    if (again) again.focus();
+  }
+}
+export function rbPrintNode() {
+  let n = document.getElementById('reportPrint');
+  if (!n) { n = document.createElement('div'); n.id = 'reportPrint'; document.body.appendChild(n); }
+  return n;
+}
+/* Fill the print copy from the current choices. Runs from the Print button and from the
+   browser's own beforeprint, so Ctrl+P on this page prints the report and not the app. */
+export function rbFillPrint() {
+  if (!document.getElementById('rbRoot')) return false;
+  const m = rbCurrent();
+  if (!m.scope.length) return false;
+  rbPrintNode().innerHTML = rbPrintCss(m) + rbDocHtml(m);
+  document.body.classList.add('print-report');
+  return true;
+}
+export function rbClearPrint() {
+  document.body.classList.remove('print-report');
+  const n = document.getElementById('reportPrint');
+  if (n) n.innerHTML = '';
+}
+export function rbPrint() {
+  if (!rbFillPrint()) { RBT.msg = 'Nothing to print: choose a campaign with posts in the period.'; rbPaint(); return; }
+  RBT.msg = 'Opening the print window. Choose Save as PDF as the printer to make a PDF file.';
+  rbPaint();
+  window.print();
+}
+export function rbDownloadCsv() {
+  const m = rbCurrent();
+  if (!m.rows.length) { RBT.msg = 'Nothing to export: choose a campaign with posts in the period.'; rbPaint(); return; }
+  downloadFile(rbCsv(m), rbFileName(m), 'text/csv;charset=utf-8');
+  RBT.msg = 'CSV file downloaded with ' + m.rows.length + (m.rows.length === 1 ? ' row.' : ' rows.');
+  rbPaint();
+}
+export function rbWire(root) {
+  root.addEventListener('click', (ev) => {
+    const t = ev.target.closest ? ev.target.closest('button') : null;
+    if (!t || !root.contains(t) || t.disabled) return;
+    if (t.hasAttribute('data-rb-all')) { RBT.sel = new Set(rbCurrent().options.filter((o) => o.id !== RB_NONE).map((o) => o.id)); rbPaint(); }
+    else if (t.hasAttribute('data-rb-none')) { RBT.sel = new Set(); rbPaint(); }
+    else if (t.hasAttribute('data-rb-metric')) { RBT.metric = t.getAttribute('data-rb-metric'); rbPaint(); }
+    else if (t.hasAttribute('data-rb-print')) rbPrint();
+    else if (t.hasAttribute('data-rb-csv')) rbDownloadCsv();
+    else if (t.hasAttribute('data-rb-refresh')) perfRefreshNow({ onChange: () => { RBT.msg = PERF.refresh.text; rbPaint(); } });
+  });
+  root.addEventListener('change', (ev) => {
+    const t = ev.target;
+    if (!t) return;
+    if (t.hasAttribute('data-rb-camp')) {
+      const id = t.getAttribute('data-rb-camp');
+      if (t.checked) RBT.sel.add(id); else RBT.sel.delete(id);
+    } else if (t.hasAttribute('data-rb-period')) { if (RB_PERIODS.some((x) => x[0] === t.value)) RBT.period = t.value; }
+    else if (t.id === 'rbFrom') RBT.from = perfDay(t.value);
+    else if (t.id === 'rbTo') RBT.to = perfDay(t.value);
+    else if (t.id === 'rbSort') { if (RB_SORTS.some((x) => x[0] === t.value)) RBT.sort = t.value; }
+    else return;
+    rbPaint();
+  });
+}
+export function renderReportBuilder(view) {
+  ensurePerfStyles();
+  ensureDeskStyles();
+  ensureOverviewStyles();
+  ensureReportBuilderStyles();
+  rbPrintNode();
+  if (!RBT.hooked && typeof window.addEventListener === 'function') {
+    RBT.hooked = true;
+    window.addEventListener('beforeprint', rbFillPrint);
+    window.addEventListener('afterprint', rbClearPrint);
+  }
+  view.innerHTML = `<div id="rbAnnounce" class="sr-only" role="status" aria-live="polite"></div>
+    <div id="rbRoot" class="rb" aria-busy="true"></div>`;
+  rbWire($('#rbRoot'));
+  const reading = perfLoad();
+  rbPaint();
+  reading.then(rbPaint, rbPaint);
 }
 
 /* The page. The live section is on top; the imported-numbers page that was here before

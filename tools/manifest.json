@@ -844,7 +844,7 @@
   "ranges": [
    [
     14950,
-    16224
+    16797
    ]
   ],
   "imports": [
@@ -855,18 +855,18 @@
    "import { OVERVIEW_METRICS, byCampaignRollup, byMarketRollup, byPlatformRollup, engagementSplit, overviewCoverage, overviewFilter, overviewKpis, overviewRows, overviewSeries, topContent, unmappedCountries, viewDistribution } from '../model/socialStats.js';",
    "import { SM } from '../sync/sheetMetrics.js';",
    "import { $, $$, esc } from '../ui/dom.js';",
-   "import { emptyState } from '../ui/html.js';",
+   "import { downloadFile, emptyState } from '../ui/html.js';",
    "import { ensureDeskStyles } from './desk.js';",
    "import { showSocialContent } from './social.js';"
   ],
-  "sha256": "67970e2105a771f8a09a9e04eac49c3be9f3675acee20b094f027078674d62cc"
+  "sha256": "773a14ec4c71305502fb6e88a357dcc486dce439cf238e48518bac62019aa748"
  },
  {
   "file": "model/homeStats.js",
   "ranges": [
    [
-    16226,
-    16645
+    16799,
+    17218
    ]
   ],
   "imports": [
@@ -881,8 +881,8 @@
   "file": "views/home.js",
   "ranges": [
    [
-    16647,
-    17016
+    17220,
+    17589
    ]
   ],
   "imports": [
@@ -904,8 +904,8 @@
   "file": "views/booking.js",
   "ranges": [
    [
-    17019,
-    18816
+    17592,
+    19389
    ]
   ],
   "imports": [
@@ -925,8 +925,8 @@
   "file": "views/desk.js",
   "ranges": [
    [
-    18819,
-    19634
+    19392,
+    20207
    ]
   ],
   "imports": [
@@ -946,8 +946,8 @@
   "file": "sync/sheetMetrics.js",
   "ranges": [
    [
-    19637,
-    20351
+    20210,
+    20924
    ]
   ],
   "imports": [
