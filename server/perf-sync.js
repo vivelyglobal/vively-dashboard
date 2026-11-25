@@ -35,6 +35,8 @@
 
 "use strict";
 
+const crypto = require("crypto");
+
 const GOOGLE_HOST = "docs.google.com";
 const MAX_BYTES = 8 * 1024 * 1024;
 const TIMEOUT_MS = 20000;
@@ -569,6 +571,8 @@ function createPerfSync(deps) {
   let last = null;            // last LIVE run (memory; the store has the durable copy)
   let lastDry = null;         // last dry run: never stored
   let lastManualAt = 0;
+  const lastManualBy = new Map();   // staff user -> time, when the route can name the user
+  let matching = false;       // a staff match is being written: no run may start, and no second match
 
   function parseRows(rows, fields) {
     return rows.map((cells) => { const o = {}; fields.forEach((f, i) => { o[f.name] = f.read(cells[i]); }); return o; });
@@ -634,7 +638,7 @@ function createPerfSync(deps) {
 
   async function run(opts) {
     const o = opts || {};
-    if (running) return Object.assign({}, last || {}, { busy: true });
+    if (running || matching) return Object.assign({}, last || {}, { busy: true });
     running = true;
     const startedMs = now().getTime();
     const dryRun = o.dryRun != null ? !!o.dryRun : !!d.dryRun;
@@ -673,6 +677,7 @@ function createPerfSync(deps) {
       entry.counts = snap.counts; entry.duplicates = snap.duplicates;
       entry.newestReadingAt = snap.newestReadingAt; entry.checkedAt = snap.checkedAt;
       entry.queries = ctx.queries.length;
+      snap.rev = crypto.randomBytes(8).toString("hex");   // lets a later match prove it is editing THIS snapshot
       if (dryRun) {
         entry.needsMatch = snap.needsMatch;      // phase 0: counts and the unmatched list, nothing stored
       } else {
@@ -702,9 +707,14 @@ function createPerfSync(deps) {
   /* a manual refresh: at most one per 5 minutes (dry runs included) */
   async function refresh(opts) {
     const t = now().getTime();
-    if (running) return { throttled: true, busy: true, retryAfterSec: 30 };
-    if (lastManualAt && t - lastManualAt < MANUAL_MIN_MS) return { throttled: true, retryAfterSec: Math.ceil((MANUAL_MIN_MS - (t - lastManualAt)) / 1000) };
+    if (running || matching) return { throttled: true, busy: true, retryAfterSec: 30 };
+    const actor = opts && typeof opts.actor === "string" ? opts.actor.slice(0, 120) : "";
+    const prev = actor && lastManualBy.has(actor) ? lastManualBy.get(actor) : 0;
+    /* the global spacing stays; a named staff user is also held to it on their own */
+    const gate = Math.max(lastManualAt, prev);
+    if (gate && t - gate < MANUAL_MIN_MS) return { throttled: true, retryAfterSec: Math.ceil((MANUAL_MIN_MS - (t - gate)) / 1000) };
     lastManualAt = t;
+    if (actor) { if (lastManualBy.size > 200) lastManualBy.clear(); lastManualBy.set(actor, t); }
     return run({ trigger: "manual", dryRun: opts && opts.dryRun ? true : undefined });
   }
 
@@ -720,29 +730,42 @@ function createPerfSync(deps) {
 
   /* staff choice for one sheet campaign. dashboardCampaignId: a dashboard campaign id, or "" for "sheet only". */
   async function setMatch(sheetCampaignId, dashboardCampaignId) {
-    const snap = await d.store.readSnapshot();
-    if (!snap) return { ok: false, status: 409, error: "There is no snapshot yet; wait for the first read." };
-    const sc = snap.campaigns.find((c) => c.sheetCampaignId === sheetCampaignId);
-    if (!sc) return { ok: false, status: 404, error: "That sheet campaign is not in the snapshot." };
-    const ws = await d.loadWorkspace();
-    const dash = ws && ws.db && Array.isArray(ws.db.campaigns) ? ws.db.campaigns : [];
-    if (dashboardCampaignId !== "" && !dash.some((c) => c && c.id === dashboardCampaignId)) {
-      return { ok: false, status: 400, error: "That dashboard campaign does not exist." };
-    }
-    const cur = (await d.store.readMatches()) || [];
-    const list = cur.filter((m) => m.sheetCampaignId !== sheetCampaignId).concat([{ sheetCampaignId, dashboardCampaignId }]).slice(-2000);
-    await d.store.writeMatches(list);
-    /* re-apply the joins to the stored snapshot without reading Google again */
-    const matches = computeMatches(snap.campaigns.map((c) => ({ id: c.sheetCampaignId, name: c.name, notionDatabaseId: c.notionDatabaseId })),
-      dash.map((c) => ({ id: c && c.id, name: c && c.name, notionDatabaseId: c && c.notionDatabaseId })), list);
-    snap.campaigns.forEach((c) => { c.match = matches.get(c.sheetCampaignId); });
-    snap.needsMatch = snap.campaigns.filter((c) => c.match.state === "needs-match")
-      .map((c) => ({ sheetCampaignId: c.sheetCampaignId, name: c.name, reason: c.match.reason, candidates: c.match.candidates }));
-    snap.counts.campaignsMatched = snap.campaigns.filter((c) => c.match.state === "matched").length;
-    snap.counts.campaignsNeedMatch = snap.needsMatch.length;
-    snap.counts.campaignsSheetOnly = snap.campaigns.filter((c) => c.match.state === "sheet-only").length;
-    await d.store.writeSnapshot(snap);
-    return { ok: true, match: snap.campaigns.find((c) => c.sheetCampaignId === sheetCampaignId).match };
+    /* never while a read runs, never while another match is being written, never in preview mode */
+    if (d.dryRun) return { ok: false, status: 409, error: "Preview mode is on, so nothing is saved." };
+    if (running) return { ok: false, status: 409, error: "A refresh is running, try again in a minute." };
+    if (matching) return { ok: false, status: 409, error: "Another match is being saved, try again in a moment." };
+    matching = true;                    // set before the first await: a run that starts now is told it is busy
+    try {
+      const snap = await d.store.readSnapshot();
+      if (!snap) return { ok: false, status: 409, error: "There is no snapshot yet; wait for the first read." };
+      const sc = snap.campaigns.find((c) => c.sheetCampaignId === sheetCampaignId);
+      if (!sc) return { ok: false, status: 404, error: "That sheet campaign is not in the snapshot." };
+      const ws = await d.loadWorkspace();
+      const dash = ws && ws.db && Array.isArray(ws.db.campaigns) ? ws.db.campaigns : [];
+      if (dashboardCampaignId !== "" && !dash.some((c) => c && c.id === dashboardCampaignId)) {
+        return { ok: false, status: 400, error: "That dashboard campaign does not exist." };
+      }
+      const cur = (await d.store.readMatches()) || [];
+      const list = cur.filter((m) => m.sheetCampaignId !== sheetCampaignId).concat([{ sheetCampaignId, dashboardCampaignId }]).slice(-2000);
+      /* re-apply the joins to the stored snapshot without reading Google again */
+      const matches = computeMatches(snap.campaigns.map((c) => ({ id: c.sheetCampaignId, name: c.name, notionDatabaseId: c.notionDatabaseId })),
+        dash.map((c) => ({ id: c && c.id, name: c && c.name, notionDatabaseId: c && c.notionDatabaseId })), list);
+      const oldRev = snap.rev;
+      snap.campaigns.forEach((c) => { c.match = matches.get(c.sheetCampaignId); });
+      snap.needsMatch = snap.campaigns.filter((c) => c.match.state === "needs-match")
+        .map((c) => ({ sheetCampaignId: c.sheetCampaignId, name: c.name, reason: c.match.reason, candidates: c.match.candidates }));
+      snap.counts.campaignsMatched = snap.campaigns.filter((c) => c.match.state === "matched").length;
+      snap.counts.campaignsNeedMatch = snap.needsMatch.length;
+      snap.counts.campaignsSheetOnly = snap.campaigns.filter((c) => c.match.state === "sheet-only").length;
+      snap.rev = crypto.randomBytes(8).toString("hex");
+      /* one conditional swap: if the stored snapshot is no longer the one read above, nothing is written */
+      let swapped = true;
+      if (typeof d.store.writeSnapshotIf === "function") swapped = await d.store.writeSnapshotIf(oldRev, snap);
+      else await d.store.writeSnapshot(snap);
+      if (!swapped) return { ok: false, status: 409, error: "A refresh is running, try again in a minute." };
+      await d.store.writeMatches(list);
+      return { ok: true, match: snap.campaigns.find((c) => c.sheetCampaignId === sheetCampaignId).match };
+    } finally { matching = false; }
   }
 
   return { run, refresh, view, setMatch, lastRun: () => last, lastDryRun: () => lastDry, isRunning: () => running };
@@ -759,6 +782,12 @@ function makeMongoStore(getClient, dbName) {
   const strip = (row) => { if (!row) return null; const { _id, ...rest } = row; return rest; };
   return {
     async readSnapshot() { return strip(await (await col("perf_snapshot")).findOne({ _id: "snapshot" })); },
+    /* swap only if the stored snapshot still has the revision the caller read; true when it did */
+    async writeSnapshotIf(expectedRev, doc) {
+      const filter = expectedRev ? { _id: "snapshot", rev: expectedRev } : { _id: "snapshot", rev: { $exists: false } };
+      const r = await (await col("perf_snapshot")).replaceOne(filter, Object.assign({ _id: "snapshot" }, doc));
+      return !!(r && r.matchedCount > 0);
+    },
     async writeSnapshot(doc) { await (await col("perf_snapshot")).replaceOne({ _id: "snapshot" }, Object.assign({ _id: "snapshot" }, doc), { upsert: true }); },
     async readLog() { return strip(await (await col("perf_sync_log")).findOne({ _id: "log" })); },
     async appendLog(entry) {
@@ -775,9 +804,17 @@ function makeMongoStore(getClient, dbName) {
    the reason (an env var NAME, never a value). requireStaff answers 401/403 first. */
 function registerRoutes(app, requireStaff, get) {
   const offReply = (res, g) => res.status(503).json({ error: OFF_TEXT, reason: g.off, state: "off" });
+  /* every handler: an error becomes one plain, staff-safe answer. Nothing from the error
+     (message, stack, url, sheet id) is returned or logged. */
+  const safe = (fn) => requireStaff(async (req, res) => {
+    try { await fn(req, res); } catch (e) {
+      console.error("Performance route failed.");
+      if (!res.headersSent) res.status(500).json({ error: "Something went wrong on the server. Try again in a minute." });
+    }
+  });
   const strId = (v) => typeof v === "string" && v.length > 0 && v.length <= 80;
 
-  app.get("/api/perf/status", requireStaff(async (req, res) => {
+  app.get("/api/perf/status", safe(async (req, res) => {
     const g = get();
     if (!g.perf) return offReply(res, g);
     const v = await g.perf.view();
@@ -795,7 +832,7 @@ function registerRoutes(app, requireStaff, get) {
     });
   }));
 
-  app.get("/api/perf/snapshot", requireStaff(async (req, res) => {
+  app.get("/api/perf/snapshot", safe(async (req, res) => {
     const g = get();
     if (!g.perf) return offReply(res, g);
     const v = await g.perf.view();
@@ -803,18 +840,18 @@ function registerRoutes(app, requireStaff, get) {
     return res.json({ ok: true, state: v.state.state, banner: v.state.banner, showingDataFrom: v.state.showingDataFrom, freshness: v.freshness, snapshot: v.snapshot });
   }));
 
-  app.post("/api/perf/refresh", requireStaff(async (req, res) => {
+  app.post("/api/perf/refresh", safe(async (req, res) => {
     const g = get();
     if (!g.perf) return offReply(res, g);
     const b = req.body || {};
-    const out = await g.perf.refresh({ dryRun: b.dryRun === true });   // a request can only make a run MORE careful
+    const out = await g.perf.refresh({ dryRun: b.dryRun === true, actor: typeof req.staffEmail === "string" ? req.staffEmail : "" });   // a request can only make a run MORE careful
     if (out && out.throttled) {
       return res.status(429).json({ error: out.busy ? "A read is already running." : "A refresh was started a moment ago. Try again in a few minutes.", retryAfterSec: out.retryAfterSec });
     }
     return res.json({ ok: out.ok === true, run: out });
   }));
 
-  app.post("/api/perf/match", requireStaff(async (req, res) => {
+  app.post("/api/perf/match", safe(async (req, res) => {
     const g = get();
     if (!g.perf) return offReply(res, g);
     const b = req.body || {};

@@ -587,7 +587,7 @@ async function withRoutes(get, fn) {
     });
     r.on('error', reject); r.end(data);
   });
-  try { await fn(call); } finally { srv.close(); }
+  try { await fn(call); } finally { srv.close(); if (srv.closeAllConnections) srv.closeAllConnections(); }
 }
 const STAFF = 'staff@example.invalid';
 const ROUTES = [['GET', '/api/perf/status'], ['GET', '/api/perf/snapshot'], ['POST', '/api/perf/refresh'], ['POST', '/api/perf/match']];
@@ -722,4 +722,138 @@ test('wiring: off unless configured, first tick after boot, interval unref, only
   const cols = [...lib.matchAll(/col\("([a-z_]+)"\)/g)].map((m) => m[1]);
   assert.deepEqual([...new Set(cols)].sort(), ['perf_match', 'perf_snapshot', 'perf_sync_log']);
   assert.ok(!/insertOne|deleteOne|saveWorkspace|\.collection\("workspace/.test(lib), 'never writes the workspace');
+});
+
+/* ---------- review fixes (doc 13): route errors, match vs run, atomic swap ---------- */
+const NASTY = new Error('boom ' + FAKE_ID + ' https://docs.google.com/spreadsheets/d/' + FAKE_ID + '/gviz/tq?x=1\n    at Object.<anonymous> (/srv/app/server.js:1:1)');
+const noLeak = (t) => { assert.ok(!t.includes(FAKE_ID), 'sheet id leaked'); assert.ok(!/https?:|docs\.google|\n\s+at |boom/i.test(t), 'url or stack leaked: ' + t); };
+const within = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('no answer (request hung)')), ms || 3000))]);
+
+test('every route answers a plain 500 on an internal error: no stack, url or sheet id, and no unhandled rejection', async () => {
+  const rejections = [];
+  const onRej = (e) => rejections.push(e);
+  process.on('unhandledRejection', onRej);
+  try {
+    const boom = async () => { throw NASTY; };
+    const fake = { view: boom, refresh: boom, setMatch: boom, lastDryRun: () => null };
+    await withRoutes(() => ({ perf: fake, off: '', cfg: { intervalMin: 30, maxRows: 5000, dryRun: false } }), async (call) => {
+      const m = await within(call('POST', '/api/perf/match', STAFF, { sheetCampaignId: 'c3', sheetOnly: true }));
+      assert.equal(m.status, 500); assert.match(m.json.error, /Something went wrong/); noLeak(m.text);
+      for (const [mm, p] of [['GET', '/api/perf/status'], ['GET', '/api/perf/snapshot'], ['POST', '/api/perf/refresh']]) {
+        const r = await within(call(mm, p, STAFF, {})); assert.equal(r.status, 500, p); noLeak(r.text);
+      }
+    });
+    /* the real job: a database failure in the middle of a match */
+    const j = job(makeSheet(fixtureTabs()));
+    await j.perf.run({});
+    j.store.writeMatches = async () => { throw NASTY; };
+    await withRoutes(() => ({ perf: j.perf, off: '', cfg: { intervalMin: 30, maxRows: 5000, dryRun: false } }), async (call) => {
+      const r = await within(call('POST', '/api/perf/match', STAFF, { sheetCampaignId: 'c3', dashboardCampaignId: 'dX' }));
+      assert.equal(r.status, 500); noLeak(r.text);
+      const again = await within(call('POST', '/api/perf/match', STAFF, { sheetCampaignId: 'c4', sheetOnly: true }));
+      assert.equal(again.status, 500, 'the lock was released after the failure');
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    assert.deepEqual(rejections, [], 'no unhandled rejection');
+  } finally { process.off('unhandledRejection', onRej); }
+});
+
+function gatedSheet() {
+  const sheet = makeSheet(fixtureTabs());
+  let release; const gate = new Promise((r) => { release = r; });
+  let armed = false;
+  const inner = sheet.fetchImpl;
+  sheet.fetchImpl = async (u, i) => { if (armed) await gate; return inner(u, i); };
+  return { sheet, arm: () => { armed = true; }, release };
+}
+
+test('setMatch is refused (409, plain words) while a refresh is running, writes nothing, and cannot overwrite the newer snapshot', async () => {
+  const g = gatedSheet();
+  const j = job(g.sheet);
+  await j.perf.run({});
+  const before = JSON.stringify(j.store.st.snapshot);
+  j.clk.advance(31 * 60000);
+  g.arm();
+  const running = j.perf.run({});                           // the second run waits inside Google
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(j.perf.isRunning(), true);
+  const out = await j.perf.setMatch('c3', 'dX');
+  assert.equal(out.ok, false); assert.equal(out.status, 409); assert.match(out.error, /refresh is running, try again in a minute/);
+  assert.equal(j.store.st.writes.matches, 0); assert.equal(j.store.st.matches.length, 0);
+  assert.equal(JSON.stringify(j.store.st.snapshot), before, 'snapshot untouched');
+  g.release(); await running;
+  assert.equal(j.store.st.snapshot.checkedAt, '2026-11-25T10:31:00.000Z', 'the run swapped its newer snapshot in');
+  assert.equal((await j.perf.setMatch('c3', 'dX')).ok, true, 'allowed again once the run is over');
+});
+
+test('a run that starts while a match is being saved is told it is busy (nothing runs in parallel)', async () => {
+  const j = job(makeSheet(fixtureTabs()));
+  await j.perf.run({});
+  let release; const gate = new Promise((r) => { release = r; });
+  const rm = j.store.readMatches; j.store.readMatches = async () => { await gate; return rm(); };
+  const m = j.perf.setMatch('c3', 'dX');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal((await j.perf.run({})).busy, true);
+  assert.equal((await j.perf.refresh({})).busy, true);
+  assert.equal((await j.perf.setMatch('c4', '')).status, 409, 'a second match waits its turn');
+  release(); assert.equal((await m).ok, true);
+});
+
+test('setMatch writes nothing in dry run (env flag), even with an older snapshot in the store', async () => {
+  const seed = job(makeSheet(fixtureTabs()));
+  await seed.perf.run({});
+  const j = job(makeSheet(fixtureTabs()), { dryRun: true, store: seed.store });
+  const w = JSON.stringify(seed.store.st.writes);
+  const out = await j.perf.setMatch('c3', 'dX');
+  assert.equal(out.ok, false); assert.equal(out.status, 409);
+  assert.equal(JSON.stringify(seed.store.st.writes), w, 'no write of any kind');
+  assert.equal(seed.store.st.matches.length, 0);
+});
+
+test('atomic swap: if the stored snapshot changed since the match read it, nothing is written (conditional replace by revision)', async () => {
+  const j = job(makeSheet(fixtureTabs()));
+  await j.perf.run({});
+  assert.ok(j.store.st.snapshot.rev, 'snapshots carry a revision');
+  const st = j.store.st;
+  j.store.writeSnapshotIf = async (rev, doc) => { if (st.snapshot.rev !== rev) return false; st.writes.snapshot++; st.snapshot = JSON.parse(JSON.stringify(doc)); return true; };
+  const rm = j.store.readMatches;
+  j.store.readMatches = async () => { st.snapshot.rev = 'newer-run-wrote-this'; st.snapshot.checkedAt = 'NEWER'; return rm(); };   // another process swaps in mid-match
+  const out = await j.perf.setMatch('c3', 'dX');
+  assert.equal(out.ok, false); assert.equal(out.status, 409);
+  assert.equal(st.snapshot.checkedAt, 'NEWER', 'the newer snapshot survives');
+  assert.equal(st.matches.length, 0);
+});
+
+test('mongo store: writeSnapshotIf filters on the revision (or its absence) and reports whether it replaced', async () => {
+  const seen = [];
+  let matched = 1;
+  const client = { db: () => ({ collection: () => ({ replaceOne: async (f, d, o) => { seen.push([f, o]); return { matchedCount: matched }; } }) }) };
+  const st = P.makeMongoStore(async () => client, 'testdb');
+  assert.equal(await st.writeSnapshotIf('abc', { x: 1 }), true);
+  assert.deepEqual(seen[0][0], { _id: 'snapshot', rev: 'abc' }); assert.equal(seen[0][1], undefined, 'no upsert: it must not create over a missing doc');
+  await st.writeSnapshotIf(undefined, { x: 1 });
+  assert.deepEqual(seen[1][0], { _id: 'snapshot', rev: { $exists: false } });
+  matched = 0;
+  assert.equal(await st.writeSnapshotIf('abc', { x: 1 }), false);
+});
+
+test('a campaign name with an unpaired surrogate: its tab is reported in erTabs.skipped, the run still succeeds', async () => {
+  const tabs = fixtureTabs();
+  const bad = 'Bad \uD800 Name';
+  tabs.Campaigns.rows.push(['c8', bad, null, null, 'live', '2026-10-01', ...Array(11).fill(null)]);
+  const j = job(makeSheet(tabs));
+  const e = await j.perf.run({});
+  assert.equal(e.ok, true, e.message);
+  const skipped = j.store.st.snapshot.erTabs.skipped;
+  assert.ok(skipped.some((x) => x.tab === bad && x.why === 'failed'), JSON.stringify(skipped));
+  assert.ok(j.store.st.snapshot.erTabs.read >= 1, 'other tabs were still read');
+});
+
+test('refresh limit: a named staff user is held to 5 minutes on their own; the global spacing still applies', async () => {
+  const j = job(makeSheet(fixtureTabs()));
+  assert.ok(!(await j.perf.refresh({ actor: 'a@example.invalid', dryRun: true })).throttled);
+  assert.equal((await j.perf.refresh({ actor: 'a@example.invalid', dryRun: true })).throttled, true);
+  assert.equal((await j.perf.refresh({ actor: 'b@example.invalid', dryRun: true })).throttled, true, 'global spacing kept');
+  j.clk.advance(301000);
+  assert.ok(!(await j.perf.refresh({ actor: 'b@example.invalid', dryRun: true })).throttled);
 });
