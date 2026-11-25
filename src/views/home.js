@@ -8,6 +8,7 @@ import { emptyState } from '../ui/html.js';
 import { todayItems } from './planner.js';
 import { showSocialContent } from './social.js';
 import { ensureOverviewStyles, perfLegacyChipHtml, platformTag } from './socialOverview.js';
+import { homeSummaryLive } from './overview.js';
 
 /* ============================================================
    HOME — the page
@@ -158,7 +159,7 @@ export function ensureHomeStyles() {
   document.head.appendChild(s);
 }
 
-export const hmSat = (l, v, s, extra) => `<div class="hm-sat"><div class="l">${esc(l)}</div>
+export const hmSat = (l, v, s, extra, id) => `<div class="hm-sat"${id ? ' id="' + esc(id) + '"' : ''}><div class="l">${esc(l)}</div>
   <div class="v">${v}</div><div class="s">${esc(s)}</div>${extra || ''}</div>`;
 
 /* The flow is drawn rather than charted: the ribbon's narrowing is the
@@ -250,7 +251,8 @@ export function renderHome(view) {
           ${hmSat('Contacted', num(k.creatorsContacted), 'of ' + num(k.roster) + ' on the roster')}
           ${hmSat('Content pieces', num(k.content), num(k.measuredCount) + ' with view counts')}
           ${hmSat('Total views', num(k.views),
-            k.avgViews == null ? 'nothing measured yet' : num(k.avgViews) + ' avg per post', perfLegacyChipHtml())}
+            k.avgViews == null ? 'nothing measured yet' : num(k.avgViews) + ' avg per post',
+            perfLegacyChipHtml() + '<div class="s hm-src">Source: imported numbers (Setup)</div>', 'hmViewsSat')}
         </div>
       </div>
 
@@ -322,6 +324,7 @@ export function renderHome(view) {
   drawHomeTop(top);
   drawHomeFeed(feed);
   wireHome(reg);
+  homeSummaryLive(view);   /* swaps the views tile to the live sheet when it can, and names the source */
 }
 
 export function drawHomeTop(top) {

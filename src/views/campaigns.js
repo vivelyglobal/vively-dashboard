@@ -297,7 +297,7 @@ export const HUB_SKIP_WHY = {
 };
 
 export const HUB_NOTION_TTL_MS = 30000;
-export const HUB = { at: 0, data: null, promise: null };
+export const HUB = { at: 0, data: null, promise: null, gen: 0 };
 
 /* both answers are staff-only and global; the campaign is picked out in the
    browser. One fetch is shared for 30 seconds, so reopening tabs does not
@@ -309,10 +309,16 @@ export function hubLoadNotion(force) {
   const hit = force ? null : hubCachedNotion();
   if (hit) return Promise.resolve(hit);
   if (HUB.promise) return HUB.promise;
-  HUB.promise = Promise.all([nacCall('/api/notion-applicants/status', 'GET'), nacCall('/api/notion/autocreate/status', 'GET')])
-    .then(([applicants, autocreate]) => { HUB.data = { applicants, autocreate }; HUB.at = Date.now(); return HUB.data; })
-    .finally(() => { HUB.promise = null; });
-  return HUB.promise;
+  const gen = HUB.gen;       /* a sign-in or sign-out in the meantime (resetStaffCaches) drops this answer */
+  const job = Promise.all([nacCall('/api/notion-applicants/status', 'GET'), nacCall('/api/notion/autocreate/status', 'GET')])
+    .then(([applicants, autocreate]) => {
+      const data = { applicants, autocreate };
+      if (gen === HUB.gen) { HUB.data = data; HUB.at = Date.now(); }
+      return data;
+    })
+    .finally(() => { if (gen === HUB.gen) HUB.promise = null; });
+  HUB.promise = job;
+  return job;
 }
 
 export const hubNum = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Math.floor(Number(v)) : 0);

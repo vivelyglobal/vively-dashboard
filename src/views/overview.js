@@ -8,10 +8,11 @@ import { CAMPAIGN_STATUS, STAGE_IDX, tierOf } from '../model/vocab.js';
 import { $, $$, esc } from '../ui/dom.js';
 import { downloadFile, emptyState, flaggedOnRoster, statCard, statusPill, tierPill, toCsv, whoHtml } from '../ui/html.js';
 import { toast } from '../ui/overlay.js';
-import { maskAccount, showParticipant } from './campaigns.js';
+import { HUB, campaignShips, hubHeldSummary, hubLoadNotion, hubNum, hubTime, hubValidTime, maskAccount, showParticipant } from './campaigns.js';
 import { showCreator } from './creators.js';
-import { DESK, kstToday } from './desk.js';
-import { PLANNER_CONFIRMED, attendanceOf, markPaid, payInfo, plannerRow, postedState } from './planner.js';
+import { DESK, ensureDeskStyles, kstToday } from './desk.js';
+import { PLANNER_CONFIRMED, POST_DUE_DAYS, attendanceOf, markPaid, payInfo, plannerRow, postedState } from './planner.js';
+import { PERF, ensurePerfStyles, perfChipHtml, perfCleanCampaign, perfCleanNeeds, perfCleanPost, perfEr, perfFilterPosts, perfFreshness, perfKst, perfLoad, perfNum, perfReset, perfStats, perfText, perfTop3 } from './socialOverview.js';
 
 /* ============================================================
    VIEW — OVERVIEW  (layer 2 items × layer 3 tabs)
@@ -226,7 +227,10 @@ export function todaySchedule(only) {
     total: list.reduce((n, d) => n + d.teams, 0) };
 }
 
-export function renderToday(view, item) {
+/* The creator-database page that used to be Home: tier tables, "Not used yet", and the
+   one-campaign view. Still here, reached from the Home page's link and from the panel's
+   campaign list (#/today/creators, #/today/<campaign>). */
+export function renderTodayCreators(view, item) {
   ensureTodayStyles();
   if (!DB.campaigns.length && !DB.creators.length) {
     view.innerHTML = emptyState('Nothing here yet', 'Import a campaign or a creator list and the overview fills itself in.');
@@ -245,7 +249,7 @@ export function renderToday(view, item) {
   const repeat = pool.filter((c) => use[c.id] && use[c.id].size >= 2);
   const avg = did.length ? did.reduce((n, c) => n + use[c.id].size, 0) / did.length : 0;
   const when = new Date(kstToday() + 'T00:00:00Z').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
-  const cpTitle = only ? byCampaign[only].brand : 'Home';
+  const cpTitle = only ? byCampaign[only].brand : 'Creators and tiers';
 
   /* ---- by tier ---- */
   const tierRows = TODAY_TIERS.map((t) => {
@@ -366,6 +370,419 @@ export function renderToday(view, item) {
   if (tierSel) tierSel.addEventListener('change', () => { TODAY_VIEW.tier = tierSel.value; notify(); });
   const allC = $('#tdAllCamps', view);
   if (allC) allC.addEventListener('click', (e) => { e.preventDefault(); TODAY_VIEW.allCamps = !TODAY_VIEW.allCamps; notify(); });
+}
+
+/* ============================================================
+   HOME — the morning page (#/today)
+
+   One calm page that answers "what do I do this morning": a band of five
+   numbers, a short list of things that need a decision with one button
+   each, the week's visits, the live performance highlights and the state
+   of the Notion check. The creator tier tables that used to be here are
+   renderTodayCreators (link at the bottom of this page).
+
+   Rules the code keeps:
+   - the two staff status calls (the live sheet snapshot and the Notion
+     applicants check) are made only when signed in, once per open (both
+     loaders keep their answer for about 30 seconds), and a 401, 403 or 503
+     is one plain sentence on the card that needed it
+   - the page is drawn from whatever has loaded; a failed call never blanks it
+   - every string from the sheet or the server is escaped; held-row codes are
+     turned into plain words, and no creator name or code is shown for them
+   - a number that was not read shows "—", never 0
+   - signing in or out clears every cached staff answer (resetStaffCaches)
+   ============================================================ */
+export const HOME_ENV = { signedIn: () => false };   /* the shell replaces this once it knows who is signed in */
+export const HOME = { run: 0 };
+export const HOME_WEEK = 7;
+export const HOME_MAX_VISIT_ROWS = 3;
+
+/* Called on every sign-in, sign-out and refusal. Forgets what the staff calls
+   answered (including a "signed out" answer), and makes any call still in the
+   air drop its answer when it lands. */
+export function resetStaffCaches() {
+  perfReset();
+  HUB.at = 0; HUB.data = null; HUB.promise = null; HUB.gen += 1;
+  HOME.run += 1;
+}
+
+export const homeKst = (nowMs) => { const k = new Date(nowMs + 9 * 3600000).toISOString(); return { key: k.slice(0, 10), hour: Number(k.slice(11, 13)) }; };
+export const homeAddDays = (key, n) => new Date(Date.parse(key + 'T00:00:00Z') + n * DAY).toISOString().slice(0, 10);
+export const homePlural = (n, one, many) => n + ' ' + (n === 1 ? one : many);
+
+/* ---- what the workspace itself knows (no server call) ---- */
+export function homeLocal() {
+  const sch = todaySchedule();
+  const byKey = {};
+  sch.list.forEach((d) => { byKey[d.key] = d; });
+  const week = [];
+  for (let i = 0; i < HOME_WEEK; i++) {
+    const key = homeAddDays(sch.start, i);
+    const d = byKey[key];
+    week.push({ key, teams: d ? d.teams : 0, heads: d ? d.heads : 0 });
+  }
+  const noDate = [];
+  const overdue = { n: 0, camps: [] };
+  let open = 0, live = 0;
+  DB.campaigns.forEach((cp) => {
+    if (cp.status === 'wrapped') return;
+    open += 1;
+    if (cp.status === 'live') live += 1;
+    const rows = DB.participants.filter((p) => p.campaignId === cp.id && PLANNER_CONFIRMED.includes(p.stage));
+    if (!campaignShips(cp)) {
+      const n = rows.filter((p) => attendanceOf(p) !== 'cancelled' && !plannerRow(p).at).length;
+      if (n) noDate.push({ id: cp.id, name: cp.brand || cp.name || 'A campaign', n });
+    }
+    const late = rows.filter((p) => postedState(p).state === 'overdue').length;
+    if (late) { overdue.n += late; overdue.camps.push(cp.id); }
+  });
+  noDate.sort((a, b) => b.n - a.n || a.name.localeCompare(b.name));
+  const today = byKey[sch.start];
+  return { start: sch.start, week, weekTotal: week.reduce((n, d) => n + d.teams, 0),
+    todayTeams: today ? today.teams : 0, todayHeads: today ? today.heads : 0, noDate, overdue, open, live };
+}
+
+/* ---- the Notion applicants check, in plain words ---- */
+export function homeNotionModel(env) {
+  const base = { state: '', text: '', waiting: null, why: [], dryRun: false, last: '', intervalMin: 0 };
+  if (!env.signedIn) return Object.assign(base, { state: 'signin', text: 'Sign in as staff to see the Notion check.' });
+  if (!env.hub) return Object.assign(base, { state: 'loading', text: 'Checking Notion…' });
+  const a = env.hub.applicants || { status: 0, body: {} };
+  if (a.status === 401) return Object.assign(base, { state: 'signin', text: 'You are signed out. Sign in as staff to see the Notion check.' });
+  if (a.status === 403) return Object.assign(base, { state: 'forbidden', text: 'The Notion check is for staff only, and this account is not staff.' });
+  if (a.status === 0) return Object.assign(base, { state: 'unreachable', text: 'Could not reach the server, so Notion could not be checked.' });
+  const b = a.body && typeof a.body === 'object' ? a.body : {};
+  if (a.status !== 200 || b.ok !== true) return Object.assign(base, { state: 'unavailable', text: 'The Notion check is not available right now.' });
+  if (!b.enabled) return Object.assign(base, { state: 'off', text: 'Notion sync is switched off.' });
+  const st = b.state && typeof b.state === 'object' ? b.state : null;
+  const last = b.last && typeof b.last === 'object' ? b.last : null;
+  let waiting = null;
+  if (st && Number.isFinite(Number(st.heldTotal))) waiting = hubNum(st.heldTotal);
+  else if (last && Array.isArray(last.campaigns)) {
+    waiting = last.campaigns.reduce((n, c) => n + (c && c.counts && typeof c.counts === 'object' ? hubNum(c.counts.held) : 0), 0);
+  }
+  const held = st && Array.isArray(st.held) ? st.held.filter((h) => h && typeof h === 'object') : [];
+  return Object.assign(base, { state: 'ok', text: b.dryRun ? 'Notion sync is on, in preview mode.' : 'Notion sync is on.', waiting,
+    why: hubHeldSummary(held), dryRun: !!b.dryRun, last: hubValidTime(last && last.at), intervalMin: hubNum(b.intervalMin) });
+}
+
+/* ---- the live sheet snapshot, as the Home page needs it ---- */
+export function homePerfModel(env) {
+  const P = env.perf, now = env.nowMs;
+  if (!env.signedIn) return { state: 'signin', text: 'Sign in as staff to see live performance.' };
+  const resp = P.snapResp && typeof P.snapResp === 'object' ? P.snapResp : null;
+  const snap = resp && resp.snapshot && typeof resp.snapshot === 'object' ? resp.snapshot : null;
+  if (!snap) {
+    if (P.problem) return { state: ['off', 'signin', 'forbidden'].includes(P.problem.kind) ? P.problem.kind : 'error', text: P.problem.text };
+    if (resp) return { state: 'empty', text: (resp.banner && perfText(resp.banner.text, 300)) || 'No live readings are stored yet.' };
+    return { state: 'loading', text: 'Reading live performance…' };
+  }
+  const posts = Array.isArray(snap.posts) ? snap.posts.map(perfCleanPost).filter(Boolean) : [];
+  const camps = Array.isArray(snap.campaigns) ? snap.campaigns.map(perfCleanCampaign).filter(Boolean) : [];
+  const needs = Array.isArray(snap.needsMatch) ? snap.needsMatch.map(perfCleanNeeds).filter(Boolean) : [];
+  const campName = new Map(camps.map((c) => [c.id, c.name]));
+  const month = homeKst(now).key.slice(0, 7);
+  const last30 = perfFilterPosts(posts, { period: '30', platform: '', campaign: '' }, now);
+  const st = perfStats(last30);
+  const chip = perfFreshness(resp.freshness, snap.checkedAt, snap.newestReadingAt, now,
+    perfNum(P.status && P.status.intervalMin) || perfNum(snap.intervalMin) || 30);
+  return { state: 'ok', text: '', chip, stale: chip.level === 'amber' || chip.level === 'red', staleWord: chip.word,
+    note: P.problem && P.problem.kind === 'network' ? 'Could not reach the server. Showing numbers from ' + (perfKst(snap.checkedAt) || 'earlier') + '.' : '',
+    postsMonth: posts.filter((p) => p.posted && p.posted.slice(0, 7) === month).length,
+    last30: st, views30: st.views,
+    top: perfTop3(last30).map((p) => ({ handle: p.handle, campaign: p.campaignId ? campName.get(p.campaignId) || '' : '', platform: p.platform,
+      posted: p.posted, views: p.views, er: p.er, url: p.url })),
+    /* "no match" campaigns are the quiet Sheet only group, so they are not a daily chore */
+    needsMatch: needs.filter((n) => n.reason !== 'no-match').length };
+}
+
+/* ---- the "Needs you" list, in the order a person should do it ---- */
+export function homeNeeds(m) {
+  const out = [];
+  const L = m.local, N = m.notion, P = m.perf;
+  if (L) {
+    L.noDate.slice(0, HOME_MAX_VISIT_ROWS).forEach((c) => out.push({ key: 'visit-date:' + c.id, tone: 'todo', count: 1,
+      title: c.name + ': ' + homePlural(c.n, 'confirmed creator has', 'confirmed creators have') + ' no visit date',
+      why: 'Book a time so they can be reminded.', label: 'Set visit dates', href: '#/campaigns/' + encodeURIComponent(c.id) }));
+    if (L.noDate.length > HOME_MAX_VISIT_ROWS) {
+      const more = L.noDate.length - HOME_MAX_VISIT_ROWS;
+      out.push({ key: 'visit-date:more', tone: 'todo', count: more, title: homePlural(more, 'more campaign has', 'more campaigns have') + ' creators with no visit date',
+        why: 'Open the list to see which.', label: 'Open campaigns', href: '#/campaigns/all' });
+    }
+    if (L.overdue.n) out.push({ key: 'not-posted', tone: 'now', count: 1,
+      title: homePlural(L.overdue.n, 'creator has', 'creators have') + ' not posted past the deadline',
+      why: 'Posts are due ' + POST_DUE_DAYS + ' days after the visit.', label: 'See who to chase',
+      href: L.overdue.camps.length === 1 ? '#/campaigns/' + encodeURIComponent(L.overdue.camps[0]) : '#/campaigns/all' });
+  }
+  if (N && N.state === 'ok' && N.waiting) out.push({ key: 'applicants', tone: 'todo', count: 1,
+    title: homePlural(N.waiting, 'applicant is', 'applicants are') + ' waiting for approval',
+    why: N.why.length ? N.why.map((w) => w.n + ' waiting: ' + w.why).join(' · ') : 'Waiting for the next check.',
+    label: 'See the creators', href: '#/creators' });
+  if (P && P.state === 'ok' && P.stale) out.push({ key: 'stale-performance', tone: 'todo', count: 1,
+    title: 'Performance numbers are ' + (P.staleWord === 'Out of date' ? 'out of date' : 'getting old'),
+    why: P.chip.text + '.', label: 'Open Performance', href: '#/social/performance' });
+  if (P && P.state === 'ok' && P.needsMatch) out.push({ key: 'match', tone: 'todo', count: 1,
+    title: homePlural(P.needsMatch, 'sheet campaign needs', 'sheet campaigns need') + ' a match',
+    why: 'The sheet name fits more than one dashboard campaign, or two sheet campaigns point at one.', label: 'Match them', href: '#/social/performance' });
+  return out;
+}
+
+export function homeModel(env) {
+  const m = { nowMs: env.nowMs, signedIn: !!env.signedIn, local: env.local || null,
+    notion: homeNotionModel(env), perf: homePerfModel(env) };
+  m.needs = homeNeeds(m);
+  m.pending = m.signedIn && (m.perf.state === 'loading' || m.notion.state === 'loading');
+  const n = m.needs.reduce((a, x) => a + x.count, 0);
+  m.summary = n ? homePlural(n, 'thing needs', 'things need') + ' you today.' + (m.pending ? ' Still checking Notion and the sheet.' : '')
+    : m.pending ? 'Checking Notion and the sheet…' : 'Nothing needs you right now.';
+  if (!m.local) m.summary = 'Part of this page could not be worked out.';
+  return m;
+}
+
+/* ---- HTML (every dynamic string goes through esc) ---- */
+export const HOME_WHY = {
+  perf: { loading: 'Reading the sheet…', off: 'Live performance is off', signin: 'Sign in as staff', forbidden: 'Staff only',
+    error: 'Could not read the sheet', empty: 'No readings stored yet' },
+  notion: { loading: 'Checking Notion…', off: 'Notion sync is off', signin: 'Sign in as staff', forbidden: 'Staff only',
+    unreachable: 'Could not reach the server', unavailable: 'Notion check not available' }
+};
+export const homeCardHtml = (id, title, right, body) => `<section class="hm2-card" aria-labelledby="hm2h-${id}">
+  <div class="hm2-ch"><h3 id="hm2h-${id}">${esc(title)}</h3>${right || ''}</div>${body}</section>`;
+export const homeNoteHtml = (text, cls) => `<p class="hm2-note${cls ? ' ' + cls : ''}">${esc(text)}</p>`;
+export const homeRetryHtml = () => '<button type="button" class="btn sm" data-hm2-retry="1">Try again</button>';
+
+export function homeBandHtml(m) {
+  const L = m.local, N = m.notion, P = m.perf;
+  const cell = (lab, big, cap) => `<div class="dk-b"><div class="lab">${esc(lab)}</div><div class="big">${big}</div><div class="cap">${esc(cap)}</div></div>`;
+  const noLocal = 'Could not work this out';
+  const perfOk = P.state === 'ok';
+  const pWhy = HOME_WHY.perf[P.state] || '';
+  return `<div class="dk-band hm2-band" role="group" aria-label="Today in numbers">
+    ${L ? cell('Today’s visits', esc(num(L.todayTeams)), L.todayTeams ? homePlural(L.todayHeads, 'person', 'people') : 'No visits today') : cell('Today’s visits', '—', noLocal)}
+    ${N.state === 'ok'
+      ? (N.waiting == null ? cell('Waiting for approval', '—', 'Count not available') : cell('Waiting for approval', esc(num(N.waiting)), N.waiting ? 'applicants held in Notion' : 'No one waiting'))
+      : cell('Waiting for approval', '—', HOME_WHY.notion[N.state] || '')}
+    ${L ? cell('Campaigns live', esc(num(L.live)), 'of ' + L.open + ' not wrapped') : cell('Campaigns live', '—', noLocal)}
+    ${perfOk ? cell('Posts this month', esc(num(P.postsMonth)), 'by posted date, from the sheet') : cell('Posts this month', '—', pWhy)}
+    ${perfOk ? (P.views30 == null ? cell('Views, last 30 days', '—', P.last30.posts ? 'Not measured' : 'No posts in this period')
+      : cell('Views, last 30 days', esc(num(P.views30)), 'from ' + P.last30.viewsRead + ' of ' + P.last30.posts + ' posts'))
+      : cell('Views, last 30 days', '—', pWhy)}
+  </div>`;
+}
+
+export function homeNeedsHtml(m) {
+  let body;
+  if (!m.local) body = homeNoteHtml('Could not work out the visits and deadlines from the workspace.', 'warn') + homeRetryHtml();
+  else if (m.needs.length) {
+    body = `<ul class="hm2-needs">${m.needs.map((x) => `<li class="hm2-need ${esc(x.tone)}" data-need="${esc(x.key)}">
+      <div class="hm2-nt"><div class="t">${esc(x.title)}</div><div class="w">${esc(x.why)}</div></div>
+      <a class="btn sm primary" href="${esc(x.href)}">${esc(x.label)}</a></li>`).join('')}</ul>`;
+  } else body = homeNoteHtml(m.pending ? 'Nothing so far. Still checking Notion and the sheet.' : 'Nothing needs a person right now.');
+  /* what could not be read, so an empty list is not mistaken for "all clear" */
+  const foot = [];
+  if (m.signedIn) {
+    if (['unreachable', 'unavailable', 'forbidden', 'signin'].includes(m.notion.state)) foot.push('Notion: ' + m.notion.text);
+    if (['error', 'forbidden', 'signin'].includes(m.perf.state)) foot.push('Live performance: ' + m.perf.text);
+  }
+  return homeCardHtml('needs', 'Needs you', '', body + foot.map((t) => homeNoteHtml(t, 'warn')).join(''));
+}
+
+export function homeWeekHtml(m) {
+  const L = m.local;
+  const label = (key) => new Date(key + 'T00:00:00Z').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', timeZone: 'UTC' });
+  let body;
+  if (!L) body = homeNoteHtml('Could not read the visits from the workspace.', 'warn') + homeRetryHtml();
+  else if (!L.weekTotal) body = homeNoteHtml('No visits booked in the next ' + HOME_WEEK + ' days.');
+  else body = `<div class="hm2-week">${L.week.map((d, i) => `<button type="button" class="hm2-day${i === 0 ? ' today' : ''}${d.teams ? '' : ' z'}" data-hm2-day="${esc(d.key)}"
+      aria-label="${esc(label(d.key) + (i === 0 ? ', today' : '') + ': ' + (d.teams ? homePlural(d.teams, 'visit', 'visits') + ', ' + homePlural(d.heads, 'person', 'people') : 'no visits'))}">
+      <span class="dy">${esc(label(d.key))}</span><span class="n">${d.teams ? esc(homePlural(d.teams, 'visit', 'visits')) : '—'}</span>
+      <span class="s">${d.teams ? esc(homePlural(d.heads, 'person', 'people')) : (i === 0 ? 'Today' : '')}</span></button>`).join('')}</div>`;
+  return homeCardHtml('week', 'This week', '<a class="hm2-more" href="#/desk">Open the Desk →</a>', body);
+}
+
+export function homePerfHtml(m) {
+  const P = m.perf;
+  const link = '<a class="hm2-more" href="#/social/performance">Open Performance →</a>';
+  let body;
+  if (P.state === 'ok') {
+    const top = P.top.length ? `<ol class="hm2-top">${P.top.map((p, i) => `<li><div class="h">${esc('#' + (i + 1) + ' · ' + (p.handle || 'unknown creator'))}</div>
+      <div class="m">${esc([p.campaign || 'No campaign', p.platform, p.posted ? 'posted ' + p.posted : ''].filter(Boolean).join(' · '))}</div>
+      <div class="n"><strong>${esc(num(p.views))}</strong> views · rate ${perfEr(p.er)}
+        ${p.url ? ` · <a class="pf-link" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer" aria-label="${esc('Open post by ' + (p.handle || 'this creator') + ' (opens in a new tab)')}">Open post</a>` : ''}</div></li>`).join('')}</ol>`
+      : homeNoteHtml('No post from the last 30 days has a views reading yet.');
+    const er = P.last30.avgEr == null ? 'Average ER: — (no rate given)' : 'Average ER: ' + P.last30.avgEr.toFixed(2) + '% (mean of ' + homePlural(P.last30.erCount, 'post', 'posts') + ')';
+    body = `<div class="hm2-chiprow">${perfChipHtml(P.chip)}</div>${P.note ? homeNoteHtml(P.note, 'warn') : ''}
+      <p class="hm2-sub2">Top 3 posts, last 30 days by posted date</p>${top}
+      <p class="hm2-er">${esc(er)}</p>
+      <p class="hm2-def">Average ER is the plain average of the rates the sheet gives. A post with no rate is left out, not counted as zero. Top 3 is the most views; a tie goes to the newer post.</p>`;
+  } else if (P.state === 'loading') body = homeNoteHtml(P.text);
+  else if (P.state === 'empty') body = homeNoteHtml(P.text);
+  else if (P.state === 'off') body = homeNoteHtml(P.text);
+  else body = homeNoteHtml(P.text, 'warn') + (P.state === 'error' ? homeRetryHtml() : '');
+  return homeCardHtml('perf', 'Performance highlights', link, body);
+}
+
+export function homeNotionHtml(m) {
+  const N = m.notion;
+  let body;
+  if (N.state === 'ok') {
+    const when = N.last ? 'Last check: ' + hubTime(N.last) + '.' : 'No check has run yet.';
+    body = homeNoteHtml(N.text + ' ' + when + (N.intervalMin ? ' About every ' + N.intervalMin + ' minutes.' : ''))
+      + (N.why.length ? `<ul class="hm2-why">${N.why.map((w) => `<li>${esc(w.n + ' waiting: ' + w.why)}</li>`).join('')}</ul>` : '');
+  } else body = homeNoteHtml(N.text, N.state === 'loading' || N.state === 'off' ? '' : 'warn') + (N.state === 'unreachable' || N.state === 'unavailable' ? homeRetryHtml() : '');
+  return homeCardHtml('notion', 'Notion sync', '', body);
+}
+
+export function homeHtml(m) {
+  const k = homeKst(m.nowMs);
+  const when = new Date(k.key + 'T00:00:00Z').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
+  const hello = k.hour < 12 ? 'Good morning.' : k.hour < 18 ? 'Good afternoon.' : 'Good evening.';
+  return `<div class="eyebrow">${esc(when)} · Korea time</div>
+    <h2 class="page-title hm2-title">${esc(hello)}<span class="soft">${esc(m.summary)}</span></h2>
+    ${homeBandHtml(m)}
+    <div class="hm2-grid">
+      <div class="hm2-col">${homeNeedsHtml(m)}${homeWeekHtml(m)}</div>
+      <div class="hm2-col">${homePerfHtml(m)}${homeNotionHtml(m)}</div>
+    </div>
+    <p class="hm2-foot"><a class="hm2-more" href="#/today/creators">Creator tiers and creators not used yet →</a>
+      <a class="hm2-more" href="#/creators">All creators →</a></p>`;
+}
+
+export function ensureHomeMorningStyles() {
+  if (document.getElementById('hm2Css')) return;
+  const s = document.createElement('style');
+  s.id = 'hm2Css';
+  s.textContent = `
+  .hm2-wrap{max-width:1080px}
+  .hm2-title .soft{display:block;font-weight:500;margin-top:var(--sp-1,4px)}
+  .hm2-band{margin-top:var(--sp-4,16px)}
+  .hm2-grid{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:var(--sp-3,12px);margin-top:var(--sp-3,12px);align-items:start}
+  .hm2-col{display:grid;gap:var(--sp-3,12px);min-width:0}
+  .hm2-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg,14px);padding:var(--sp-4,16px);box-shadow:var(--shadow-1,none);min-width:0}
+  .hm2-ch{display:flex;align-items:baseline;justify-content:space-between;gap:var(--sp-3,12px);flex-wrap:wrap;margin-bottom:var(--sp-2,8px)}
+  .hm2-ch h3{margin:0;font:650 var(--fs-card-title,15px)/1.3 var(--font)}
+  .hm2-more{display:inline-flex;align-items:center;min-height:var(--hit,40px);color:var(--blue-hi);font:500 var(--fs-caption,12px)/1.3 var(--font)}
+  .hm2-more:focus-visible,.hm2-day:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+  .hm2-note{margin:var(--sp-1,4px) 0 var(--sp-2,8px);font:400 var(--fs-body,14px)/1.45 var(--font);color:var(--text-2)}
+  .hm2-note.warn{color:var(--warn-ink)}
+  .hm2-needs{list-style:none;margin:0;padding:0;display:grid;gap:var(--sp-2,8px)}
+  .hm2-need{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:var(--sp-2,8px) var(--sp-3,12px);align-items:center;
+    padding:var(--sp-2,8px) var(--sp-3,12px);border-left:3px solid var(--warn-ink);background:var(--surface-2);border-radius:var(--r,10px)}
+  .hm2-need.now{border-left-color:var(--danger)}
+  .hm2-nt{min-width:0;overflow-wrap:anywhere}
+  .hm2-nt .t{font:600 var(--fs-body,14px)/1.35 var(--font);color:var(--text)}
+  .hm2-nt .w{font:400 var(--fs-caption,12px)/1.4 var(--font);color:var(--text-3)}
+  .hm2-need .btn,.hm2-card .btn{min-height:var(--hit,40px);display:inline-flex;align-items:center;justify-content:center}
+  .hm2-week{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:var(--sp-2,8px)}
+  .hm2-day{display:flex;flex-direction:column;gap:2px;min-height:var(--hit,40px);padding:var(--sp-2,8px);text-align:left;cursor:pointer;
+    border:1px solid var(--line);border-radius:var(--r,10px);background:var(--surface-2);color:var(--text);font:inherit;
+    transition:background-color 150ms ease,border-color 150ms ease}
+  .hm2-day:hover{background:var(--surface-3)}
+  .hm2-day.today{border-color:var(--blue)}
+  .hm2-day.z .n{color:var(--text-3)}
+  .hm2-day .dy{font:600 var(--fs-caption,12px)/1.3 var(--font)}
+  .hm2-day .n{font:500 var(--fs-body,14px)/1.3 var(--font);font-variant-numeric:tabular-nums}
+  .hm2-day .s{font:400 var(--fs-caption,12px)/1.3 var(--font);color:var(--text-3)}
+  .hm2-chiprow{margin-bottom:var(--sp-2,8px)}
+  .hm2-sub2{margin:var(--sp-2,8px) 0;font:600 var(--fs-caption,12px)/1.3 var(--font);color:var(--text-2)}
+  .hm2-top{list-style:none;margin:0;padding:0;display:grid;gap:var(--sp-2,8px)}
+  .hm2-top li{padding:var(--sp-2,8px) var(--sp-3,12px);border:1px solid var(--line);border-radius:var(--r,10px);overflow-wrap:anywhere}
+  .hm2-top .h{font:600 var(--fs-body,14px)/1.3 var(--font)}
+  .hm2-top .m{font:400 var(--fs-caption,12px)/1.4 var(--font);color:var(--text-3)}
+  .hm2-top .n{font:400 var(--fs-body,14px)/1.4 var(--font);font-variant-numeric:tabular-nums}
+  .hm2-er{margin:var(--sp-3,12px) 0 var(--sp-1,4px);font:600 var(--fs-body,14px)/1.4 var(--font)}
+  .hm2-def{margin:0;font:400 var(--fs-caption,12px)/1.5 var(--font);color:var(--text-3)}
+  .hm2-why{margin:0;padding-left:18px;font:400 var(--fs-caption,12px)/1.5 var(--font);color:var(--text-2)}
+  .hm2-foot{display:flex;flex-wrap:wrap;gap:var(--sp-2,8px) var(--sp-4,16px);margin:var(--sp-4,16px) 0 0}
+  @media(max-width:1000px){.hm2-band .dk-b:last-child{grid-column:span 2}}
+  @media(max-width:900px){.hm2-grid{grid-template-columns:1fr}}
+  @media(max-width:760px){
+    .hm2-grid{grid-template-columns:1fr}
+    .hm2-title{font-size:var(--fs-title-phone,24px)}
+    .hm2-need{grid-template-columns:1fr}
+    .hm2-need .btn{width:100%;min-height:44px}
+    .hm2-week{grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:minmax(104px,1fr);overflow-x:auto}
+    .hm2-day,.hm2-more,.hm2-card .btn{min-height:44px}
+  }`;
+  document.head.appendChild(s);
+}
+
+/* ---- on the page ---- */
+export function homeEnvNow() {
+  let local = null;
+  try { local = homeLocal(); } catch (e) { local = null; }
+  return { nowMs: Date.now(), signedIn: !!HOME_ENV.signedIn(), perf: PERF, hub: HUB.data, local };
+}
+export function homePaint(view) {
+  const body = $('#hm2Body', view);
+  if (!body) return;
+  let html, summary = '';
+  try { const m = homeModel(homeEnvNow()); html = homeHtml(m); summary = m.summary; } catch (e) {
+    html = `<div class="eyebrow">Home</div><h2 class="page-title hm2-title">Home</h2>
+      <section class="hm2-card"><p class="hm2-note warn">This page could not be drawn.</p>${homeRetryHtml()}</section>
+      <p class="hm2-foot"><a class="hm2-more" href="#/today/creators">Creator tiers and creators not used yet →</a></p>`;
+  }
+  body.innerHTML = html;
+  body.setAttribute('aria-busy', PERF.loading || HUB.promise ? 'true' : 'false');
+  const say = $('#hm2Announce', view);
+  if (say && summary && say.textContent !== summary) say.textContent = summary;
+}
+export function homeWire(body, view) {
+  body.addEventListener('click', (ev) => {
+    const t = ev.target && ev.target.closest ? ev.target.closest('button') : null;
+    if (!t || !body.contains(t)) return;
+    if (t.hasAttribute('data-hm2-day')) { DESK.day = t.getAttribute('data-hm2-day'); location.hash = '#/desk'; return; }
+    if (t.hasAttribute('data-hm2-retry')) {
+      if (!HOME_ENV.signedIn()) { homePaint(view); return; }
+      const my = HOME.run;
+      Promise.all([perfLoad({ force: true }), hubLoadNotion(true)]).then(() => { if (my === HOME.run) homePaint(view); });
+      homePaint(view);
+    }
+  });
+}
+export function renderToday(view, item) {
+  if (item && item !== 'all' && (item === 'creators' || byCampaign[item])) { renderTodayCreators(view, item); return; }
+  ensureHomeMorningStyles();
+  ensureDeskStyles();          /* the stat band is the Desk's: dk-band / dk-b */
+  ensurePerfStyles();          /* the freshness chip */
+  const my = ++HOME.run;
+  view.innerHTML = '<div id="hm2Announce" class="sr-only" role="status" aria-live="polite"></div><div id="hm2Body" class="hm2-wrap" aria-busy="true"></div>';
+  homeWire($('#hm2Body', view), view);
+  /* the first draw reads what the loaders already hold (a repeat visit inside 30 s is complete at once) */
+  homePaint(view);
+  if (!HOME_ENV.signedIn()) return;
+  const again = () => { if (my === HOME.run) homePaint(view); };
+  Promise.all([perfLoad(), hubLoadNotion()]).then(again, again);
+}
+
+/* ---- Reports > Summary: the views tile, from the live sheet when there is one ---- */
+export function homeSummaryFigures(P, nowMs) {
+  const resp = P.snapResp && typeof P.snapResp === 'object' ? P.snapResp : null;
+  const snap = resp && resp.snapshot && typeof resp.snapshot === 'object' ? resp.snapshot : null;
+  if (!snap || !Array.isArray(snap.posts)) return null;
+  const st = perfStats(snap.posts.map(perfCleanPost).filter(Boolean));
+  if (st.views == null) return null;          /* nothing read yet: keep the imported figure, and say so */
+  return { st, chip: perfFreshness(resp.freshness, snap.checkedAt, snap.newestReadingAt, nowMs,
+    perfNum(P.status && P.status.intervalMin) || perfNum(snap.intervalMin) || 30) };
+}
+export function homeSummaryHtml(f) {
+  const st = f.st;
+  return `<div class="l">Total views</div><div class="v">${esc(num(st.views))}</div>
+    <div class="s">${esc(st.viewsRead + ' of ' + st.posts + ' live posts have a reading')}</div>
+    ${perfChipHtml(f.chip, { compact: true })}
+    <div class="s">${esc(st.avgEr == null ? 'Average ER: — (no rate given)' : 'Average ER: ' + st.avgEr.toFixed(2) + '% (mean of ' + homePlural(st.erCount, 'post', 'posts') + ')')}</div>
+    <div class="s hm-src">Source: live sheet, all posts</div>`;
+}
+export function homeSummaryLive(view) {
+  if (!$('#hmViewsSat', view) || !HOME_ENV.signedIn()) return;
+  ensurePerfStyles();
+  const paint = () => {
+    const sat = $('#hmViewsSat', view);
+    const f = sat ? homeSummaryFigures(PERF, Date.now()) : null;
+    if (f) sat.innerHTML = homeSummaryHtml(f);
+  };
+  paint();
+  perfLoad().then(paint, paint);
 }
 
 /* ============================================================

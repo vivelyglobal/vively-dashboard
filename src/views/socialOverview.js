@@ -181,13 +181,15 @@ export const PF_COLS = [
 
 /* what the screen remembers between repaints (a repaint is not a refetch) */
 export const PERF = {
-  status: null, snapResp: null, problem: null, at: 0, loading: null,
+  gen: 0, status: null, snapResp: null, problem: null, at: 0, loading: null,
   campaign: '', platform: '', period: 'all', metric: 'views',
   sort: { key: 'posted', dir: 'desc' }, limit: 100,
   refresh: { busy: false, text: '' }, matchMsg: {}, picks: {}
 };
+/* gen goes up on every reset, so a read that was still running when someone signed out
+   cannot write its answer back into the screen afterwards */
 export function perfReset() {
-  Object.assign(PERF, { status: null, snapResp: null, problem: null, at: 0, loading: null,
+  Object.assign(PERF, { gen: PERF.gen + 1, status: null, snapResp: null, problem: null, at: 0, loading: null,
     campaign: '', platform: '', period: 'all', metric: 'views', sort: { key: 'posted', dir: 'desc' }, limit: 100,
     refresh: { busy: false, text: '' }, matchMsg: {}, picks: {} });
 }
@@ -375,11 +377,13 @@ export async function perfLoad(opts) {
   const now = o.nowMs != null ? o.nowMs : Date.now();
   if (!o.force && PERF.at && now - PERF.at < PERF_CACHE_MS && (PERF.snapResp || PERF.problem)) return PERF;
   if (PERF.loading) return PERF.loading;
+  const gen = PERF.gen;
   const job = (async () => {
     try {
       const [st, sn] = await Promise.all([
         perfCall('/api/perf/status', undefined, o.fetchImpl),
         perfCall('/api/perf/snapshot', undefined, o.fetchImpl)]);
+      if (gen !== PERF.gen) return PERF;        /* signed in or out meanwhile: drop this answer */
       const bad = !st.ok ? st : !sn.ok ? sn : null;
       const problem = bad ? perfProblem(bad) : null;
       if (problem && problem.kind !== 'network' && problem.kind !== 'error' && problem.kind !== 'unavailable') {
@@ -392,7 +396,7 @@ export async function perfLoad(opts) {
       PERF.problem = problem;
       PERF.at = o.nowMs != null ? o.nowMs : Date.now();
       return PERF;
-    } finally { PERF.loading = null; }
+    } finally { if (gen === PERF.gen) PERF.loading = null; }
   })();
   PERF.loading = job;
   return job;
@@ -683,9 +687,17 @@ export function perfPickHtml(c, ctx, P, i) {
     ${msg ? `<div class="pf-mmsg" role="status">${esc(msg)}</div>` : ''}</div>`;
 }
 export function perfMatchCardHtml(M, ctx, P) {
-  const rank = { ambiguous: 0, shared: 1, 'no-match': 2 };
-  const needs = M.needs.slice().sort((a, b) => (rank[a.reason] ?? 3) - (rank[b.reason] ?? 3) || a.name.localeCompare(b.name));
-  const only = M.camps.filter((c) => c.state === 'sheet-only');
+  /* Only the ones a person has to decide (ambiguous, shared) stay loud. A sheet campaign that
+     simply has no dashboard counterpart (no-match) sits in the quiet Sheet only group with the
+     ones already marked that way. */
+  const rank = { ambiguous: 0, shared: 1 };
+  const needs = M.needs.filter((n) => n.reason !== 'no-match')
+    .sort((a, b) => (rank[a.reason] ?? 2) - (rank[b.reason] ?? 2) || a.name.localeCompare(b.name));
+  const onlyIds = new Set();
+  const only = M.camps.filter((c) => c.state === 'sheet-only').map((c) => ({ id: c.id, name: c.name, cands: c.cands, reason: '' }))
+    .concat(M.needs.filter((n) => n.reason === 'no-match').map((n) => ({ id: n.id, name: n.name, cands: n.cands, reason: 'no-match' })))
+    .filter((c) => (onlyIds.has(c.id) ? false : (onlyIds.add(c.id), true)))
+    .sort((a, b) => a.name.localeCompare(b.name));
   let i = 0;
   const needsHtml = needs.length
     ? `<section class="pf-sec"><h4>Needs a match <span class="so-hint">${esc(needs.length + (needs.length === 1 ? ' campaign' : ' campaigns'))}</span></h4>
@@ -694,8 +706,8 @@ export function perfMatchCardHtml(M, ctx, P) {
     : '';
   const onlyHtml = only.length
     ? `<details class="pf-quiet"><summary>${esc('Sheet only (' + only.length + ')')}</summary>
-        <p class="so-hint">These stay out of the dashboard on purpose. You can still link one.</p>
-        ${only.map((c) => perfPickHtml({ id: c.id, name: c.name, cands: c.cands, reason: '' }, ctx, P, i++)).join('')}</details>`
+        <p class="so-hint">These sheet campaigns have no dashboard campaign. They stay out of the dashboard unless you link one.</p>
+        ${only.map((c) => perfPickHtml(c, ctx, P, i++)).join('')}</details>`
     : '';
   return needsHtml + onlyHtml;
 }

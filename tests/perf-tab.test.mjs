@@ -283,13 +283,18 @@ test('filters: platform and period narrow the band; a campaign opens the campaig
 });
 test('needs a match: listed with a select, a Save button, and Sheet only grouped quietly', () => {
   const h = html();
-  assert.match(h, /Needs a match <span class="so-hint">2 campaigns<\/span>/);
-  assert.ok(h.indexOf('>Delta<') < h.indexOf('>Beta<') || h.indexOf('Delta</strong>') < h.indexOf('Beta</strong>'), 'ambiguous before no-match');
-  assert.match(h, /No dashboard campaign has this name\./);
+  /* only a campaign a person must decide (ambiguous, shared) is loud; "no match" is quiet */
+  assert.match(h, /Needs a match <span class="so-hint">1 campaign<\/span>/);
+  const loud = h.slice(h.indexOf('Needs a match'), h.indexOf('<details class="pf-quiet"'));
+  assert.ok(loud.includes('Delta</strong>') && !loud.includes('Beta</strong>') && !loud.includes('Gamma</strong>'), 'Beta (no-match) is not in the loud card');
+  assert.ok(!loud.includes('No dashboard campaign has this name.'));
+  const quiet = h.slice(h.indexOf('<details class="pf-quiet"'));
+  assert.ok(quiet.includes('Beta</strong>') && quiet.includes('Gamma</strong>'), 'no-match and sheet-only share the quiet group');
+  assert.match(quiet, /No dashboard campaign has this name\./);
   assert.match(h, /<optgroup label="Suggested"><option value="dash2">Delta A<\/option>/);
   assert.match(h, /<option value="__sheet_only__">Sheet only \(not in the dashboard\)<\/option>/);
-  assert.equal((h.match(/data-pf-save=/g) || []).length, 3, 'two to match, one quiet sheet-only row');
-  assert.match(h, /<details class="pf-quiet"><summary>Sheet only \(1\)<\/summary>/);
+  assert.equal((h.match(/data-pf-save=/g) || []).length, 3, 'one to match, two quiet rows');
+  assert.match(h, /<details class="pf-quiet"><summary>Sheet only \(2\)<\/summary>/);
   assert.ok(!/<details class="pf-quiet" open/.test(h));
   const withMsg = html({ matchMsg: { B: 'That dashboard campaign does not exist.' }, picks: { B: 'dash1' } });
   assert.match(withMsg, /role="status">That dashboard campaign does not exist\./);
@@ -473,7 +478,7 @@ test('the old imported-numbers page stays underneath, and the placeholder is gon
   assert.ok(!/class="so-mk"><div class="n">—<\/div>/.test(HTML), 'no tile that is only a dash');
   /* the imported band and the Home tile carry the small chip */
   assert.ok(HTML.includes('<div class="so-lab">Total views ${perfLegacyChipHtml()}</div>'));
-  assert.ok(HTML.includes("num(k.avgViews) + ' avg per post', perfLegacyChipHtml())"));
+  assert.ok(HTML.includes(`perfLegacyChipHtml() + '<div class="s hm-src">Source: imported numbers (Setup)</div>', 'hmViewsSat')`));
 });
 test('routes: Performance is the Social tab, the old links still land', () => {
   assert.ok(HTML.includes("{ id: 'overview', label: 'Performance'"));

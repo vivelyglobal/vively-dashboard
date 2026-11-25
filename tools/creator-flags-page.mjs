@@ -111,7 +111,7 @@ await p.keyboard.press('Escape');
    the old address still lands on it, and Home no longer carries a to-do list */
 await go('overview/attention');
 await p.waitForTimeout(400);
-ok('the old Needs attention address lands on Home', /Creators by tier/.test(await viewText()));
+ok('the old Needs attention address lands on Home', /Needs you/.test(await viewText()));
 
 await go('creators');
 ok('the creators table still shows the flag', (await p.$$('.flag-mark')).length >= 2);
