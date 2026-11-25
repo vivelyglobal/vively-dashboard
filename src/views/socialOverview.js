@@ -1142,7 +1142,7 @@ export function rbCsv(m) {
     rbCsvText(m.nameOf(p)), rbCsvText(p.platform), rbCsvText(p.handle), rbCsvText(p.url), rbCsvText(p.type), rbCsvText(p.posted),
     n(p.views), n(p.likes), n(p.comments), n(p.shares), n(p.saves), n(p.reposts), p.er == null ? '' : p.er.toFixed(2) + '%', rbCsvText(p.scraped)
   ].join(',')));
-  return '﻿' + lines.join('\r\n') + '\r\n';
+  return '\uFEFF' + lines.join('\r\n') + '\r\n';
 }
 export function rbFileName(m) {
   const base = m.chosen.length === 1 ? m.chosen[0].label : m.chosen.length + ' campaigns';

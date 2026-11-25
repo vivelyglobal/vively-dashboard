@@ -16080,7 +16080,7 @@ function rbCsv(m) {
     rbCsvText(m.nameOf(p)), rbCsvText(p.platform), rbCsvText(p.handle), rbCsvText(p.url), rbCsvText(p.type), rbCsvText(p.posted),
     n(p.views), n(p.likes), n(p.comments), n(p.shares), n(p.saves), n(p.reposts), p.er == null ? '' : p.er.toFixed(2) + '%', rbCsvText(p.scraped)
   ].join(',')));
-  return '﻿' + lines.join('\r\n') + '\r\n';
+  return '\uFEFF' + lines.join('\r\n') + '\r\n';
 }
 function rbFileName(m) {
   const base = m.chosen.length === 1 ? m.chosen[0].label : m.chosen.length + ' campaigns';
@@ -21532,9 +21532,23 @@ function loadAuthUser() {
   } catch (e) { return null; }
 }
 
+/* Locking is a CSS class, so on its own it leaves the page in the DOM where the
+   browser's own tools can read it: creator handles and post links on Home, the
+   Performance tab, the Report builder preview and a print copy of a report.
+   Empty every place that held staff data. Runs after resetStaffCaches on lock,
+   sign-out and access refused. Looks nodes up by id so it needs nothing else. */
+const STAFF_SCREEN_IDS = ['view', 'hmViewsSat', 'rbRoot', 'reportPrint', 'daySheetPrint', 'drawerBody', 'drawerTitle'];
+function clearStaffScreen() {
+  STAFF_SCREEN_IDS.forEach((id) => { const n = document.getElementById(id); if (n) n.innerHTML = ''; });
+  const d = document.getElementById('drawer'); if (d) d.classList.remove('open', 'wide');
+  const sc = document.getElementById('scrim'); if (sc) sc.classList.remove('open');
+  if (document.body) document.body.classList.remove('print-report');
+}
+
 function setAuthLocked(locked) {
   /* every sign-in and sign-out passes here: forget what the staff status routes answered */
   resetStaffCaches();
+  if (locked) clearStaffScreen();
   document.body.classList.toggle('auth-locked', !!locked);
   if (locked) {
     openAuth('login');
@@ -21725,6 +21739,7 @@ AUTH_HOOKS.onRefused = (status, body) => {
    the remedy is different and the login form is no help. */
 function showAccessDenied() {
   resetStaffCaches();
+  clearStaffScreen();
   document.body.classList.add('auth-locked');
   const ov = $('#authOverlay');
   ov.classList.add('open');

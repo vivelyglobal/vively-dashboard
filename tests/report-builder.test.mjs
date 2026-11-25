@@ -482,3 +482,35 @@ test('leak scan has teeth: a planted value in a handle, a link or a campaign nam
   const m2 = model([post({ deliverableId: 'p', postUrl: 'https://example.test/p/SHEETID-SENTINEL/' })]);
   assert.throws(() => leakScan('doc', V.rbDocHtml(m2)), /SHEETID-SENTINEL/);
 });
+
+/* ---- the byte-order mark, so Excel reads Korean text ---- */
+test('csv bom: one byte-order mark at the very start, none anywhere else, then the exact header', () => {
+  const csv = V.rbCsv(model(BASE()));
+  assert.equal(csv.charCodeAt(0), 0xFEFF);
+  assert.equal(csv.charCodeAt(1), 'c'.charCodeAt(0), 'a single mark, not two');
+  assert.equal(csv.split('\uFEFF').length - 1, 1);
+  assert.ok(csv.slice(1).startsWith(V.RB_COLS.join(',') + '\r\n'));
+  /* the source says it with an escape, not a character nobody can see in a review */
+  const i = HTML.indexOf('function rbCsv(m) {');
+  const body = HTML.slice(i, HTML.indexOf('\n}\n', i));
+  assert.ok(body.includes("'\\uFEFF'") && !body.includes('\uFEFF'));
+});
+test('csv bom: written as UTF-8 the file starts EF BB BF and Korean text comes back whole', () => {
+  const kr = '한글핸들_테스트';
+  const csv = V.rbCsv(model([post({ deliverableId: 'kr1', creator: { handle: kr, platform: 'Instagram' }, postUrl: 'https://www.instagram.com/p/KR1/' })]));
+  const bytes = new TextEncoder().encode(csv);
+  assert.deepEqual([...bytes.slice(0, 3)], [0xEF, 0xBB, 0xBF]);
+  assert.ok(!(bytes[3] === 0xEF && bytes[4] === 0xBB), 'no second mark');
+  assert.ok(new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes).includes(kr));
+  assert.ok(parseCsv(csv.slice(1)).some((r) => r[2] === kr));
+});
+test('csv bom: the mark does not weaken the formula guard, the header whitelist or the leak scan', () => {
+  const m = model(hostilePosts());
+  const csv = V.rbCsv(m);
+  const rows = parseCsv(csv.slice(1));
+  assert.deepEqual(rows[0], V.RB_COLS);
+  rows.slice(1).forEach((r) => r.forEach((c) => assert.ok(!/^[=+\-@]/.test(c))));
+  /* no data cell can start with the mark, so it cannot be used to hide a formula behind it */
+  rows.slice(1).forEach((r) => r.forEach((c) => assert.ok(!c.includes('\uFEFF'))));
+  leakScan('csv with mark', V.rbCsv(model(BASE())));
+});

@@ -859,7 +859,7 @@
    "import { ensureDeskStyles } from './desk.js';",
    "import { showSocialContent } from './social.js';"
   ],
-  "sha256": "773a14ec4c71305502fb6e88a357dcc486dce439cf238e48518bac62019aa748"
+  "sha256": "4891a45d3c636ee31b967b103aca9250a0bfe25047b8a9942085d6cb89fa84ba"
  },
  {
   "file": "model/homeStats.js",
