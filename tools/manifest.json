@@ -843,7 +843,7 @@
   "ranges": [
    [
     14528,
-    14989
+    15790
    ]
   ],
   "imports": [
@@ -852,18 +852,20 @@
    "import { kmb, num, pct } from '../lib/format.js';",
    "import { DB, notify } from '../model/db.js';",
    "import { OVERVIEW_METRICS, byCampaignRollup, byMarketRollup, byPlatformRollup, engagementSplit, overviewCoverage, overviewFilter, overviewKpis, overviewRows, overviewSeries, topContent, unmappedCountries, viewDistribution } from '../model/socialStats.js';",
+   "import { SM } from '../sync/sheetMetrics.js';",
    "import { $, $$, esc } from '../ui/dom.js';",
    "import { emptyState } from '../ui/html.js';",
+   "import { ensureDeskStyles } from './desk.js';",
    "import { showSocialContent } from './social.js';"
   ],
-  "sha256": "4f17c9a082127216290085134611fa97f7b510eb2f7a7e1064570bed389fd365"
+  "sha256": "982f13180c89850ddf3dd8a0a2640dd1344d1f5a7e74edac8e4f29be0f0fb751"
  },
  {
   "file": "model/homeStats.js",
   "ranges": [
    [
-    14991,
-    15410
+    15792,
+    16211
    ]
   ],
   "imports": [
@@ -878,8 +880,8 @@
   "file": "views/home.js",
   "ranges": [
    [
-    15412,
-    15779
+    16213,
+    16580
    ]
   ],
   "imports": [
@@ -892,16 +894,16 @@
    "import { emptyState } from '../ui/html.js';",
    "import { todayItems } from './planner.js';",
    "import { showSocialContent } from './social.js';",
-   "import { ensureOverviewStyles, platformTag } from './socialOverview.js';"
+   "import { ensureOverviewStyles, perfLegacyChipHtml, platformTag } from './socialOverview.js';"
   ],
-  "sha256": "40caa4413dcd0dcb86332209117a708f2b7ca218232a4be0a15d5a0f0f329619"
+  "sha256": "1c6d58ea0c76d6fb6a54bfb6141016c9c72c4cfd3ea626486fd1d946f9725833"
  },
  {
   "file": "views/booking.js",
   "ranges": [
    [
-    15782,
-    17579
+    16583,
+    18380
    ]
   ],
   "imports": [
@@ -921,8 +923,8 @@
   "file": "views/desk.js",
   "ranges": [
    [
-    17582,
-    18397
+    18383,
+    19198
    ]
   ],
   "imports": [
@@ -942,8 +944,8 @@
   "file": "sync/sheetMetrics.js",
   "ranges": [
    [
-    18400,
-    19114
+    19201,
+    19915
    ]
   ],
   "imports": [

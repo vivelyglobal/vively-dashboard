@@ -52,7 +52,7 @@ await step('clicking Social lands on the Overview, not the library', async () =>
 
 await step('both pages are offered in the panel', async () => {
   const panel = await p.$eval('#panelList', (e) => e.innerText).catch(() => '');
-  for (const label of ['Overview', 'Content'])
+  for (const label of ['Performance', 'Content'])
     if (!panel.includes(label)) throw new Error('the panel does not offer ' + label);
 });
 

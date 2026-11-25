@@ -7,7 +7,7 @@ import { $, $$, esc } from '../ui/dom.js';
 import { emptyState } from '../ui/html.js';
 import { todayItems } from './planner.js';
 import { showSocialContent } from './social.js';
-import { ensureOverviewStyles, platformTag } from './socialOverview.js';
+import { ensureOverviewStyles, perfLegacyChipHtml, platformTag } from './socialOverview.js';
 
 /* ============================================================
    HOME — the page
@@ -158,8 +158,8 @@ export function ensureHomeStyles() {
   document.head.appendChild(s);
 }
 
-export const hmSat = (l, v, s) => `<div class="hm-sat"><div class="l">${esc(l)}</div>
-  <div class="v">${v}</div><div class="s">${esc(s)}</div></div>`;
+export const hmSat = (l, v, s, extra) => `<div class="hm-sat"><div class="l">${esc(l)}</div>
+  <div class="v">${v}</div><div class="s">${esc(s)}</div>${extra || ''}</div>`;
 
 /* The flow is drawn rather than charted: the ribbon's narrowing is the
    drop-off, and the shed volume is filled in so the loss is a shape you
@@ -250,7 +250,7 @@ export function renderHome(view) {
           ${hmSat('Contacted', num(k.creatorsContacted), 'of ' + num(k.roster) + ' on the roster')}
           ${hmSat('Content pieces', num(k.content), num(k.measuredCount) + ' with view counts')}
           ${hmSat('Total views', num(k.views),
-            k.avgViews == null ? 'nothing measured yet' : num(k.avgViews) + ' avg per post')}
+            k.avgViews == null ? 'nothing measured yet' : num(k.avgViews) + ' avg per post', perfLegacyChipHtml())}
         </div>
       </div>
 
